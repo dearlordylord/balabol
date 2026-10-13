@@ -216,19 +216,50 @@ const noTypeAssertion = {
 const propertyTestPlacement = {
   create: (context) => {
     if (context.filename.endsWith(".property.test.ts")) return {};
+    const bindings = new Map();
+    const memberKind = (kind, name) => {
+      if (kind === "fast" && ["property", "asyncProperty"].includes(name)) return "property";
+      if (kind === "effect-namespace" && ["it", "test", "effect", "live"].includes(name)) return "effect";
+      if (["effect", "effect-namespace"].includes(kind) && name === "prop") return "property";
+      if (kind === "effect" && ["effect", "live"].includes(name)) return "effect";
+      return undefined;
+    };
+    const kindOf = (node) =>
+      node?.type === "Identifier"
+        ? bindings.get(node.name)
+        : node?.type === "MemberExpression"
+          ? memberKind(kindOf(node.object), memberName(node))
+          : undefined;
     return {
       ImportDeclaration: (node) => {
-        if (node.source.value === "fast-check" || node.source.value.startsWith("fast-check/")) {
-          report(context, node, "Property-based tests must live in *.property.test.ts files.");
+        const fast = node.source.value === "fast-check" || node.source.value.startsWith("fast-check/");
+        if (fast) report(context, node, "Property-based tests must live in *.property.test.ts files.");
+        if (!fast && node.source.value !== "@effect/vitest") return;
+        for (const specifier of node.specifiers) {
+          const kind = fast
+            ? specifier.type === "ImportSpecifier" && ["property", "asyncProperty"].includes(specifier.imported.name)
+              ? "property"
+              : "fast"
+            : specifier.type === "ImportNamespaceSpecifier"
+              ? "effect-namespace"
+              : memberKind("effect-namespace", specifier.imported?.name);
+          if (kind) bindings.set(specifier.local.name, kind);
+        }
+      },
+      VariableDeclarator: (node) => {
+        const kind = kindOf(node.init);
+        if (!kind) return;
+        if (node.id.type === "Identifier") bindings.set(node.id.name, kind);
+        if (node.id.type !== "ObjectPattern") return;
+        for (const property of node.id.properties) {
+          if (property.type !== "Property" || property.value.type !== "Identifier") continue;
+          const extracted = memberKind(kind, property.key.name ?? property.key.value);
+          if (extracted) bindings.set(property.value.name, extracted);
         }
       },
       CallExpression: (node) => {
-        if (
-          node.callee.type === "MemberExpression" &&
-          ["property", "asyncProperty", "prop"].includes(memberName(node.callee))
-        ) {
-          report(context, node, "Move fc.property tests to a *.property.test.ts file.");
-        }
+        if (kindOf(node.callee) === "property")
+          report(context, node, "Property-based tests must live in *.property.test.ts files.");
       },
     };
   },

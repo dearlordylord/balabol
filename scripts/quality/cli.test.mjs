@@ -470,3 +470,54 @@ test("architecture accepts an import-equals edge through a public entrypoint", (
     "architecture",
     true,
   ));
+
+test("lint permits ordinary prop and property methods", () =>
+  assertGate(
+    {
+      "src/index.ts":
+        'const reader = { prop: () => "ok", property: () => "value", asyncProperty: () => "other" }; export const value = reader.prop() + reader.property() + reader.asyncProperty()',
+    },
+    "lint",
+    true,
+  ));
+test("lint rejects aliased Effect property runner calls outside property files", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { it as test } from "@effect/vitest"; import { Schema } from "effect"; const runner = test; runner.prop("example", [Schema.String], ([value]) => { if (value.length < 0) throw new Error("invalid") })',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));
+test("lint rejects destructured Effect property runner calls outside property files", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { it } from "@effect/vitest"; import { Schema } from "effect"; const { prop: check } = it; check("example", [Schema.String], ([value]) => { if (value.length < 0) throw new Error("invalid") })',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));
+
+test("lint rejects namespace Effect property runner calls outside property files", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import * as testApi from "@effect/vitest"; import { Effect, Schema } from "effect"; testApi.it.effect.prop("example", [Schema.String], () => Effect.void)',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));
+test("lint rejects imported property runner functions outside property files", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { prop as check } from "@effect/vitest"; import { Schema } from "effect"; check("example", [Schema.String], () => undefined)',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));

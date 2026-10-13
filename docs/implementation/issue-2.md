@@ -42,3 +42,11 @@ Independent Standards/Spec review found four enforcement gaps: property placemen
 Six public CLI regression fixtures first reproduced these gaps as RED: the forbidden inputs incorrectly exited successfully. Corrections enable property placement globally (only `*.property.test.ts` is exempt), reject forbidden test-API member extraction, propagate imported/global origins through direct aliases, and resolve import-equals external module references through the existing owner/private-entrypoint/cycle checks. The mutation guard remains specific to imported/global origins; it does not prohibit ordinary local object mutation. Positive fixtures preserve that behavior and permit an import-equals dependency through its declared public entrypoint.
 
 Focused round-1 verification passed **8/8** fixtures. The coherent `pnpm check-all` candidate then passed **53/53** checks, every configured gate and Effect diagnostics with **0 errors, 0 warnings**. Numeric thresholds, secret-first hooks, absence-of-source reporting and product scope remain unchanged. Independent re-review and owner acceptance remain pending.
+
+## Review loop: round 2
+
+Spec re-review passed. Standards re-review identified a regression introduced by globally enabling property placement: the call visitor matched method spelling alone, so an ordinary local `prop`, `property` or `asyncProperty` method was rejected despite having no property-test provider.
+
+The ordinary-method fixture reproduced that regression as RED. The rule now recognizes imported fast-check and @effect/vitest bindings, their supported property runner members, direct aliases and destructuring. It does not infer property testing from an unrelated method's name. The existing fast-check import restriction remains global, with only correctly named property files exempt. New negative fixtures cover aliased, destructured, namespace and directly imported Effect property runners outside property files; the positive ordinary-method fixture passes.
+
+Focused placement/runtime integration verification passed **8/8** checks. The coherent `pnpm check-all` candidate passed **58/58** checks, every configured gate and Effect diagnostics with **0 errors, 0 warnings**. Independent re-review and owner acceptance remain pending; no next-ticket implementation has started.
