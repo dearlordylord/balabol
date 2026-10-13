@@ -1,8 +1,10 @@
 import { fakeAnswerLayer, AnswerGeneration } from "../answer-generation/index.ts"
 import { defaultReplySettings, Replies, ReplyConfiguration } from "./replies.ts"
-import { Context, Effect, Layer, Semaphore } from "effect"
-import { Memory } from "../memory/index.ts"
+import { Context, Effect, Layer, Schema, Semaphore } from "effect"
+import { DeliveryId, Memory } from "../memory/index.ts"
 import {
+  InvalidInput,
+  SendMessage,
   DeliveryConflict,
   type Reply,
   type ReplyBusy,
@@ -10,7 +12,6 @@ import {
   type Message,
   type MessagePage,
   type PageRequest,
-  type SendMessage,
   type StorageUnavailable
 } from "./contracts.ts"
 
@@ -28,6 +29,8 @@ export {
   StorageUnavailable,
   WriterUnavailable
 } from "./contracts.ts"
+const invalidIdentity = () => new InvalidInput({ message: "Invalid conversation identity or input" })
+const parseId = (id: string) => Schema.decodeUnknownEffect(DeliveryId)(id).pipe(Effect.mapError(invalidIdentity))
 const assertIdentity = (payload: { text: string; role?: "user" | "assistant" } | undefined, message: SendMessage) =>
   payload !== undefined && (payload.text !== message.text || payload.role === "assistant")
     ? Effect.fail(new DeliveryConflict({ message: "Delivery identity already belongs to another payload" }))
@@ -35,11 +38,13 @@ const assertIdentity = (payload: { text: string; role?: "user" | "assistant" } |
 export class Conversation extends Context.Service<
   Conversation,
   {
-    observeReply: (inputDeliveryId: string) => Effect.Effect<string, ReplyNotFound | StorageUnavailable>
-    releaseReply: (inputDeliveryId: string, token: string) => Effect.Effect<void>
-    reply: (inputDeliveryId: string) => Effect.Effect<Reply, ReplyNotFound | StorageUnavailable>
-    cancelReply: (inputDeliveryId: string) => Effect.Effect<void>
-    send: (message: SendMessage) => Effect.Effect<Message, DeliveryConflict | ReplyBusy | StorageUnavailable>
+    observeReply: (inputDeliveryId: string) => Effect.Effect<string, ReplyNotFound | StorageUnavailable | InvalidInput>
+    releaseReply: (inputDeliveryId: string, token: string) => Effect.Effect<void, InvalidInput>
+    reply: (inputDeliveryId: string) => Effect.Effect<Reply, ReplyNotFound | StorageUnavailable | InvalidInput>
+    cancelReply: (inputDeliveryId: string) => Effect.Effect<void, InvalidInput>
+    send: (
+      message: SendMessage
+    ) => Effect.Effect<Message, DeliveryConflict | ReplyBusy | StorageUnavailable | InvalidInput>
     page: (request: PageRequest) => Effect.Effect<MessagePage, StorageUnavailable>
   }
 >()("balabol/conversation") {
@@ -53,7 +58,8 @@ export class Conversation extends Context.Service<
       const replies = new Replies(memory, answer, scope, settings)
       const semaphore = yield* Semaphore.make(1)
       const send = Effect.fn("Conversation.send")(
-        function* (message: SendMessage) {
+        function* (raw: SendMessage) {
+          const message = yield* Schema.decodeUnknownEffect(SendMessage)(raw).pipe(Effect.mapError(invalidIdentity))
           const existing = yield* memory.find(message.deliveryId)
           const payload = existing?.state === "Accepted" ? existing.receipt : existing?.payload
           yield* assertIdentity(payload, message)
@@ -74,12 +80,12 @@ export class Conversation extends Context.Service<
         }
       })
       return Conversation.of({
-        observeReply: (id) => replies.observe(id),
-        releaseReply: (id, token) => replies.release(id, token),
+        observeReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.observe(parsed))),
+        releaseReply: (id, token) => parseId(id).pipe(Effect.flatMap((parsed) => replies.release(parsed, token))),
         page,
         send,
-        reply: (id) => replies.current(id),
-        cancelReply: (id) => replies.cancel(id)
+        reply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.current(parsed))),
+        cancelReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.cancel(parsed)))
       })
     })
   )

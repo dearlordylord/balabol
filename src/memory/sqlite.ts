@@ -72,6 +72,7 @@ export class SqliteStorage implements Storage {
               "ALTER TABLE deliveries ADD COLUMN outcome TEXT; UPDATE deliveries SET outcome='completed' WHERE role='assistant'"
             )
           )
+        this.canonicalizeIdentities()
         this.database.exec(
           "CREATE UNIQUE INDEX IF NOT EXISTS replies_by_input ON deliveries(inputDeliveryId) WHERE role='assistant'"
         )
@@ -83,6 +84,24 @@ export class SqliteStorage implements Storage {
       this.lease.close()
       throw error
     }
+  }
+  // Ledger migration preserves journal bytes, positions and unaccepted delivery evidence.
+  canonicalizeIdentities(): void {
+    this.transaction(() => {
+      const duplicateDelivery = this.database
+        .prepare("SELECT lower(deliveryId) FROM deliveries GROUP BY lower(deliveryId) HAVING COUNT(*)>1 LIMIT 1")
+        .get()
+      const duplicateReply = this.database
+        .prepare(
+          "SELECT lower(inputDeliveryId) FROM deliveries WHERE role='assistant' GROUP BY lower(inputDeliveryId) HAVING COUNT(*)>1 LIMIT 1"
+        )
+        .get()
+      if (duplicateDelivery !== undefined || duplicateReply !== undefined)
+        throw new Error("Durable ledger contains conflicting UUID identities")
+      this.database.exec(
+        "UPDATE deliveries SET deliveryId=lower(deliveryId),inputDeliveryId=lower(inputDeliveryId),responseId=lower(responseId)"
+      )
+    })
   }
   transaction<A>(action: () => A): A {
     this.database.exec("BEGIN IMMEDIATE")
@@ -100,13 +119,13 @@ export class SqliteStorage implements Storage {
       .prepare(
         "SELECT deliveryId,text,position,firstId,role,inputDeliveryId,responseId,outcome FROM deliveries WHERE deliveryId=?"
       )
-      .get(deliveryId)
+      .get(Schema.decodeUnknownSync(DeliveryId)(deliveryId))
     return row === undefined ? undefined : Schema.decodeUnknownSync(Ledger)(row)
   }
   findReply(inputDeliveryId: string): Receipt | undefined {
     const row = this.database
       .prepare("SELECT deliveryId FROM deliveries WHERE inputDeliveryId=? AND role='assistant' AND firstId IS NOT NULL")
-      .get(inputDeliveryId)
+      .get(Schema.decodeUnknownSync(DeliveryId)(inputDeliveryId))
     if (row === undefined) return undefined
     const identity = Schema.decodeUnknownSync(Schema.Struct({ deliveryId: DeliveryId }))(row)
     const ledger = this.find(identity.deliveryId)

@@ -1,5 +1,6 @@
 import { Effect, Schema, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { DeliveryId } from "../memory/index.ts"
 import { maximumPageSize, Reply } from "./contracts.ts"
 import type { DeliveryConflict, ReplyBusy, ReplyNotFound, StorageUnavailable } from "./contracts.ts"
 import { Conversation, ErrorResponse, InvalidInput, Message, MessagePage, PageRequest, SendMessage } from "./service.ts"
@@ -57,7 +58,7 @@ const errors = Effect.catchTags({
 })
 const readReplyId = Effect.gen(function* () {
   const params = yield* HttpRouter.params
-  return yield* Schema.decodeUnknownEffect(Schema.String.check(Schema.isUUID()))(params.deliveryId).pipe(
+  return yield* Schema.decodeUnknownEffect(DeliveryId)(params.deliveryId).pipe(
     Effect.mapError(() => new InvalidInput({ message: "Invalid input identity" }))
   )
 })
@@ -91,7 +92,7 @@ const events = Effect.gen(function* () {
       ),
       Stream.mapEffect((snapshot) => Schema.encodeUnknownEffect(Reply)(snapshot)),
       Stream.map((snapshot) => new TextEncoder().encode(`data: ${JSON.stringify(snapshot)}\n\n`)),
-      Stream.ensuring(conversation.releaseReply(id, token))
+      Stream.ensuring(conversation.releaseReply(id, token).pipe(Effect.orDie))
     )
   return HttpServerResponse.stream(stream, { contentType: "text/event-stream" })
 })

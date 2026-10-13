@@ -1,6 +1,12 @@
-import { Schema } from "effect"
+import { Schema, SchemaGetter } from "effect"
 
-export const DeliveryId = Schema.String.check(Schema.isUUID())
+// UUID letter case is spelling, never a separate delivery or response identity.
+export const DeliveryId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.decodeTo(Schema.String.check(Schema.isUUID(), Schema.isLowercased()), {
+    decode: SchemaGetter.transform((id) => id.toLowerCase()),
+    encode: SchemaGetter.passthrough()
+  })
+)
 export const Position = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const maximumTextLength = 100_000
 export const MessageText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumTextLength))
@@ -78,7 +84,15 @@ export const defaultMemorySettings: MemorySettings = {
   summaryConcurrency: 1
 }
 
-export const samePayload = (left: DeliveryPayload, right: DeliveryPayload): boolean =>
-  (["deliveryId", "text", "role", "inputDeliveryId", "responseId", "outcome"] as const).every(
-    (key) => left[key] === right[key]
+const payloadDefaults = (value: DeliveryPayload) => ({
+  ...value,
+  role: value.role ?? "user",
+  outcome: value.role === "assistant" ? (value.outcome ?? "completed") : undefined
+})
+export const samePayload = (left: DeliveryPayload, right: DeliveryPayload): boolean => {
+  const first = payloadDefaults(left)
+  const second = payloadDefaults(right)
+  return (["deliveryId", "text", "role", "inputDeliveryId", "responseId", "outcome"] as const).every(
+    (key) => first[key] === second[key]
   )
+}

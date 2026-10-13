@@ -2,8 +2,7 @@ import { Memory as UniiMemory } from "@firfi/unii"
 import type { Backend, Storage } from "@firfi/unii"
 import { Schema } from "effect"
 import type { DurableMemory } from "./adapter.ts"
-import { PriorSnapshot, Receipt, samePayload } from "./contracts.ts"
-import type { DeliveryPayload } from "./contracts.ts"
+import { DeliveryPayload, PriorSnapshot, Receipt, samePayload } from "./contracts.ts"
 
 type CoreState =
   | { kind: "Ready"; core: UniiMemory }
@@ -84,7 +83,8 @@ export class CoreHost {
     if (!samePayload(evidence.receipt, message)) throw new Error("Conflicting delivery payload")
     return evidence.receipt
   }
-  async append(message: DeliveryPayload): Promise<Receipt> {
+  async append(raw: DeliveryPayload): Promise<Receipt> {
+    const message = Schema.decodeUnknownSync(DeliveryPayload)(raw)
     const accepted = this.#accepted(message)
     if (accepted !== undefined) return accepted
     const core = await this.#ready()
