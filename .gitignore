@@ -1,0 +1,57 @@
+# Dependencies and local references (also ignore symlinks)
+node_modules
+.reference
+.references
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*
+auth.json
+*.mobileprovision
+
+# Build, tooling and editor output
+dist
+build
+coverage
+.vitest-cache
+*.tsbuildinfo
+.DS_Store
+.idea
+.vscode
+
+# Swift / Xcode
+.build
+.swiftpm
+DerivedData
+*.xcuserstate
+xcuserdata
+
+# Private conversation state and diagnostics
+.data
+.chats
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Downloaded speech models and local audio
+.models
+models-cache
+*.safetensors
+*.gguf
+*.onnx
+*.wav
+*.mp3
+*.m4a
+*.pcm
+

@@ -1,0 +1,5 @@
+set -eu
+
+command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks is required; install it before pushing."; exit 1; }
+pnpm secrets:history
+

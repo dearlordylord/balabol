@@ -1,0 +1,35 @@
+# TS / Effect agent stack for live voice
+
+Checked 2026-10-12. Recommendation judgments below are architectural inferences; no implementation benchmark was run.
+
+## Best fit
+
+**Cloudflare Agents voice + an Effect application core + existing unii memory, with Alchemy managing infrastructure** is the most direct TS/Cloudflare candidate. Voice is Beta. Its `withVoice(Agent)` pipeline supplies continuous STT, token/sentence streaming into TTS, interruptions, conversation persistence, and browser clients. `onTurn(transcript, context)` accepts arbitrary application LLM code and returns text, `AsyncIterable<string>`, or `ReadableStream`; `context.signal` aborts on interrupt/disconnect. Consequently answer and summarizer models can be different and the agent need receive only explicit memory/tool services. [Voice docs](https://developers.cloudflare.com/agents/communication-channels/voice/)
+
+**Docs/source discrepancy:** the docs still show `@cloudflare/voice`. Current source marks that package a deprecated compatibility wrapper. New imports are `agents/voice`, `agents/voice/react`, and `agents/voice/client`. [Migration README](https://github.com/cloudflare/agents/blob/main/packages/voice/README.md)
+
+The default client is a **browser** client using `navigator.mediaDevices.getUserMedia`, AudioContext, AudioWorklet, and HTMLAudioElement. Mobile web is a reasonable prototype target, but this is not an out-of-box native React Native SDK, and locked-screen/background/native audio session behavior needs an actual device test. [Client source](https://github.com/cloudflare/agents/blob/main/packages/agents/src/voice/client.ts)
+
+Russian requires deliberate speech-provider configuration: Deepgram `flux-general-multi` supports Russian and mixed-language turn detection; plain `flux-general-en` is English. Cloudflare's `WorkersAINova3STT` has a `language` option defaulting to `en`, so `ru` is explicit; the inspected default Cloudflare Flux class does not expose multilingual model selection. Do not assume the quickstart's default speech models speak Russian. [Deepgram languages](https://developers.deepgram.com/docs/models-languages-overview/), [Cloudflare speech-provider source](https://github.com/cloudflare/agents/blob/main/packages/agents/src/voice/workers-ai.ts), [Workers AI Russian support](https://developers.cloudflare.com/workers-ai/changelog/)
+
+## Effect and Alchemy roles
+
+Effect v3 documentation uses `@effect/ai`, `@effect/ai-openai`, and `@effect/ai-anthropic`. Its `LanguageModel` service supports swapping model implementations through Layers. [Getting started](https://effect.website/docs/v3/ai/getting-started)
+
+Effect v4 source puts AI in **`effect/unstable/ai`**: `LanguageModel`, `Chat`, `Tool`, `Toolkit`. `Chat` owns conversation history/persistence; `Toolkit` schemas validate inputs and execute handlers; `LanguageModel` streams and generates structured output. This is useful agent building material rather than a ready mobile voice product. The unstable namespace is a reason to pin versions; do not mix v3 snippets with v4 imports. [LanguageModel](https://github.com/Effect-TS/effect-smol/blob/main/packages/effect/src/unstable/ai/LanguageModel.ts), [Chat](https://github.com/Effect-TS/effect-smol/blob/main/packages/effect/src/unstable/ai/Chat.ts), [Toolkit](https://github.com/Effect-TS/effect-smol/blob/main/packages/effect/src/unstable/ai/Toolkit.ts)
+
+Inference: use separate `AnswerModel` and `SummaryModel` application services; supply sol/luna through appropriate adapters, and expose only approved tool handlers. Integrating `onTurn` is a custom Promise/stream boundary: the abort signal must propagate into the Effect fiber/stream, not merely stop audio. Effect gives interruption, service composition, retries and tracing; voice transport gives speech turn-taking.
+
+Alchemy 2 composes infrastructure and implementations as Effect Layers. Its DOs offer typed RPC, SQLite state and durable callbacks; local dev and deployment belong here. It is **infrastructure/runtime composition, not an agent reasoning loop or speech SDK**. Current main package metadata is `2.0.0-beta.83`, so this too requires pinned versions. I did not verify a drop-in Alchemy 2 resource hosting the Cloudflare `Agent` class; native Alchemy DOs and Agents subclassing are different APIs and should not be presented as interchangeable. [Alchemy](https://alchemy.run/), [Durable Objects](https://alchemy.run/cloudflare/compute/durable-objects/), [Version metadata](https://github.com/alchemy-run/alchemy/blob/main/packages/alchemy/package.json)
+
+## Alternatives
+
+| Stack                  | Fit                                                                                                                                                                                               | Limitation                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| AI SDK `ToolLoopAgent` | Small reusable TS loop, streaming, tools, stop conditions; supply only approved tools and assemble unii context yourself                                                                          | Does not supply durable memory or live voice transport by itself                                                         |
+| Mastra                 | Fuller agent/workflow/memory framework. Observational Memory explicitly supports a different model for observer/reflector, including custom routing. Voice adapters and LiveKit integration exist | Extra framework/storage overlap if keeping unii; STT/TTS adapters alone are not proof of good live turn-taking on mobile |
+| Cloudflare Agents      | Durable identity, SQLite, WebSockets, scheduling/recovery plus live voice; model-agnostic `onTurn`                                                                                                | Cloudflare coupling, voice Beta, browser-oriented client                                                                 |
+
+Sources: [AI SDK ToolLoopAgent](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent), [Mastra memory](https://mastra.ai/docs/memory/observational-memory), [Mastra voice](https://mastra.ai/reference/voice/overview), [Cloudflare architecture](https://developers.cloudflare.com/agents/).
+
+For this restricted personal assistant, I would start with a small Effect core plus AI SDK/provider adapter rather than a coding-agent harness. Mastra is appealing if replacing the existing memory design; it is less compelling if unii remains authoritative. Cloudflare's higher-level Think harness also exists but brings more opinionated agent/workspace behavior than this requirement demands. This is a scope judgment, not a framework quality ranking.

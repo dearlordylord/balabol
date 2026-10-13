@@ -1,0 +1,27 @@
+{
+  "name": "@firfi/balabol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "check-format": "prettier --check .",
+    "format": "prettier --write .",
+    "secrets:staged": "gitleaks git --pre-commit --staged --redact --ignore-gitleaks-allow --no-banner",
+    "secrets:files": "gitleaks dir --redact --ignore-gitleaks-allow --no-banner .",
+    "secrets:history": "gitleaks git --redact --ignore-gitleaks-allow --no-banner .",
+    "check:repository": "pnpm check-format && pnpm secrets:staged"
+  },
+  "lint-staged": {
+    "*.{md,json,yaml,yml}": "prettier --write"
+  },
+  "devDependencies": {
+    "husky": "9.1.7",
+    "lint-staged": "16.2.7",
+    "prettier": "3.6.2"
+  }
+}

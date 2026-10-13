@@ -1,0 +1,42 @@
+# Local multilingual speech on the existing Mac
+
+Date: 2026-10-13. Purpose: evidence for Wayfinder speech-provider selection. Advisory, not a measured provider decision. Existing hardware: M2 Max, 96 GiB unified memory (provided by root investigation). No installs, model downloads or paid calls performed.
+
+## Recommendation
+
+Evaluate Qwen3-ASR 0.6B and Qwen3-TTS 0.6B CustomVoice on MLX on the Mac, behind replaceable local service adapters. Keep whisper.cpp multilingual models as the STT comparison/fallback. Apple synthesis is an inexpensive implementation fallback, not evidence of equal voice quality or seamless code switching. All three paths avoid a speech API bill; hardware, electricity, setup and future hosting remain costs.
+
+The first useful experiment is end-to-end latency and RU/FR/EN code switching, not installing every engine. JA must be included in fixtures before advertising it. Language support does not establish mixed-language sentence accuracy or accent quality.
+
+## Engines and actual streaming contracts
+
+| Engine                             | Languages and license                                                                      | What streaming actually means here                                                                                                                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Qwen3-ASR 0.6B/1.7B                | RU, FR, EN, JA among 30 languages; Apache-2.0                                              | Official Python streaming state accepts new audio chunks, but requires vLLM. Current mlx-audio `stream_transcribe` loads an entire supplied audio array/file, chunks it, and streams decoded text. It is **not** by itself a persistent incoming-microphone state API. |
+| Qwen3-TTS 0.6B/1.7B                | RU, FR, EN, JA among 10 languages; official model Apache-2.0                               | MLX `generate(text: str, stream=True)` yields waveform chunks. This is audio-output streaming for already supplied text, not a verified append-text API accepting Sol deltas into the same synthesis session.                                                          |
+| whisper.cpp + multilingual Whisper | Multilingual models include required languages; engine and original model code/weights MIT | The microphone example repeatedly transcribes a rolling window (default every 500 ms). It explicitly describes itself as naive. This is useful realtime approximation, not a native causal streaming recognizer.                                                       |
+| Apple AVSpeechSynthesizer          | Enumerate installed voices at runtime; proprietary OS facility                             | Utterance-based queued synthesis; cancellation is available. Select voice for each language span. No evidence here of a guaranteed one-voice multilingual/code-switching experience.                                                                                   |
+
+Sources: [Qwen ASR official README](https://github.com/QwenLM/Qwen3-ASR), [official streaming implementation](https://github.com/QwenLM/Qwen3-ASR/blob/main/qwen_asr/inference/qwen3_asr.py), [MLX ASR implementation](https://github.com/Blaizzy/mlx-audio/blob/main/mlx_audio/stt/models/qwen3_asr/qwen3_asr.py), [Qwen TTS official README](https://github.com/QwenLM/Qwen3-TTS), [0.6B model card](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice), [MLX TTS implementation](https://github.com/Blaizzy/mlx-audio/blob/main/mlx_audio/tts/models/qwen3_tts/qwen3_tts.py), [whisper microphone example](https://github.com/ggml-org/whisper.cpp/blob/master/examples/stream/README.md), [Whisper](https://github.com/openai/whisper), [Apple synth](https://developer.apple.com/documentation/avfaudio/avspeechsynthesizer).
+
+MLX Audio itself is MIT. Its streaming guide exposes a realtime transcription WebSocket, but that transport claim does not prove every model has incremental acoustic state. Inspect the selected engine implementation and server buffering together. [MLX Audio](https://github.com/Blaizzy/mlx-audio), [streaming guide](https://github.com/Blaizzy/mlx-audio/blob/main/docs/guides/streaming.md).
+
+Qwen's TTS architecture is described as supporting streaming text and audio in the official technical report; the practical MLX API inspected here accepts a complete string. Use bounded sentence/phrase buffering of Sol output initially, rather than promising token-level text-input synthesis. Test phrase-boundary artifacts and first-audio delay. The official CustomVoice card recommends native-language voices; listed presets have English/Japanese/Chinese/Korean native voices, with no Russian/French native preset listed. Supported synthesis languages therefore do not establish equivalent RU/FR voice quality. [Official report](https://arxiv.org/abs/2601.15621), [preset voice table](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice).
+
+## Deployment and integration
+
+Run speech inference as long-lived local workers and preload explicitly selected local model paths. Do not load/download models per turn. Bind inference service to loopback; the TS voice worker mediates phone traffic. Node LiveKit supports custom STT/TTS and node hooks, and sentence segmentation for a TTS engine lacking incremental text input. A VAD plus nonstreaming recognizer is a possible initial adapter; it preserves hands-free conversation and immediate VAD-based interruption but interim transcripts may lag. [LiveKit hooks](https://docs.livekit.io/agents/logic/nodes/), [Node STT interface](https://docs.livekit.io/reference/agents-js/classes/agents.stt.STT.html).
+
+At interruption, stop client playback and invalidate output by turn id immediately; also cancel Sol, queued synthesis, and the service request. Disconnecting HTTP does not prove synchronous MLX inference stopped. The worker must check cancellation between yields; a supervisor needs a bounded hard-stop/restart fallback for stuck work. Do not resume canceled audio after reconnect. These are application requirements, not documented ready-made provider guarantees.
+
+96 GiB makes these small-model trials plausible by capacity; this is an inference from model scale, not a benchmark. Parameter count is not total resident memory: tokenizer/decoder, activations, quantization overhead and parallel workers matter. No advertised GPU latency has been transferred to this M2 Max.
+
+Keep heavy inference on Mac rather than depending on sustained iPhone ML computation in the background. iPhone still needs a correct full-duplex audio session and background audio configuration, tested locked on device. Native Apple TTS on phone additionally needs coexistence with LiveKit playback/echo handling; server-side TTS avoids that extra client path. Mac sleep or stopped backend terminates availability; that is independent of phone locking. [Apple playAndRecord](https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/playandrecord).
+
+## Required experiments before selection
+
+1. Same mono audio fixtures for RU/FR/EN and JA: short/long speech, silence, names, within-sentence language changes. Compare Qwen MLX and multilingual whisper.cpp without forcing one language.
+2. Measure endpoint-to-final-transcript, Sol first-text, first-audio, speech generation realtime factor, interruption stop time, peak memory and repeated-turn stability. Separate cold start from warm use.
+3. Test MLX ASR incremental adapter/window finalization; prove no duplicated/lost words or stale turn publication. Evaluate a dedicated MLX streaming port only if current windowed path fails the acceptance target.
+4. Listen to Qwen RU/FR voices and mixed-language phrases; compare Apple installed voices. Verify cancellation frees compute and next turn starts promptly.
+5. Locked iPhone, Bluetooth, cellular/Tailscale media path, reconnect and Mac sleep recovery. No conclusion about acceptable live conversation is final before this.
