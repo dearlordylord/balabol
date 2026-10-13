@@ -1,7 +1,7 @@
-import { Memory as UniiMemory } from "@firfi/unii"
-import { Clock, Context, Effect, Layer, Schema } from "effect"
-import { Receipt, StorageUnavailable } from "./contracts.ts"
-import type { DeliveryEvidence, DeliveryPayload } from "./contracts.ts"
+import { Clock, Context, Effect, Layer, Semaphore } from "effect"
+import { StorageUnavailable } from "./contracts.ts"
+import type { DeliveryEvidence, DeliveryPayload, Receipt } from "./contracts.ts"
+import { CoreHost } from "./core-host.ts"
 import { DurableMemory, sqliteLayer } from "./adapter.ts"
 
 export * from "./contracts.ts"
@@ -23,32 +23,21 @@ export const uniiLayer = Layer.effect(
   Effect.gen(function* () {
     const clock = yield* Clock.Clock
     const adapter = yield* DurableMemory
-    const storage = adapter.storage
-    const core = yield* Effect.acquireRelease(
+    const semaphore = yield* Semaphore.make(1)
+    const host = yield* Effect.acquireRelease(
       Effect.tryPromise({
-        try: () => UniiMemory.open({ storage, now: () => clock.currentTimeMillisUnsafe() }),
+        try: () => CoreHost.open(adapter, () => clock.currentTimeMillisUnsafe()),
         catch: unavailable
       }),
-      (instance) => Effect.promise(() => instance.close())
+      (instance) => Effect.promise(() => instance.close()).pipe(semaphore.withPermits(1))
     )
     return Memory.of({
       find: (deliveryId) => Effect.try({ try: () => adapter.find(deliveryId), catch: unavailable }),
       append: (message) =>
-        Effect.tryPromise({
-          try: async () => {
-            adapter.prepare(message)
-            const receipt = await core.append({ kind: "user", text: message.text })
-            const ledger = adapter.find(message.deliveryId)
-            if (ledger?.state !== "Accepted" || ledger.receipt.recordId !== receipt.firstId)
-              throw new Error("Missing durable receipt")
-            return Schema.decodeUnknownSync(Receipt)({
-              ...message,
-              recordId: receipt.firstId,
-              position: ledger.receipt.position
-            })
-          },
-          catch: unavailable
-        }),
+        Effect.tryPromise({ try: () => host.append(message), catch: unavailable }).pipe(
+          semaphore.withPermits(1),
+          Effect.uninterruptible
+        ),
       page: (after, limit) => Effect.try({ try: () => adapter.page(after, limit), catch: unavailable })
     })
   })

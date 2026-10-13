@@ -1,0 +1,80 @@
+import { Memory as UniiMemory } from "@firfi/unii"
+import type { Storage } from "@firfi/unii"
+import { Schema } from "effect"
+import type { DurableMemory } from "./adapter.ts"
+import { Receipt } from "./contracts.ts"
+import type { DeliveryPayload } from "./contracts.ts"
+
+type CoreState =
+  | { kind: "Ready"; core: UniiMemory }
+  | { kind: "RecoveryRequired"; core: UniiMemory | null }
+  | { kind: "Closed" }
+
+/** A core session closes independently from the host's exclusive durable writer lease. */
+const sessionStorage = (storage: Storage): Storage => {
+  let opened = false
+  return {
+    open: async () => {
+      if (opened) throw new Error("Core session already opened")
+      opened = true
+    },
+    close: async () => {
+      opened = false
+    },
+    load: () => storage.load(),
+    appendRecords: (records) => storage.appendRecords(records),
+    appendNode: (node) => storage.appendNode(node),
+    checkpoint: (checkpoint) => storage.checkpoint(checkpoint)
+  }
+}
+
+/** Memory's semaphore serializes append, recovery and close; no two cores share the writer. */
+export class CoreHost {
+  #state: CoreState
+  readonly #adapter: DurableMemory["Service"]
+  readonly #now: () => number
+  private constructor(adapter: DurableMemory["Service"], now: () => number, core: UniiMemory) {
+    this.#adapter = adapter
+    this.#now = now
+    this.#state = { kind: "Ready", core }
+  }
+  static async open(adapter: DurableMemory["Service"], now: () => number): Promise<CoreHost> {
+    await adapter.storage.open()
+    const core = await UniiMemory.open({ storage: sessionStorage(adapter.storage), now })
+    return new CoreHost(adapter, now, core)
+  }
+  async #ready(): Promise<UniiMemory> {
+    const state = this.#state
+    if (state.kind === "Closed") throw new Error("Memory host closed")
+    if (state.kind === "Ready") return state.core
+    this.#state = { kind: "RecoveryRequired", core: null }
+    await state.core?.close()
+    const core = await UniiMemory.open({ storage: sessionStorage(this.#adapter.storage), now: this.#now })
+    this.#state = { kind: "Ready", core }
+    return core
+  }
+  async append(message: DeliveryPayload): Promise<Receipt> {
+    const core = await this.#ready()
+    try {
+      this.#adapter.prepare(message)
+      const receipt = await core.append({ kind: "user", text: message.text })
+      const evidence = this.#adapter.find(message.deliveryId)
+      if (evidence?.state !== "Accepted" || evidence.receipt.recordId !== receipt.firstId)
+        throw new Error("Missing durable receipt")
+      return Schema.decodeUnknownSync(Receipt)({
+        ...message,
+        recordId: receipt.firstId,
+        position: evidence.receipt.position
+      })
+    } catch (error) {
+      this.#state = { kind: "RecoveryRequired", core }
+      throw error
+    }
+  }
+  async close(): Promise<void> {
+    const state = this.#state
+    if (state.kind === "Closed") return
+    this.#state = { kind: "Closed" }
+    await state.core?.close()
+  }
+}
