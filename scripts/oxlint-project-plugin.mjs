@@ -217,10 +217,13 @@ const propertyTestPlacement = {
   create: (context) => {
     if (context.filename.endsWith(".property.test.ts")) return {};
     const bindings = new Map();
+    const callbacks = new WeakSet();
+    const callbackScopes = new WeakMap();
     const memberKind = (kind, name) => {
       if (kind === "fast" && ["property", "asyncProperty"].includes(name)) return "property";
       if (kind === "effect-namespace" && ["it", "test", "effect", "live"].includes(name)) return "effect";
       if (["effect", "effect-namespace"].includes(kind) && name === "prop") return "property";
+      if (["effect", "effect-namespace"].includes(kind) && name === "layer") return "layer-factory";
       if (kind === "effect" && ["effect", "live"].includes(name)) return "effect";
       return undefined;
     };
@@ -229,8 +232,51 @@ const propertyTestPlacement = {
         ? bindings.get(node.name)
         : node?.type === "MemberExpression"
           ? memberKind(kindOf(node.object), memberName(node))
-          : undefined;
+          : node?.type === "CallExpression" && kindOf(node.callee) === "layer-factory"
+            ? "layer-registration"
+            : undefined;
+    const bindPattern = (pattern, kind) => {
+      if (!pattern) return true;
+      if (pattern.type === "Identifier") {
+        bindings.set(pattern.name, kind);
+        return true;
+      }
+      if (pattern.type !== "ObjectPattern") return false;
+      for (const property of pattern.properties) {
+        if (
+          property.type !== "Property" ||
+          property.value.type !== "Identifier" ||
+          (property.computed && property.key.type !== "Literal")
+        )
+          return false;
+        const extracted = memberKind(kind, property.key.name ?? property.key.value);
+        if (extracted) bindings.set(property.value.name, extracted);
+      }
+      return true;
+    };
+    const ambiguousBinding = (node) =>
+      report(
+        context,
+        node,
+        "Use simple named or literal destructured property-provider bindings, or a *.property.test.ts file.",
+      );
+    const enterCallback = (node) => {
+      if (!callbacks.has(node)) return;
+      callbackScopes.set(node, new Map(bindings));
+      if (!bindPattern(node.params[0], "effect")) ambiguousBinding(node);
+    };
+    const exitCallback = (node) => {
+      const previous = callbackScopes.get(node);
+      if (!previous) return;
+      bindings.clear();
+      for (const [name, kind] of previous) bindings.set(name, kind);
+      callbackScopes.delete(node);
+    };
     return {
+      ArrowFunctionExpression: enterCallback,
+      "ArrowFunctionExpression:exit": exitCallback,
+      FunctionExpression: enterCallback,
+      "FunctionExpression:exit": exitCallback,
       ImportDeclaration: (node) => {
         const fast = node.source.value === "fast-check" || node.source.value.startsWith("fast-check/");
         if (fast) report(context, node, "Property-based tests must live in *.property.test.ts files.");
@@ -248,16 +294,21 @@ const propertyTestPlacement = {
       },
       VariableDeclarator: (node) => {
         const kind = kindOf(node.init);
-        if (!kind) return;
-        if (node.id.type === "Identifier") bindings.set(node.id.name, kind);
-        if (node.id.type !== "ObjectPattern") return;
-        for (const property of node.id.properties) {
-          if (property.type !== "Property" || property.value.type !== "Identifier") continue;
-          const extracted = memberKind(kind, property.key.name ?? property.key.value);
-          if (extracted) bindings.set(property.value.name, extracted);
-        }
+        if (kind && !bindPattern(node.id, kind)) ambiguousBinding(node);
       },
       CallExpression: (node) => {
+        if (kindOf(node.callee) === "layer-registration") {
+          const callback = node.arguments.at(-1);
+          if (!["ArrowFunctionExpression", "FunctionExpression"].includes(callback?.type)) {
+            report(
+              context,
+              node,
+              "Use an inline Effect layer callback so property-runner provenance is explicit, or a *.property.test.ts file.",
+            );
+          } else {
+            callbacks.add(callback);
+          }
+        }
         if (kindOf(node.callee) === "property")
           report(context, node, "Property-based tests must live in *.property.test.ts files.");
       },

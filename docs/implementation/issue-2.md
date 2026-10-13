@@ -50,3 +50,13 @@ Spec re-review passed. Standards re-review identified a regression introduced by
 The ordinary-method fixture reproduced that regression as RED. The rule now recognizes imported fast-check and @effect/vitest bindings, their supported property runner members, direct aliases and destructuring. It does not infer property testing from an unrelated method's name. The existing fast-check import restriction remains global, with only correctly named property files exempt. New negative fixtures cover aliased, destructured, namespace and directly imported Effect property runners outside property files; the positive ordinary-method fixture passes.
 
 Focused placement/runtime integration verification passed **8/8** checks. The coherent `pnpm check-all` candidate passed **58/58** checks, every configured gate and Effect diagnostics with **0 errors, 0 warnings**. Independent re-review and owner acceptance remain pending; no next-ticket implementation has started.
+
+## Review loop: round 3
+
+Standards re-review passed. Spec re-review found that property provenance did not follow the MethodsNonLive runner supplied by the public Effect `layer` callback. Direct `layer`, aliased/named `it.layer`, namespace and nested Layer registration negatives reproduced that bypass as RED.
+
+The bounded recognizer now follows the installed API's curried Layer factory/registration shape and gives inline callback parameters the same runner provenance as the public test API. Callback entry/exit snapshots confine that provenance to its lifetime: an unrelated outer object with the same name remains ordinary. A preservation regression demonstrated why that lifetime boundary was needed and now passes. Named groups, direct/aliased factories, namespace/nested registrations and simple runner destructuring are covered without adding a general dataflow framework.
+
+Correctly placed public Layer property APIs actually typecheck and execute with the pinned cohort, including synchronous and Effect properties. Ordinary inline dependency-injection tests and unrelated `layer`/`prop` methods remain permitted. Ambiguous callback references and computed/rest/default bindings outside correctly named property files fail closed with actionable guidance; the harness policy documents that explicit syntax boundary.
+
+Focused verification passed **10/10** checks. The final frozen `pnpm check-all` candidate passed **68/68** checks, every configured gate and Effect diagnostics with **0 errors, 0 warnings**. An earlier intermediate 67-case run was superseded after adding the callback-lifetime preservation case; its formatting check overlapped that edit and is not final evidence. Independent re-review and owner acceptance remain pending. No next-ticket implementation has started.

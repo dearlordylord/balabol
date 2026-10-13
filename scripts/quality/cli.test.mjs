@@ -521,3 +521,102 @@ test("lint rejects imported property runner functions outside property files", (
     false,
     /Property-based tests/,
   ));
+
+test("lint rejects misplaced properties inside the public layer callback", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { layer } from "@effect/vitest"; import { Layer, Schema } from "effect"; layer(Layer.empty)((runner) => { runner.prop("example", [Schema.String], () => undefined) })',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));
+test("lint rejects misplaced properties inside named it.layer callbacks", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { it } from "@effect/vitest"; import { Layer, Schema } from "effect"; const suite = it.layer(Layer.empty); suite("named", (runner) => { const { prop: check } = runner; check("example", [Schema.String], () => undefined) })',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));
+test("lint rejects misplaced properties inside namespace and nested layer callbacks", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import * as testApi from "@effect/vitest"; import { Layer, Schema } from "effect"; testApi.layer(Layer.empty)((outer) => { outer.layer(Layer.empty)((inner) => { inner.prop("example", [Schema.String], () => undefined) }) })',
+    },
+    "lint",
+    false,
+    /Property-based tests/,
+  ));
+
+test("lint preserves ordinary Effect layer dependency-injection tests", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { expect, layer } from "@effect/vitest"; import { Effect, Layer } from "effect"; layer(Layer.empty)("scope", (runner) => { runner.effect("example", () => Effect.gen(function*() { const value = yield* Effect.succeed("ok"); expect(value).toBe("ok") })) })',
+    },
+    "lint",
+    true,
+  ));
+test("lint preserves unrelated layer and prop methods", () =>
+  assertGate(
+    {
+      "src/index.ts":
+        'const reader = { prop: () => "ok" }; const adapter = { layer: () => (callback: (value: typeof reader) => string) => callback(reader) }; export const value = adapter.layer()((local) => local.prop())',
+    },
+    "lint",
+    true,
+  ));
+test("lint fails closed for ambiguous Effect layer callback references", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { layer } from "@effect/vitest"; import { Layer } from "effect"; const callback = () => undefined; layer(Layer.empty)(callback)',
+    },
+    "lint",
+    false,
+    /inline Effect layer callback/,
+  ));
+const layeredProperties = {
+  "src/index.ts": "export const increment = (n: number) => n >= 0 ? n + 1 : 0\n",
+  "test/example.property.test.ts":
+    'import { expect, it, layer } from "@effect/vitest"; import * as testApi from "@effect/vitest"; import { Effect, Layer, Schema } from "effect"; import { increment } from "../src/index.js"; layer(Layer.empty)((runner) => { runner.prop("direct", [Schema.Literals([-2, 2])], ([input]) => { expect(increment(input)).toBe(input === 2 ? 3 : 0) }, { arbitrary: { seed: 42 } }) }); it.layer(Layer.empty)("named", (runner) => { runner.effect.prop("effect", [Schema.Literals([-2, 2])], ([input]) => Effect.sync(() => { expect(increment(input)).toBe(input === 2 ? 3 : 0) }), { arbitrary: { seed: 42 } }) }); testApi.layer(Layer.empty)((outer) => { outer.layer(Layer.empty)((inner) => { inner.prop("nested", [Schema.Literals([-2, 2])], ([input]) => { expect(increment(input)).toBe(input === 2 ? 3 : 0) }, { arbitrary: { seed: 42 } }) }) })',
+};
+test("public layer property APIs typecheck and execute in property files", () => {
+  for (const gate of ["compiler", "lint", "behavior"]) assertGate(layeredProperties, gate, true);
+});
+
+test("lint fails closed for computed Layer runner destructuring", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { layer } from "@effect/vitest"; import { Layer, Schema } from "effect"; const key = "prop"; layer(Layer.empty)(({ [key]: check }) => { check("example", [Schema.String], () => undefined) })',
+    },
+    "lint",
+    false,
+    /literal destructured/,
+  ));
+test("lint fails closed for rest Layer runner parameters", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { layer } from "@effect/vitest"; import { Layer, Schema } from "effect"; layer(Layer.empty)((...runners) => { runners[0]?.prop("example", [Schema.String], () => undefined) })',
+    },
+    "lint",
+    false,
+    /simple named/,
+  ));
+
+test("Layer runner provenance does not leak into an unrelated outer object", () =>
+  assertGate(
+    {
+      "test/example.test.ts":
+        'import { layer } from "@effect/vitest"; import { Effect, Layer } from "effect"; const runner = { prop: () => "ordinary" }; layer(Layer.empty)((runner) => { runner.effect("example", () => Effect.void) }); export const value = runner.prop()',
+    },
+    "lint",
+    true,
+  ));
