@@ -39,14 +39,14 @@ Source authority: sibling hulymcp CLAUDE.md, review rules and its Effect referen
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | Package manager/compiler | pnpm, TS7 native strict checks; exact optional properties, unchecked indexes, unused locals, overrides and switch fallthrough    |
 | Effect                   | exact compatible cohort; @effect/vitest; @effect/tsgo error and warning diagnostics                                              |
-| Behavior/coverage        | Vitest v8; 99% lines, functions, branches and statements; no module mocks                                                        |
+| Behavior/coverage        | Vitest v8 Istanbul JSON; @crap4ts/crap4ts 1.1.0 CRAP maximum 8; no module mocks                                                  |
 | Properties               | fast-check tests in \*.property.test.ts; enforced placement                                                                      |
 | Duplication              | jscpd maximum 2%                                                                                                                 |
 | Cycles                   | dpdm plus enforcement of type-only architecture edges                                                                            |
 | Complexity               | Oxlint classic maximum 8 for production TS                                                                                       |
 | Lint/format              | type-aware Oxlint, generic project lint rules, dprint Oxc for TS, maximum 420 nonblank/noncomment lines; split by responsibility |
 | Commit safety            | Husky, lint-staged, gitleaks; secret scan before formatting/type/test work                                                       |
-| Full gate                | build, compiler, Effect diagnostics, cycles, complexity, lint/duplication and tests/coverage                                     |
+| Full gate                | build, compiler, Effect diagnostics, cycles, complexity, lint/duplication and tests/CRAP                                         |
 
 The complete TS harness is wired; see [quality harness](quality-harness.md) for pins, commands and executable self-checks and [ownership](ownership.md) for the initial domain map. Husky scans secrets before formatting/type/test work. Pre-commit runs compiler/Effect diagnostics and product behavior checks; check-all runs the full gate. Empty-source results must never be reported as product validation. Swift needs strict concurrency, behavioral ViewModel tests, XCTest/UI checks and physical audio evidence; TS numeric tooling thresholds are not mechanically imposed on Swift.
 

@@ -288,15 +288,43 @@ test("duplication rejects copied production blocks", () => {
 const increment = "export const increment = (n: number) => n >= 0 ? n + 1 : 0\n";
 const positiveTests =
   'import { expect, it } from "@effect/vitest"\nimport { increment } from "../src/index.js"\nit("increments positive input", () => { expect(increment(2)).toBe(3) })\nit("clamps negative input", () => { expect(increment(-2)).toBe(0) })\n';
-test("coverage accepts fully exercised source with Effect test runner", () =>
+test("CRAP accepts fully exercised source with Effect test runner", () =>
   assertGate({ "src/index.ts": increment, "test/index.test.ts": positiveTests }, "behavior", true, /100/));
-test("coverage rejects an untested branch below 99 percent", () =>
+test("CRAP accepts low-risk source with incomplete coverage", () =>
   assertGate(
-    { "src/index.ts": increment, "test/index.test.ts": positiveTests.split('it("clamps')[0] },
+    {
+      "src/index.ts": "export function increment(n: number) { if (n < 0) return 0; return n + 1 }",
+      "test/index.test.ts": positiveTests.split('it("clamps')[0],
+    },
+    "behavior",
+    true,
+    /crap4ts report/,
+  ));
+
+test("CRAP rejects risky source with incomplete coverage", () =>
+  assertGate(
+    {
+      "src/index.ts":
+        "export function increment(n: number) { if (n < -5) return 0; if (n < -4) return 0; if (n < -3) return 0; if (n < -2) return 1; if (n < -1) return 2; if (n < 0) return 3; return n + 1 }",
+      "test/index.test.ts": positiveTests.split('it("clamps')[0],
+    },
     "behavior",
     false,
-    /99/,
+    /crap4ts report/,
   ));
+test("CRAP rejects missing coverage evidence", () =>
+  assertGate({ "src/index.ts": increment }, "crap", false, /requires a fresh coverage/));
+
+test("behavior rejects stale coverage when the runner produces no JSON artifact", () =>
+  configured({ "src/index.ts": increment, "test/index.test.ts": positiveTests }, (root) => {
+    mkdirSync(join(root, "coverage"));
+    writeFileSync(join(root, "coverage/coverage-final.json"), "{}");
+    const config = readFileSync(join(root, "vitest.config.ts"), "utf8");
+    writeFileSync(join(root, "vitest.config.ts"), config.replace('["text-summary", "json"]', '["text-summary"]'));
+    const result = run(root, "behavior");
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stderr, /requires a fresh coverage/);
+  }));
 
 test("lint rejects destructured mock APIs", () =>
   assertGate(

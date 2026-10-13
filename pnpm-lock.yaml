@@ -11,6 +11,9 @@ importers:
 
   .:
     devDependencies:
+      '@crap4ts/crap4ts':
+        specifier: 1.1.0
+        version: 1.1.0
       '@effect/platform-node':
         specifier: 4.0.0
         version: 4.0.0(effect@4.0.0)(redis@6.3.0)
@@ -92,6 +95,11 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
+
+  '@crap4ts/crap4ts@1.1.0':
+    resolution: {integrity: sha512-yKE6r0sSOJdgAUNk4/2LabAaAIkokJkUcnfypB9WZacjig/ojqw70+FbZOtM6j/nJCEdo5iBn+zioSnIJVgiKg==}
+    engines: {node: '>=20.19.0 <25'}
+    hasBin: true
 
   '@dprint/android-arm64@0.55.2':
     resolution: {integrity: sha512-cywqM0E2h8lCA/b5BMFcuascaGuekm2lnyKb5hRH9juKbsqKeR8A7qf2p3nVWRQ8cM7djOnQwhy8ecQ3qd6j9A==}
@@ -1840,6 +1848,8 @@ snapshots:
 
   '@colors/colors@1.5.0':
     optional: true
+
+  '@crap4ts/crap4ts@1.1.0': {}
 
   '@dprint/android-arm64@0.55.2':
     optional: true

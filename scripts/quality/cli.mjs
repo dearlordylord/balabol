@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { checkArchitecture } from "./architecture.mjs";
 import { checkCohort } from "./cohort.mjs";
@@ -48,7 +48,26 @@ const actions = {
     if (!product.length) return absent();
     if (!typescript.some((file) => file.endsWith(".test.ts")))
       throw new Error("Product source exists without behavioral tests");
+    rmSync(resolve(root, "coverage/coverage-final.json"), { force: true });
     run("vitest", ["run", "--coverage"]);
+    actions.crap();
+  },
+  crap: () => {
+    if (!product.length) return absent();
+    if (!existsSync(resolve(root, "coverage/coverage-final.json")))
+      throw new Error("CRAP requires a fresh coverage/coverage-final.json; run the behavior gate");
+    run("crap4ts", [
+      "--coverage",
+      "coverage/coverage-final.json",
+      "--coverage-format",
+      "istanbul-json",
+      "--threshold",
+      "8",
+      "--no-report-only",
+      "--project-root",
+      root,
+      ...product,
+    ]);
   },
   secrets: () => run("gitleaks", ["dir", "--redact", "--ignore-gitleaks-allow", "--no-banner", "."]),
 };
