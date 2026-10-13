@@ -1,0 +1,60 @@
+{
+  "owners": [
+    {
+      "name": "conversation",
+      "root": "src/conversation",
+      "entry": "index.ts",
+      "dependencies": ["memory", "answer-generation"]
+    },
+    {
+      "name": "memory",
+      "root": "src/memory",
+      "entry": "index.ts",
+      "dependencies": ["summary-generation"]
+    },
+    {
+      "name": "answer-generation",
+      "root": "src/answer-generation",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
+      "name": "summary-generation",
+      "root": "src/summary-generation",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
+      "name": "speech-recognition",
+      "root": "src/speech-recognition",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
+      "name": "speech-synthesis",
+      "root": "src/speech-synthesis",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
+      "name": "voice",
+      "root": "src/voice",
+      "entry": "index.ts",
+      "dependencies": ["conversation", "speech-recognition", "speech-synthesis"]
+    },
+    {
+      "name": "bootstrap",
+      "root": "src/bootstrap",
+      "entry": "index.ts",
+      "dependencies": [
+        "conversation",
+        "memory",
+        "answer-generation",
+        "summary-generation",
+        "speech-recognition",
+        "speech-synthesis",
+        "voice"
+      ]
+    }
+  ]
+}

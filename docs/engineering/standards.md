@@ -48,7 +48,7 @@ Source authority: sibling hulymcp CLAUDE.md, review rules and its Effect referen
 | Commit safety            | Husky, lint-staged, gitleaks; secret scan before formatting/type/test work                                                       |
 | Full gate                | build, compiler, Effect diagnostics, cycles, complexity, lint/duplication and tests/coverage                                     |
 
-Current hooks and package are repository scaffolding: Husky/lint-staged format Markdown/JSON/YAML using Prettier and run gitleaks. Product TS tooling above must be installed and wired when source is introduced; the pre-commit hook requires typecheck/test if the source directory exists. Empty-source results must never be reported as product validation. Swift needs strict concurrency, behavioral ViewModel tests, XCTest/UI checks and physical audio evidence; TS numeric tooling thresholds are not mechanically imposed on Swift.
+The complete TS harness is wired; see [quality harness](quality-harness.md) for pins, commands and executable self-checks and [ownership](ownership.md) for the initial domain map. Husky scans secrets before formatting/type/test work. Pre-commit runs compiler/Effect diagnostics and product behavior checks; check-all runs the full gate. Empty-source results must never be reported as product validation. Swift needs strict concurrency, behavioral ViewModel tests, XCTest/UI checks and physical audio evidence; TS numeric tooling thresholds are not mechanically imposed on Swift.
 
 ## Evidence
 

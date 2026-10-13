@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off"
+  },
+  "ignorePatterns": [
+    "**/.reference",
+    "**/build",
+    "**/coverage",
+    "**/dist",
+    "**/node_modules",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ],
+  "rules": {
+    "complexity": [
+      "error",
+      {
+        "max": 8,
+        "variant": "classic"
+      }
+    ]
+  }
+}

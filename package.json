@@ -9,19 +9,59 @@
   },
   "scripts": {
     "prepare": "husky",
-    "check-format": "prettier --check .",
-    "format": "prettier --write .",
+    "check-format": "prettier --check . && node scripts/quality/cli.mjs format",
+    "format": "prettier --write . && dprint fmt --allow-no-files",
     "secrets:staged": "gitleaks git --pre-commit --staged --redact --ignore-gitleaks-allow --no-banner",
     "secrets:files": "gitleaks dir --redact --ignore-gitleaks-allow --no-banner .",
     "secrets:history": "gitleaks git --redact --ignore-gitleaks-allow --no-banner .",
-    "check:repository": "pnpm check-format && pnpm secrets:staged"
+    "check:repository": "pnpm check-format && pnpm secrets:staged",
+    "build": "node scripts/quality/cli.mjs build",
+    "typecheck": "pnpm typecheck:tsc && pnpm typecheck:effect",
+    "typecheck:tsc": "node scripts/quality/cli.mjs compiler",
+    "typecheck:effect": "node scripts/quality/cli.mjs effect",
+    "test": "node scripts/quality/cli.mjs behavior",
+    "test:coverage": "node scripts/quality/cli.mjs behavior",
+    "test:harness": "node --test scripts/quality/cli.test.mjs",
+    "lint": "node scripts/quality/cli.mjs lint && node scripts/quality/cli.mjs duplication",
+    "circular": "node scripts/quality/cli.mjs architecture && node scripts/quality/cli.mjs cycles",
+    "complexity": "node scripts/quality/cli.mjs complexity",
+    "check-all": "pnpm secrets:files && pnpm test:harness && node scripts/quality/cli.mjs all && pnpm check-format",
+    "verify:effect-cohort": "node scripts/quality/cli.mjs cohort"
   },
   "lint-staged": {
-    "*.{md,json,yaml,yml}": "prettier --write"
+    "*.{md,json,yaml,yml}": "prettier --write",
+    "*.ts": [
+      "oxlint -c .oxlintrc.json --fix --deny-warnings",
+      "dprint fmt --allow-no-files"
+    ]
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.0",
+    "@effect/tsgo": "0.36.4",
+    "@effect/vitest": "4.0.0",
+    "@types/node": "25.1.0",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "@vitest/coverage-v8": "5.0.1",
+    "dpdm": "4.2.0",
+    "dprint": "0.55.2",
+    "effect": "4.0.0",
+    "fast-check": "4.8.0",
     "husky": "9.1.7",
+    "jscpd": "4.0.8",
     "lint-staged": "16.2.7",
-    "prettier": "3.6.2"
+    "oxlint": "1.76.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "prettier": "3.6.2",
+    "typescript-compiler-api": "npm:typescript@5.9.3",
+    "vitest": "5.0.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "@effect/platform-node-shared": "4.0.0"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "dprint"
+    ]
   }
 }

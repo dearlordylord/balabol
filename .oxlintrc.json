@@ -1,0 +1,84 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import"],
+  "jsPlugins": ["./scripts/oxlint-project-plugin.mjs"],
+  "options": {
+    "typeAware": true
+  },
+  "ignorePatterns": ["**/dist", "**/build", "**/coverage", "**/*.md", "**/.reference", ".ralph/**"],
+  "rules": {
+    "no-var": "error",
+    "prefer-const": "error",
+    "prefer-rest-params": "error",
+    "prefer-spread": "error",
+    "no-array-constructor": "error",
+    "no-unused-expressions": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/ban-ts-comment": "error",
+    "typescript/consistent-type-imports": "warn",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/triple-slash-reference": "error",
+    "import/first": "error",
+    "import/no-duplicates": "error",
+    "object-shorthand": "error",
+    "balabol/sort-destructure-keys": "error",
+    "max-lines": [
+      "error",
+      {
+        "max": 420,
+        "skipBlankLines": true,
+        "skipComments": true
+      }
+    ],
+    "no-console": "error",
+    "no-magic-numbers": [
+      "warn",
+      {
+        "ignore": [0, 1, 1024],
+        "ignoreArrayIndexes": true,
+        "ignoreDefaultValues": true,
+        "ignoreEnums": true,
+        "ignoreNumericLiteralTypes": true,
+        "ignoreTypeIndexes": true,
+        "enforceConst": true
+      }
+    ],
+    "balabol/no-clock-read": "error",
+    "balabol/no-double-type-assertion": "error",
+    "balabol/no-test-mocks": "error",
+    "balabol/no-type-assertion": "error",
+    "balabol/require-canonical-effect-schema-import": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts"],
+      "rules": {
+        "no-magic-numbers": "off",
+        "typescript/no-non-null-assertion": "warn",
+        "typescript/no-unnecessary-type-assertion": "off",
+        "balabol/property-test-placement": "error"
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # Balabol
 
 **Purpose:** Describe the repository and its current development state.
-**Status:** Specification and repository scaffold; the app is not implemented.
+**Status:** Specification and complete TS quality tooling; the app is not implemented.
 **Authority:** Product requirements live in the published prototype issue; engineering guidance lives in AGENTS.md.
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
@@ -17,8 +17,8 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 
 ## Repository tooling
 
-Use Node 22.19+ and the pinned pnpm. Install gitleaks separately (macOS: brew install gitleaks), then run pnpm install to activate Husky.
+Use Node 22.19+ and the pinned pnpm. Install gitleaks separately (macOS: brew install gitleaks), then run `pnpm install --strict-peer-dependencies` to activate Husky.
 
 Run pnpm check:repository for formatting and staged-secret checks; pnpm secrets:files scans the working tree and pnpm secrets:history scans Git history. Pre-commit scans staged content before formatting. Pre-push scans history. Missing gitleaks fails the hooks.
 
-These checks validate repository scaffolding. Product compiler/test/coverage gates are required as product code is added; no empty test suite is presented as passing product acceptance. Speech engines and model weights are not installed by repository setup.
+Run `pnpm check-all` for the complete quality gate and `pnpm test:harness` for isolated positive/negative tooling self-checks. The [quality harness](docs/engineering/quality-harness.md) documents the pinned cohort and numeric limits; the [ownership map](docs/engineering/ownership.md) owns initial dependency boundaries. Product compiler/test/coverage gates become active as source is added; absent product source is explicitly pending, not passing product acceptance. Speech engines and model weights are not installed by repository setup.
