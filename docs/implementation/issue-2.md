@@ -2,7 +2,7 @@
 
 **Purpose:** Record implementation and verification of the first preparatory slice.
 **Audience:** Owner, orchestration agent and independent reviewers.
-**Status:** Implemented candidate; independent review and owner acceptance pending.
+**Status:** Implemented and independently reviewed candidate; owner acceptance pending.
 **Authority:** [Establish the complete quality harness](https://github.com/dearlordylord/balabol/issues/2) and the accepted prototype specification.
 **Expected use:** Review against baseline `9892ef0645031fca10e7d05553c731a51f37aeb7`; do not infer product readiness from this receipt.
 **Lifecycle:** Append material review corrections and their evidence before acceptance.
@@ -60,3 +60,19 @@ The bounded recognizer now follows the installed API's curried Layer factory/reg
 Correctly placed public Layer property APIs actually typecheck and execute with the pinned cohort, including synchronous and Effect properties. Ordinary inline dependency-injection tests and unrelated `layer`/`prop` methods remain permitted. Ambiguous callback references and computed/rest/default bindings outside correctly named property files fail closed with actionable guidance; the harness policy documents that explicit syntax boundary.
 
 Focused verification passed **10/10** checks. The final frozen `pnpm check-all` candidate passed **68/68** checks, every configured gate and Effect diagnostics with **0 errors, 0 warnings**. An earlier intermediate 67-case run was superseded after adding the callback-lifetime preservation case; its formatting check overlapped that edit and is not final evidence. Independent re-review and owner acceptance remain pending. No next-ticket implementation has started.
+
+## Final independent review
+
+Reviewed implementation commit: `19ef3626632b2ad2f2b582e4093da06f68eb17b2`, against the original baseline `9892ef0645031fca10e7d05553c731a51f37aeb7`. Historical pending statements above describe the state at each earlier review round.
+
+### Standards
+
+PASS, no remaining actionable findings. The reviewer ran six focused public-CLI checks of the final Layer callback correction, including direct/named/namespace/nested properties, ordinary DI tests, unrelated methods and restoration of outer bindings. The correction stays in the tooling owner, and its ambiguity restrictions are documented.
+
+### Spec
+
+PASS, no remaining actionable findings. The reviewer ran four focused checks: the original misplaced Layer property fails; ordinary Layer DI remains valid; correctly placed Layer properties compile and execute; callback provenance does not leak outside its scope.
+
+The coherent implementation gate passed **68/68** self-checks with Effect diagnostics at **0 errors, 0 warnings**. The final review did not rerun the full suite or change implementation files. This final appendix is documentation only.
+
+Owner acceptance remains pending. This candidate establishes the quality harness, not an implemented conversation, durable memory host, Swift client or qualified real-model runtime. The issue stays open and the next ticket has not started.
