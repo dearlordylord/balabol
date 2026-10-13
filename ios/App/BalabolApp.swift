@@ -2,18 +2,54 @@ import SwiftUI
 
 @main
 struct BalabolApp: App {
+  private let localState = ClientLocalState.currentLaunch()
   var body: some Scene {
-    WindowGroup { ConversationRoot() }
+    WindowGroup { ConversationRoot(localState: localState) }
+  }
+}
+
+/// The composition root selects a private namespace only for explicit debug UI
+/// test launches. Ordinary app launches always keep the same saved local state.
+private struct ClientLocalState {
+  let defaults: UserDefaults
+  let testNamespace: String?
+
+  static func currentLaunch() -> ClientLocalState {
+    #if DEBUG
+      if let value = ProcessInfo.processInfo.environment["BALABOL_UI_TEST_NAMESPACE"] {
+        guard let namespace = UUID(uuidString: value)?.uuidString,
+          let defaults = UserDefaults(suiteName: "app.balabol.uitests." + namespace)
+        else { preconditionFailure("The UI test namespace must be a UUID.") }
+        return ClientLocalState(defaults: defaults, testNamespace: namespace)
+      }
+    #endif
+    return ClientLocalState(defaults: .standard, testNamespace: nil)
+  }
+
+  func draftURL(in applicationSupport: URL) -> URL {
+    guard let testNamespace else {
+      return applicationSupport.appendingPathComponent("conversation-draft.json")
+    }
+    return applicationSupport.appendingPathComponent("UITests", isDirectory: true)
+      .appendingPathComponent(testNamespace, isDirectory: true)
+      .appendingPathComponent("conversation-draft.json")
   }
 }
 
 @MainActor
 private struct ConversationRoot: View {
-  @AppStorage("serverURL") private var configuredURL = ""
+  @AppStorage private var configuredURL: String
   @State private var urlInput = ""
   @State private var model: ConversationViewModel?
   @State private var session: URLSession?
   @State private var configurationError: String?
+  private let localState: ClientLocalState
+
+  init(localState: ClientLocalState) {
+    self.localState = localState
+    _configuredURL = AppStorage(wrappedValue: "", "serverURL", store: localState.defaults)
+  }
+
   var body: some View {
     NavigationStack {
       Group {
@@ -21,8 +57,11 @@ private struct ConversationRoot: View {
           ConversationView(model: model)
         } else {
           Form {
-            Text("Enter your backend's Tailscale URL, including its port.")
-            TextField("http://100.x.x.x:3000", text: $urlInput)
+            Text(
+              "On Simulator, use http://127.0.0.1:8787. On iPhone, use your Mac's Tailscale address with port 8787."
+            )
+            TextField("http://127.0.0.1:8787", text: $urlInput)
+              .accessibilityIdentifier("server-url")
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
               .keyboardType(.URL)
@@ -65,7 +104,7 @@ private struct ConversationRoot: View {
       let directory = try FileManager.default.url(
         for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
       let draftStore = FileDraftStore(
-        url: directory.appendingPathComponent("conversation-draft.json"))
+        url: localState.draftURL(in: directory))
       model = ConversationViewModel(transport: transport, draftStore: draftStore)
       session = candidate
       configuredURL = urlInput

@@ -4,10 +4,10 @@ import XCTest
 final class TextDeliveryUITests: XCTestCase {
   func testUnreachableServerRetainsDraftAcrossRelaunch() {
     let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
     app.launch()
-    let server = app.buttons["Server"]
-    if server.waitForExistence(timeout: 2), server.isEnabled { server.tap() }
-    let address = app.textFields["http://100.x.x.x:3000"]
+    let address = app.textFields["server-url"]
     XCTAssertTrue(address.waitForExistence(timeout: 5))
     address.tap()
     address.typeText("http://127.0.0.1:1")

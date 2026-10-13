@@ -15,6 +15,18 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 - [Engineering standards](docs/engineering/standards.md)
 - [Deferred real-model qualification](.scratch/followups/issues/01-create-real-model-check-task.md)
 
+## Run the text prototype on Simulator
+
+The backend is a Terminal process; the interface is a separate native iOS app. Opening the backend URL in a browser shows setup instructions, not a chat.
+
+1. Use Node 24 and the pinned pnpm. On first setup, install gitleaks and run `pnpm install --strict-peer-dependencies` as described below.
+2. In Terminal at this repository, run `pnpm build`, then `pnpm start`. Keep that process running; it listens at `http://127.0.0.1:8787` by default.
+3. Open `ios/Balabol.xcodeproj` in Xcode. Select the `Balabol` scheme and an iOS 17+ Simulator, then press Run.
+4. In the app's **Connect to Balabol** screen, enter `http://127.0.0.1:8787` in the URL field and tap **Connect**.
+5. Enter text in **Message** and tap **Send**. Relaunch the app to verify the single saved transcript remains. Replies and voice are not implemented yet.
+
+For a physical iPhone, choose your local signing team in Xcode. Connect Tailscale on both devices, start the backend with `BALABOL_HOST=<Mac Tailscale IP> pnpm start`, and enter `http://<Mac Tailscale IP>:8787` in the app. The default loopback address is for Simulator; the phone needs the Mac's Tailscale address. Both processes must run while sending. If you customize `BALABOL_PORT`, use the matching port in the app URL.
+
 ## Repository tooling
 
 Use Node >=22.19 and <25 (Node 24 is supported) and the pinned pnpm. Install gitleaks separately (macOS: brew install gitleaks), then run `pnpm install --strict-peer-dependencies` to activate Husky.

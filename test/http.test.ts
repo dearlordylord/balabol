@@ -14,6 +14,14 @@ it("serves schema-validated durable POST/GET over a real HTTP socket", async () 
       Effect.scoped(
         Effect.gen(function* () {
           const address = yield* HttpServer.addressFormattedWith(Effect.succeed)
+          const welcome = yield* Effect.tryPromise(() => fetch(`${address}/`))
+          expect(welcome.status).toBe(200)
+          expect(welcome.headers.get("content-type")).toContain("text/html")
+          const welcomeText = yield* Effect.tryPromise(() => welcome.text())
+          expect(welcomeText).toContain("Balabol backend is running")
+          expect(welcomeText).toContain("ios/Balabol.xcodeproj")
+          expect(welcomeText).toContain("http://127.0.0.1:8787")
+          expect(welcomeText).toContain("not a browser chat")
           const payload = { deliveryId: "11111111-1111-4111-8111-111111111111", text: "salut" }
           const post = (body: unknown) =>
             Effect.tryPromise(() =>
@@ -29,6 +37,12 @@ it("serves schema-validated durable POST/GET over a real HTTP socket", async () 
             Effect.flatMap(Schema.decodeUnknownEffect(Message))
           )
           expect(receipt.text).toBe("salut")
+          const rootAfterMessage = yield* Effect.tryPromise(() =>
+            fetch(`${address}/`, { headers: { host: "unsafe.example" } })
+          )
+          const rootText = yield* Effect.tryPromise(() => rootAfterMessage.text())
+          expect(rootText).not.toContain(payload.text)
+          expect(rootText).not.toContain("unsafe.example")
           const conflict = yield* post({ ...payload, text: "different" })
           expect(conflict.status).toBe(409)
           expect(

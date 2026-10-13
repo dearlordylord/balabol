@@ -6,6 +6,7 @@ import { Effect, Layer, Schema } from "effect"
 import { HttpRouter } from "effect/http"
 import { Conversation, conversationRoutes } from "../conversation/index.ts"
 
+import { welcomeRoutes } from "./welcome.ts"
 import { memoryLayer } from "../memory/index.ts"
 
 export const conversationLayer = (path: string) => Conversation.layer.pipe(Layer.provide(memoryLayer(path)))
@@ -23,7 +24,7 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     database: environment.BALABOL_DATABASE ?? ".data/conversation.sqlite"
   })
 export const serverLayer = (config: ServerConfig) =>
-  HttpRouter.serve(conversationRoutes).pipe(
+  HttpRouter.serve(Layer.merge(conversationRoutes, welcomeRoutes)).pipe(
     Layer.provide(conversationLayer(config.database)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { host: config.host, port: config.port }))
   )
