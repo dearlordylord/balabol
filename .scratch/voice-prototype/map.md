@@ -15,6 +15,8 @@ An owner-agreed prototype contract, domain model, Swift MVVM and vertical-slice 
 
 ## Notes
 
+- The owner invoked to-spec and confirmed the testing seams. The implementation contract is now [Balabol: extensible iOS prototype with fake providers](https://github.com/dearlordylord/balabol/issues/1). Remaining open tickets retain design context; publication does not claim they were individually resolved or that implementation exists.
+
 - One enduring conversation only. Voice sessions connect to that conversation; no conversation collection or picker.
 - iOS first, including live conversation with the screen locked. Swift/MVVM is the leading candidate, not a silently accepted implementation decision.
 - Voice and text input share the conversation. Free switching among Russian, French and English; Japanese later through language/provider configuration.

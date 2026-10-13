@@ -2,8 +2,8 @@
 
 **Purpose:** Specify the minimum implementable Balabol prototype.
 **Audience:** Product owner, implementers and reviewers, including coding agents.
-**Status:** Draft awaiting confirmation of testing seams before publication.
-**Authority:** Synthesis of owner instructions; published GitHub issue becomes the accepted implementation contract.
+**Status:** Published; testing seams confirmed by the owner on 2026-10-13.
+**Authority:** Accepted implementation contract published as [Balabol: extensible iOS prototype with fake providers](https://github.com/dearlordylord/balabol/issues/1). This file is its synchronized local copy.
 **Expected use:** Implement the prototype and assess acceptance; research is advisory.
 **Lifecycle:** Keep this local copy synchronized with the published issue; review when scope, ownership, provider contracts or acceptance criteria change.
 

@@ -8,7 +8,8 @@
 
 An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Initial speech, answer and summary providers are deterministic fakes; local speech and subscription model integration are deferred.
 
-- [Prototype spec draft](docs/product/prototype-spec.md)
+- [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
+- [Synchronized local specification](docs/product/prototype-spec.md)
 - [Domain glossary](GLOSSARY.md)
 - [Wayfinder map](.scratch/voice-prototype/map.md)
 - [Engineering standards](docs/engineering/standards.md)
