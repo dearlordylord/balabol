@@ -34,3 +34,11 @@
 There is no application source, durable memory implementation, backend server or Swift client yet. Build/runtime cycles/complexity/duplication/product coverage are demonstrated against temporary fixtures; their empty-project result is **not product acceptance**. Node tooling JavaScript is format checked and tested through the public executable seam; the inherited numeric production gates apply to production TS. Static source checks do not prove arbitrary runtime reflection, generated-artifact isolation or Swift/platform behavior.
 
 No changes to unii, model installation/download, actual inference or physical audio qualification occurred. The issue remains open for independent Standards/Spec review and owner discussion; this ticket does not authorize starting the next slice.
+
+## Review loop: round 1
+
+Independent Standards/Spec review found four enforcement gaps: property placement was scoped only to test files, extracting mock API members bypassed the call visitor, aliases of imported/global objects bypassed the mutation guard, and type-only import-equals module references were absent from the architecture graph.
+
+Six public CLI regression fixtures first reproduced these gaps as RED: the forbidden inputs incorrectly exited successfully. Corrections enable property placement globally (only `*.property.test.ts` is exempt), reject forbidden test-API member extraction, propagate imported/global origins through direct aliases, and resolve import-equals external module references through the existing owner/private-entrypoint/cycle checks. The mutation guard remains specific to imported/global origins; it does not prohibit ordinary local object mutation. Positive fixtures preserve that behavior and permit an import-equals dependency through its declared public entrypoint.
+
+Focused round-1 verification passed **8/8** fixtures. The coherent `pnpm check-all` candidate then passed **53/53** checks, every configured gate and Effect diagnostics with **0 errors, 0 warnings**. Numeric thresholds, secret-first hooks, absence-of-source reporting and product scope remain unchanged. Independent re-review and owner acceptance remain pending.

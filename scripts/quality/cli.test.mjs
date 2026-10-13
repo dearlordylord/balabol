@@ -406,3 +406,67 @@ test("architecture rejects loader factories", () =>
     false,
     /Module-loader factories/,
   ));
+
+test("lint rejects property generators in production source", () =>
+  assertGate(
+    { "src/conversation/index.ts": 'import fc from "fast-check"; export const arbitrary = fc.string()' },
+    "lint",
+    false,
+    /Property-based/,
+  ));
+test("lint rejects extracted mock functions", () =>
+  assertGate(
+    { "test/extracted.test.ts": 'import { vi } from "vitest"; const make = vi.fn; export const fake = make()' },
+    "lint",
+    false,
+    /Test mocks/,
+  ));
+test("lint rejects global aliases used for monkey-patching", () =>
+  assertGate({ "test/alias.test.ts": "const math = Math; math.random = () => 1" }, "lint", false, /monkey-patching/));
+test("lint rejects imported aliases used for monkey-patching", () =>
+  assertGate(
+    { "test/alias.test.ts": 'import * as os from "node:os"; const system = os; system.platform = () => "darwin"' },
+    "lint",
+    false,
+    /monkey-patching/,
+  ));
+test("architecture rejects type-only import-equals private edges", () =>
+  assertGate(
+    {
+      "quality-owners.json": twoOwners,
+      "src/conversation/index.ts": 'import type Private = require("../memory/internal.js"); export type A = Private.A',
+      "src/memory/index.ts": "export {}",
+      "src/memory/internal.ts": "export type A = string",
+    },
+    "architecture",
+    false,
+    /Private entrypoint/,
+  ));
+test("architecture rejects type-only import-equals cycles", () =>
+  assertGate(
+    {
+      "quality-owners.json": owners,
+      "src/conversation/index.ts": 'import type A = require("./a.js"); export type B = A.B',
+      "src/conversation/a.ts": 'import type B = require("./index.js"); export type A = B.B',
+    },
+    "architecture",
+    false,
+    /cycle/,
+  ));
+
+test("lint permits ordinary local object mutation and aliasing", () =>
+  assertGate(
+    { "src/index.ts": "const original = { value: 0 }; const alias = original; alias.value = 1; export { original }" },
+    "lint",
+    true,
+  ));
+test("architecture accepts an import-equals edge through a public entrypoint", () =>
+  assertGate(
+    {
+      "quality-owners.json": twoOwners,
+      "src/conversation/index.ts": 'import type Memory = require("../memory/index.js"); export type A = Memory.A',
+      "src/memory/index.ts": "export type A = string",
+    },
+    "architecture",
+    true,
+  ));

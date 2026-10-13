@@ -81,6 +81,12 @@ export const checkArchitecture = (directory, files) => {
         !(ts.isCallExpression(node.parent) && node.parent.expression === node)
       )
         throw new Error(`Aliased module loaders are not statically reviewable: ${from}`);
+      if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+        const target = node.moduleReference.expression;
+        if (!target || !ts.isStringLiteral(target))
+          throw new Error(`Computed dependency is not statically reviewable: ${from}`);
+        add(target.text);
+      }
       if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier)
         add(node.moduleSpecifier.text);
       if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal.text);

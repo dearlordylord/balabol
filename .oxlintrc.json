@@ -68,7 +68,8 @@
     "balabol/no-double-type-assertion": "error",
     "balabol/no-test-mocks": "error",
     "balabol/no-type-assertion": "error",
-    "balabol/require-canonical-effect-schema-import": "error"
+    "balabol/require-canonical-effect-schema-import": "error",
+    "balabol/property-test-placement": "error"
   },
   "overrides": [
     {
@@ -76,8 +77,7 @@
       "rules": {
         "no-magic-numbers": "off",
         "typescript/no-non-null-assertion": "warn",
-        "typescript/no-unnecessary-type-assertion": "off",
-        "balabol/property-test-placement": "error"
+        "typescript/no-unnecessary-type-assertion": "off"
       }
     }
   ]

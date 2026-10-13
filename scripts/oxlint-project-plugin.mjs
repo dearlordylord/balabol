@@ -150,6 +150,11 @@ const noTestMocks = {
         ? imported.has(node.name) ||
           ["globalThis", "global", "Math", "Date", "performance", "process"].includes(node.name)
         : node.type === "MemberExpression" && rootedInImport(node.object));
+    const rootedInTestApi = (node) =>
+      node &&
+      (node.type === "Identifier"
+        ? testApis.has(node.name)
+        : node.type === "MemberExpression" && rootedInTestApi(node.object));
     return {
       ImportDeclaration: (node) => {
         for (const specifier of node.specifiers) {
@@ -162,6 +167,7 @@ const noTestMocks = {
         }
       },
       VariableDeclarator: (node) => {
+        if (node.id.type === "Identifier" && rootedInImport(node.init)) imported.add(node.id.name);
         if (node.id.type === "Identifier" && node.init?.type === "Identifier" && testApis.has(node.init.name))
           testApis.add(node.id.name);
         if (node.id.type !== "ObjectPattern" || node.init?.type !== "Identifier" || !testApis.has(node.init.name))
@@ -180,15 +186,12 @@ const noTestMocks = {
           report(context, node, "Test mocks are banned; use Layers or explicit ports.");
         if (node.callee.type !== "MemberExpression") return;
         const name = memberName(node.callee);
-        const object = node.callee.object;
-        const testApi =
-          object.type === "Identifier"
-            ? testApis.has(object.name)
-            : object.type === "MemberExpression" && rootedInImport(object);
-        if (testApi && forbiddenViMembers.has(name))
-          report(context, node, "Test mocks are banned; use Layers or explicit ports.");
         if (["defineProperty", "defineProperties", "assign", "set"].includes(name) && rootedInImport(node.arguments[0]))
           report(context, node, "Module monkey-patching is banned; use Layers or explicit ports.");
+      },
+      MemberExpression: (node) => {
+        if (rootedInTestApi(node.object) && forbiddenViMembers.has(memberName(node)))
+          report(context, node, "Test mocks are banned; use Layers or explicit ports.");
       },
       AssignmentExpression: (node) => {
         if (node.left.type === "MemberExpression" && rootedInImport(node.left))
