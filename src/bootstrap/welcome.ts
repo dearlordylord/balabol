@@ -21,7 +21,7 @@ li { margin: .75rem 0; }
 <ol>
 <li>Keep the backend running in Terminal: use Node 24, then <code>pnpm build</code> and <code>pnpm start</code>.</li>
 <li>Open <code>ios/Balabol.xcodeproj</code> in Xcode. Select the <strong>Balabol</strong> scheme and an iOS 17+ Simulator, then press Run.</li>
-<li>In the app's <strong>Connect to Balabol</strong> screen, enter <code>http://127.0.0.1:8787</code> in the URL field and tap <strong>Connect</strong>.</li>
+<li>Simulator opens the conversation automatically using <code>http://127.0.0.1:8787</code> on first launch. No URL entry or Connect tap is required. A saved server takes precedence; use <strong>Server</strong> only to change it.</li>
 <li>Write in the <strong>Message</strong> field and tap <strong>Send</strong>. The current prototype saves text; replies and voice are not implemented yet.</li>
 </ol>
 <h2>Run on iPhone</h2>

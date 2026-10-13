@@ -22,7 +22,7 @@ The backend is a Terminal process; the interface is a separate native iOS app. O
 1. Use Node 24 and the pinned pnpm. On first setup, install gitleaks and run `pnpm install --strict-peer-dependencies` as described below.
 2. In Terminal at this repository, run `pnpm build`, then `pnpm start`. Keep that process running; it listens at `http://127.0.0.1:8787` by default.
 3. Open `ios/Balabol.xcodeproj` in Xcode. Select the `Balabol` scheme and an iOS 17+ Simulator, then press Run.
-4. In the app's **Connect to Balabol** screen, enter `http://127.0.0.1:8787` in the URL field and tap **Connect**.
+4. Simulator opens the conversation automatically using `http://127.0.0.1:8787` on first launch. No URL entry or Connect tap is required. A previously saved server remains selected; use **Server** only to change it.
 5. Enter text in **Message** and tap **Send**. Relaunch the app to verify the single saved transcript remains. Replies and voice are not implemented yet.
 
 For a physical iPhone, choose your local signing team in Xcode. Connect Tailscale on both devices, start the backend with `BALABOL_HOST=<Mac Tailscale IP> pnpm start`, and enter `http://<Mac Tailscale IP>:8787` in the app. The default loopback address is for Simulator; the phone needs the Mac's Tailscale address. Both processes must run while sending. If you customize `BALABOL_PORT`, use the matching port in the app URL.
@@ -47,7 +47,7 @@ SQLite commits raw batches and their delivery receipt together, uses WAL/FULL wi
 
 ## iOS text client
 
-Open `ios/Balabol.xcodeproj`, select the `Balabol` scheme, and run on an iOS 17+ simulator or device. For a device, select your local signing team in Xcode. Start the backend with `BALABOL_HOST=<Mac Tailscale IP>` and enter `http://<Mac Tailscale IP>:8787` in the app. The simulator can use `http://127.0.0.1:8787`.
+Open `ios/Balabol.xcodeproj`, select the `Balabol` scheme, and run on an iOS 17+ simulator or device. For a device, select your local signing team in Xcode. Start the backend with `BALABOL_HOST=<Mac Tailscale IP>` and enter `http://<Mac Tailscale IP>:8787` in the app. Simulator connects automatically to `http://127.0.0.1:8787` on first launch; a saved custom server takes precedence.
 
 Send text, reload the app and backend, and verify it remains in the single transcript. Stop the backend before sending to exercise an uncertain result: the draft remains, and retry uses the same identity when the backend returns. A definite invalid/conflicting request preserves editable text; uncertain outcomes preserve the exact pending payload. Server changes are blocked while a delivery remains unresolved.
 

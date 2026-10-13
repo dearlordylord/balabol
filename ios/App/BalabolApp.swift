@@ -86,7 +86,14 @@ private struct ConversationRoot: View {
     }
     .onAppear {
       urlInput = configuredURL
-      if !configuredURL.isEmpty { connect() }
+      if !configuredURL.isEmpty {
+        connect()
+      } else {
+        #if targetEnvironment(simulator)
+          urlInput = "http://127.0.0.1:8787"
+          connect()
+        #endif
+      }
     }
   }
   private func connect() {
