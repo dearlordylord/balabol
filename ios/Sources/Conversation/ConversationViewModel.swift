@@ -11,6 +11,8 @@ public final class ConversationViewModel {
   @ObservationIgnored private let draftStore: any DraftStore
   @ObservationIgnored private var draftTask: Task<Void, Never>?
   @ObservationIgnored private var deliveryTask: Task<Void, Never>?
+  @ObservationIgnored private var replyTask: Task<Void, Never>?
+  @ObservationIgnored private var replyRequest: ConversationState.Request?
   @ObservationIgnored private var historyTask: Task<Void, Never>?
   @ObservationIgnored private var draftRequest: ConversationState.Request?
   @ObservationIgnored private var deliveryRequest: ConversationState.Request?
@@ -21,6 +23,11 @@ public final class ConversationViewModel {
     self.draftStore = draftStore
   }
 
+  public var replyText: String { state.replyText }
+  public var replyIsWaiting: Bool { state.replyIsWaiting }
+  public var isObservingReply: Bool { state.isObservingReply }
+  public var replyProviderFailure: ReplyFailure? { state.replyProviderFailure }
+  public var replyObservationFailure: ConversationFailure? { state.replyObservationFailure }
   public var messages: [ConversationMessage] { state.messages }
   public var draft: String { state.draftText }
   public var pendingDelivery: PendingDelivery? { state.pendingDelivery }
@@ -136,6 +143,32 @@ public final class ConversationViewModel {
         self.historyRequest = nil
         self.receive(.historyLoaded(request, result))
       }
+    case .observeReply(let request, let input):
+      let transport = transport
+      replyRequest = request
+      replyTask = Task { [weak self] in
+        let failure: ConversationFailure?
+        do {
+          let observation = try await transport.observeReply(for: input)
+          defer { observation.cancel() }
+          for try await snapshot in observation.events {
+            guard let self, self.replyRequest == request else { return }
+            self.receive(.replyReceived(request, snapshot))
+            if self.replyRequest != request { return }
+          }
+          failure = nil
+        } catch let error as ConversationFailure { failure = error } catch {
+          failure = .unavailable
+        }
+        guard let self, self.replyRequest == request else { return }
+        self.replyTask = nil
+        self.replyRequest = nil
+        self.receive(.replyEnded(request, failure))
+      }
+    case .cancelReply:
+      replyTask?.cancel()
+      replyTask = nil
+      replyRequest = nil
     case .cancelSend:
       deliveryTask?.cancel()
       deliveryTask = nil

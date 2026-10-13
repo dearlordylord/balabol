@@ -10,6 +10,7 @@ export class DurableMemory extends Context.Service<
   DurableMemory,
   {
     storage: Storage
+    findReply: (inputDeliveryId: string) => Receipt | undefined
     prepare: (payload: DeliveryPayload) => void
     find: (deliveryId: DeliveryPayload["deliveryId"]) => DeliveryEvidence | undefined
     page: (after: number | undefined, limit: number) => readonly Receipt[]
@@ -29,10 +30,17 @@ export const sqliteLayer = (path: string) =>
       )
       return DurableMemory.of({
         storage,
+        findReply: (id) => storage.findReply(id),
         find: (id) => {
           const row = storage.find(id)
           if (row === undefined) return undefined
-          const payload = { deliveryId: row.deliveryId, text: row.text }
+          const payload = {
+            deliveryId: row.deliveryId,
+            text: row.text,
+            role: row.role,
+            ...(row.inputDeliveryId === null ? {} : { inputDeliveryId: row.inputDeliveryId }),
+            ...(row.responseId === null ? {} : { responseId: row.responseId })
+          }
           return Schema.decodeUnknownSync(DeliveryEvidence)(
             row.firstId === null
               ? { state: "Intent", payload }

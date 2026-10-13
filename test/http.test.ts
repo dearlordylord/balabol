@@ -37,6 +37,9 @@ it("serves schema-validated durable POST/GET over a real HTTP socket", async () 
             Effect.flatMap(Schema.decodeUnknownEffect(Message))
           )
           expect(receipt.text).toBe("salut")
+          yield* Effect.tryPromise(() =>
+            fetch(`${address}/conversation/replies/${payload.deliveryId}`, { method: "DELETE" })
+          )
           const rootAfterMessage = yield* Effect.tryPromise(() =>
             fetch(`${address}/`, { headers: { host: "unsafe.example" } })
           )

@@ -54,6 +54,40 @@ public struct ConversationState: Equatable, Sendable {
     case failed(ConversationFailure)
   }
 
+  public enum Reply: Equatable, Sendable {
+    case idle
+    case observing(Request, inputDeliveryId: UUID, latest: ReplySnapshot?)
+    case completed(ConversationMessage)
+    case providerFailed(inputDeliveryId: UUID, text: String, ReplyFailure)
+    case observationFailed(inputDeliveryId: UUID, latest: ReplySnapshot?, ConversationFailure)
+  }
+  public internal(set) var reply: Reply = .idle
+  public var replyText: String {
+    switch reply {
+    case .observing(_, _, let latest), .observationFailed(_, let latest, _): latest?.text ?? ""
+    case .providerFailed(_, let text, _): text
+    default: ""
+    }
+  }
+  public var isObservingReply: Bool {
+    if case .observing = reply { return true }
+    return false
+  }
+  public var replyIsWaiting: Bool {
+    if case .observing(_, _, let latest) = reply {
+      return latest == nil || latest?.state == .waiting
+    }
+    return false
+  }
+  public var replyProviderFailure: ReplyFailure? {
+    if case .providerFailed(_, _, let error) = reply { return error }
+    return nil
+  }
+  public var replyObservationFailure: ConversationFailure? {
+    if case .observationFailed(_, _, let error) = reply { return error }
+    return nil
+  }
+
   public internal(set) var connection: Connection = .active(generation: Int())
   internal var nextRequestID = 0
   public internal(set) var draft: Draft = .unloaded
@@ -112,7 +146,8 @@ public struct ConversationState: Equatable, Sendable {
     }
   }
   public var canSendDraft: Bool {
-    guard isActive, !isSending, case .available(_, let persistence) = draft else { return false }
+    guard isActive, !isSending, !isObservingReply, case .available(_, let persistence) = draft
+    else { return false }
     switch persistence {
     case .clean: return true
     case .writing(_, let checkpoint, let required):

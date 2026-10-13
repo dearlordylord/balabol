@@ -65,6 +65,7 @@ it("serializes concurrent duplicate requests and paginates ledger order across s
             concurrency: "unbounded"
           })
           expect(receipts[0]).toEqual(receipts[1])
+          yield* conversation.cancelReply(first.deliveryId)
           const later = yield* conversation.send(second)
           expect(later.recordId).toBe(3)
           expect(later.position).toBe(1)
@@ -133,6 +134,7 @@ it("allocates positions at durable acceptance, not an abandoned intent", async (
         Effect.gen(function* () {
           const conversation = yield* Conversation
           expect((yield* conversation.send(second)).position).toBe(0)
+          yield* conversation.cancelReply(second.deliveryId)
           expect((yield* conversation.send(first)).position).toBe(1)
           expect((yield* conversation.page({ after: 0, limit: 100 })).messages[0]?.deliveryId).toBe(first.deliveryId)
         })

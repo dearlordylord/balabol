@@ -1,8 +1,8 @@
 import { Memory as UniiMemory } from "@firfi/unii"
-import type { Storage } from "@firfi/unii"
+import type { Backend, Storage } from "@firfi/unii"
 import { Schema } from "effect"
 import type { DurableMemory } from "./adapter.ts"
-import { Receipt } from "./contracts.ts"
+import { PriorSnapshot, Receipt } from "./contracts.ts"
 import type { DeliveryPayload } from "./contracts.ts"
 
 type CoreState =
@@ -33,15 +33,35 @@ export class CoreHost {
   #state: CoreState
   readonly #adapter: DurableMemory["Service"]
   readonly #now: () => number
-  private constructor(adapter: DurableMemory["Service"], now: () => number, core: UniiMemory) {
+  readonly #backend: Backend
+  readonly #concurrency: number
+  private constructor(
+    adapter: DurableMemory["Service"],
+    now: () => number,
+    core: UniiMemory,
+    backend: Backend,
+    concurrency: number
+  ) {
     this.#adapter = adapter
     this.#now = now
+    this.#backend = backend
+    this.#concurrency = concurrency
     this.#state = { kind: "Ready", core }
   }
-  static async open(adapter: DurableMemory["Service"], now: () => number): Promise<CoreHost> {
+  static async open(
+    adapter: DurableMemory["Service"],
+    now: () => number,
+    backend: Backend,
+    concurrency: number
+  ): Promise<CoreHost> {
     await adapter.storage.open()
-    const core = await UniiMemory.open({ storage: sessionStorage(adapter.storage), now })
-    return new CoreHost(adapter, now, core)
+    const core = await UniiMemory.open({
+      storage: sessionStorage(adapter.storage),
+      now,
+      backend,
+      policy: { concurrency }
+    })
+    return new CoreHost(adapter, now, core, backend, concurrency)
   }
   async #ready(): Promise<UniiMemory> {
     const state = this.#state
@@ -49,7 +69,12 @@ export class CoreHost {
     if (state.kind === "Ready") return state.core
     this.#state = { kind: "RecoveryRequired", core: null }
     await state.core?.close()
-    const core = await UniiMemory.open({ storage: sessionStorage(this.#adapter.storage), now: this.#now })
+    const core = await UniiMemory.open({
+      storage: sessionStorage(this.#adapter.storage),
+      now: this.#now,
+      backend: this.#backend,
+      policy: { concurrency: this.#concurrency }
+    })
     this.#state = { kind: "Ready", core }
     return core
   }
@@ -57,15 +82,30 @@ export class CoreHost {
     const core = await this.#ready()
     try {
       this.#adapter.prepare(message)
-      const receipt = await core.append({ kind: "user", text: message.text })
+      const receipt = await core.append({ kind: message.role ?? "user", text: message.text })
       const evidence = this.#adapter.find(message.deliveryId)
       if (evidence?.state !== "Accepted" || evidence.receipt.recordId !== receipt.firstId)
         throw new Error("Missing durable receipt")
       return Schema.decodeUnknownSync(Receipt)({
-        ...message,
+        ...evidence.receipt,
         recordId: receipt.firstId,
         position: evidence.receipt.position
       })
+    } catch (error) {
+      this.#state = { kind: "RecoveryRequired", core }
+      throw error
+    }
+  }
+  async snapshot(before: number): Promise<PriorSnapshot> {
+    const core = await this.#ready()
+    const snapshot = core.snapshot({ before })
+    return Schema.decodeUnknownSync(PriorSnapshot)({ state: snapshot.state, text: snapshot.text })
+  }
+  async pump(): Promise<void> {
+    if (this.#state.kind !== "Ready") return
+    const core = this.#state.core
+    try {
+      core.step()
     } catch (error) {
       this.#state = { kind: "RecoveryRequired", core }
       throw error

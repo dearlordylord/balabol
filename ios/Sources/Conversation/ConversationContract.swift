@@ -10,23 +10,45 @@ public struct PendingDelivery: Codable, Equatable, Sendable {
 }
 
 public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
+  public enum Role: String, Codable, Sendable { case user, assistant }
+  public let role: Role
+  public let responseId: UUID?
+  public let inputDeliveryId: UUID?
   public let deliveryId: UUID
   public let recordId: Int
   public let position: Int
   public let text: String
   public var id: UUID { deliveryId }
   public var isValid: Bool {
-    recordId >= 0 && position >= 0 && !text.isEmpty && text.utf16.count <= 100_000
+    guard recordId >= 0 && position >= 0 && !text.isEmpty && text.utf16.count <= 100_000 else {
+      return false
+    }
+    switch role {
+    case .user: return responseId == nil && inputDeliveryId == nil
+    case .assistant:
+      return responseId == deliveryId && inputDeliveryId != nil && inputDeliveryId != deliveryId
+    }
   }
-  public init(deliveryId: UUID, recordId: Int, position: Int, text: String) {
+  public init(
+    deliveryId: UUID, recordId: Int, position: Int, text: String, role: Role = .user,
+    responseId: UUID? = nil, inputDeliveryId: UUID? = nil
+  ) {
+    self.role = role
+    self.responseId = responseId
+    self.inputDeliveryId = inputDeliveryId
     self.deliveryId = deliveryId
     self.recordId = recordId
     self.position = position
     self.text = text
   }
-  private enum CodingKeys: String, CodingKey { case deliveryId, recordId, position, text }
+  private enum CodingKeys: String, CodingKey {
+    case deliveryId, recordId, position, text, role, responseId, inputDeliveryId
+  }
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    role = try container.decodeIfPresent(Role.self, forKey: .role) ?? .user
+    responseId = try container.decodeIfPresent(UUID.self, forKey: .responseId)
+    inputDeliveryId = try container.decodeIfPresent(UUID.self, forKey: .inputDeliveryId)
     deliveryId = try container.decode(UUID.self, forKey: .deliveryId)
     recordId = try container.decode(Int.self, forKey: .recordId)
     position = try container.decode(Int.self, forKey: .position)
@@ -67,6 +89,7 @@ public enum ConversationFailure: Error, Equatable, Sendable {
 public protocol ConversationTransport: Sendable {
   func send(_ delivery: PendingDelivery) async throws -> ConversationMessage
   func history(after: Int?) async throws -> HistoryPage
+  func observeReply(for inputDeliveryId: UUID) async throws -> ReplyObservation
 }
 
 public enum SavedDraft: Codable, Equatable, Sendable {

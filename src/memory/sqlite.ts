@@ -3,8 +3,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Checkpoint, MemoryRecord, Storage, StoredMemory, Summary } from "@firfi/unii"
 import { Schema } from "effect"
-import type { DeliveryPayload } from "./contracts.ts"
-import { DeliveryId, MessageText, Position, Receipt } from "./contracts.ts"
+import { DeliveryPayload, DeliveryId, MessageText, Position, Receipt, validMessageIdentity } from "./contracts.ts"
 
 const Address = Schema.Struct({ level: Schema.Int, index: Schema.Int })
 const Record = Schema.Struct({ id: Schema.Int, kind: Schema.String, text: Schema.String, date: Schema.String })
@@ -20,11 +19,17 @@ const CheckpointSchema = Schema.Struct({
 const Payload = Schema.Struct({ payload: Schema.String })
 const decodePayload = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, row: unknown): S["Type"] =>
   Schema.decodeUnknownSync(schema)(JSON.parse(Schema.decodeUnknownSync(Payload)(row).payload))
-const ledgerPayload = { deliveryId: DeliveryId, text: MessageText }
+const ledgerPayload = {
+  deliveryId: DeliveryId,
+  text: MessageText,
+  role: Schema.Literals(["user", "assistant"]),
+  inputDeliveryId: Schema.NullOr(DeliveryId),
+  responseId: Schema.NullOr(DeliveryId)
+}
 const Ledger = Schema.Union([
   Schema.Struct({ ...ledgerPayload, firstId: Schema.Null, position: Schema.Null }),
   Schema.Struct({ ...ledgerPayload, firstId: Position, position: Position })
-])
+]).check(Schema.makeFilter(validMessageIdentity))
 export type Ledger = typeof Ledger.Type
 
 /** A second SQLite file holds only the OS-released writer lease, never durable data. */
@@ -52,6 +57,17 @@ export class SqliteStorage implements Storage {
         this.database.exec(
           "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON; CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,payload TEXT NOT NULL); CREATE TABLE IF NOT EXISTS nodes(level INTEGER NOT NULL,idx INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(level,idx)); CREATE TABLE IF NOT EXISTS checkpoint(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL); CREATE TABLE IF NOT EXISTS deliveries(deliveryId TEXT PRIMARY KEY,text TEXT NOT NULL,position INTEGER UNIQUE,firstId INTEGER,endExclusive INTEGER)"
         )
+        const columns = this.database.prepare("PRAGMA table_info(deliveries)").all()
+        const names = columns.map((row) => Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }))(row).name)
+        if (!names.includes("role"))
+          this.transaction(() =>
+            this.database.exec(
+              "ALTER TABLE deliveries ADD COLUMN role TEXT NOT NULL DEFAULT 'user'; ALTER TABLE deliveries ADD COLUMN inputDeliveryId TEXT; ALTER TABLE deliveries ADD COLUMN responseId TEXT"
+            )
+          )
+        this.database.exec(
+          "CREATE UNIQUE INDEX IF NOT EXISTS replies_by_input ON deliveries(inputDeliveryId) WHERE role='assistant'"
+        )
       } catch (error) {
         this.database.close()
         throw error
@@ -74,30 +90,59 @@ export class SqliteStorage implements Storage {
   }
   find(deliveryId: DeliveryPayload["deliveryId"]): Ledger | undefined {
     const row = this.database
-      .prepare("SELECT deliveryId,text,position,firstId FROM deliveries WHERE deliveryId=?")
+      .prepare(
+        "SELECT deliveryId,text,position,firstId,role,inputDeliveryId,responseId FROM deliveries WHERE deliveryId=?"
+      )
       .get(deliveryId)
     return row === undefined ? undefined : Schema.decodeUnknownSync(Ledger)(row)
   }
+  findReply(inputDeliveryId: string): Receipt | undefined {
+    const row = this.database
+      .prepare("SELECT deliveryId FROM deliveries WHERE inputDeliveryId=? AND role='assistant' AND firstId IS NOT NULL")
+      .get(inputDeliveryId)
+    if (row === undefined) return undefined
+    const identity = Schema.decodeUnknownSync(Schema.Struct({ deliveryId: DeliveryId }))(row)
+    const ledger = this.find(identity.deliveryId)
+    if (ledger === undefined || ledger.firstId === null) throw new Error("Invalid assistant ledger")
+    return Schema.decodeUnknownSync(Receipt)({ ...ledger, recordId: ledger.firstId })
+  }
   prepare(input: DeliveryPayload): void {
+    const parsed = Schema.decodeUnknownSync(DeliveryPayload)(input)
     this.database
-      .prepare("INSERT OR IGNORE INTO deliveries(deliveryId,text) VALUES(?,?)")
-      .run(input.deliveryId, input.text)
-    this.#pending = input
+      .prepare("INSERT OR IGNORE INTO deliveries(deliveryId,text,role,inputDeliveryId,responseId) VALUES(?,?,?,?,?)")
+      .run(
+        parsed.deliveryId,
+        parsed.text,
+        parsed.role ?? "user",
+        parsed.inputDeliveryId ?? null,
+        parsed.responseId ?? null
+      )
+    this.#pending = parsed
   }
   page(after: number | undefined, limit: number): readonly Receipt[] {
     const rows =
       after === undefined
         ? this.database
             .prepare(
-              "SELECT deliveryId,text,position,firstId AS recordId FROM deliveries WHERE firstId IS NOT NULL ORDER BY position LIMIT ?"
+              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId FROM deliveries WHERE firstId IS NOT NULL ORDER BY position LIMIT ?"
             )
             .all(limit)
         : this.database
             .prepare(
-              "SELECT deliveryId,text,position,firstId AS recordId FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
+              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
             )
             .all(after, limit)
-    return Schema.decodeUnknownSync(Schema.Array(Receipt))(rows)
+    return rows.map((row) => {
+      const fields = Schema.decodeUnknownSync(
+        Schema.Struct({ inputDeliveryId: Schema.NullOr(DeliveryId), responseId: Schema.NullOr(DeliveryId) })
+      )(row)
+      const { inputDeliveryId: _input, responseId: _response, ...rest } = row
+      return Schema.decodeUnknownSync(Receipt)({
+        ...rest,
+        ...(fields.inputDeliveryId === null ? {} : { inputDeliveryId: fields.inputDeliveryId }),
+        ...(fields.responseId === null ? {} : { responseId: fields.responseId })
+      })
+    })
   }
   async open(): Promise<void> {
     if (this.#opened || this.#closed) throw new Error("Storage already opened or closed")

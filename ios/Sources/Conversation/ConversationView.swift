@@ -7,14 +7,46 @@
     public init(model: ConversationViewModel) { self.model = model }
     public var body: some View {
       VStack {
-        List {
-          ForEach(model.messages) { message in
-            Text(message.text).accessibilityIdentifier("message-\(message.position)")
+        Text("Demo provider · scripted replies").font(.caption).foregroundStyle(.secondary)
+          .accessibilityIdentifier("demo-provider")
+        ScrollViewReader { proxy in
+          List {
+            ForEach(model.messages) { message in
+              VStack(alignment: .leading) {
+                Text(message.role == .user ? "You" : "Assistant").font(.caption).foregroundStyle(
+                  .secondary)
+                Text(message.text).accessibilityIdentifier(
+                  message.role == .assistant
+                    ? "assistant-message-\(message.position)" : "message-\(message.position)")
+              }
+            }
+            if model.replyIsWaiting || !model.replyText.isEmpty {
+              VStack(alignment: .leading) {
+                Text("Assistant").font(.caption).foregroundStyle(.secondary)
+                if model.replyIsWaiting {
+                  Text("Preparing conversation context…").accessibilityIdentifier("reply-waiting")
+                }
+                if !model.replyText.isEmpty {
+                  Text(model.replyText).accessibilityIdentifier("reply-progress")
+                }
+              }.id("reply-projection")
+            }
+            if model.nextAfter != nil {
+              Button("Load more") { Task { await model.loadHistory() } }
+                .disabled(model.isLoading)
+            }
           }
-          if model.nextAfter != nil {
-            Button("Load more") { Task { await model.loadHistory() } }
-              .disabled(model.isLoading)
-          }
+          .onChange(of: model.messages.count) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.replyText) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.replyIsWaiting) { _, _ in scrollToLatest(proxy) }
+        }
+        if let failure = model.replyProviderFailure {
+          Text("Message saved. Reply unavailable (\(failure.code.rawValue)).")
+            .foregroundStyle(.red).accessibilityIdentifier("reply-provider-status")
+        }
+        if model.replyObservationFailure != nil {
+          Text("Connection lost. Refresh to recover the reply.")
+            .foregroundStyle(.red).accessibilityIdentifier("reply-observation-status")
         }
         if let failure = model.deliveryFailure {
           Text(description(failure)).foregroundStyle(.red)
@@ -61,6 +93,13 @@
       .onChange(of: scenePhase) { _, phase in
         if phase == .active { Task { await model.refreshHistory() } }
         if phase == .background { Task { await model.flushDraft() } }
+      }
+    }
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+      if model.replyIsWaiting || !model.replyText.isEmpty {
+        proxy.scrollTo("reply-projection", anchor: .bottom)
+      } else if let last = model.messages.last {
+        proxy.scrollTo(last.deliveryId, anchor: .bottom)
       }
     }
     private func description(_ failure: ConversationFailure) -> String {

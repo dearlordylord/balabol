@@ -51,6 +51,7 @@ for (const stage of stages) {
             const conversation = yield* Conversation
             expect((yield* Effect.flip(conversation.send(first)))._tag).toBe("StorageUnavailable")
             expect((yield* conversation.send(first)).recordId).toBe(0)
+            yield* conversation.cancelReply(first.deliveryId)
             expect((yield* Effect.flip(conversation.send({ ...first, text: "conflict" })))._tag).toBe(
               "DeliveryConflict"
             )

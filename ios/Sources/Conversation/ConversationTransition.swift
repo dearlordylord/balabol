@@ -12,6 +12,8 @@ enum ConversationEvent {
   case draftSaved(ConversationState.Request, Result<Void, ConversationFailure>)
   case delivered(ConversationState.Request, Result<ConversationMessage, ConversationFailure>)
   case historyLoaded(ConversationState.Request, Result<HistoryPage, ConversationFailure>)
+  case replyReceived(ConversationState.Request, ReplySnapshot)
+  case replyEnded(ConversationState.Request, ConversationFailure?)
   case shutdown
   case drained
 }
@@ -21,6 +23,8 @@ enum ConversationCommand {
   case saveDraft(ConversationState.Request, SavedDraft)
   case send(ConversationState.Request, PendingDelivery)
   case history(ConversationState.Request, Int?)
+  case observeReply(ConversationState.Request, UUID)
+  case cancelReply
   case cancelSend
   case cancelHistory
 }
@@ -65,7 +69,15 @@ extension ConversationState {
       }
       let request = request()
       history = .loading(request, after: historyCursor)
-      return [.history(request, historyCursor)]
+      var commands: [ConversationCommand] = [.history(request, historyCursor)]
+      if refresh, case .observationFailed(let input, _, _) = reply {
+        let observation = self.request()
+        // The first full snapshot of a fresh observer is authoritative for
+        // this accepted input, including reconstructed sequence zero after restart.
+        reply = .observing(observation, inputDeliveryId: input, latest: nil)
+        commands.append(.observeReply(observation, input))
+      }
+      return commands
     case .draftLoaded(let request, let result):
       guard isActive, case .loading(let expected, _) = draft, expected == request else { return [] }
       switch result {
@@ -87,7 +99,7 @@ extension ConversationState {
       else { return [] }
       switch result {
       case .success(let receipt):
-        guard receipt.isValid, receipt.deliveryId == pending.deliveryId,
+        guard receipt.isValid, receipt.role == .user, receipt.deliveryId == pending.deliveryId,
           receipt.text == pending.text,
           merge([receipt])
         else {
@@ -95,7 +107,11 @@ extension ConversationState {
           return []
         }
         delivery = .idle(nil)
-        return checkpoint(.editable(text: ""), purpose: .confirmation)
+        let observation = self.request()
+        reply = .observing(observation, inputDeliveryId: pending.deliveryId, latest: nil)
+        return checkpoint(.editable(text: ""), purpose: .confirmation) + [
+          .observeReply(observation, pending.deliveryId)
+        ]
       case .failure(let error):
         if case .rejected(let code, _) = error, ["InvalidInput", "DeliveryConflict"].contains(code)
         {
@@ -110,6 +126,14 @@ extension ConversationState {
         return []
       }
       return finishHistory(result, after: after)
+    case .replyReceived(let request, let snapshot):
+      return receiveReply(request, snapshot)
+    case .replyEnded(let request, let error):
+      guard isActive, case .observing(let expected, let input, let latest) = reply,
+        expected == request
+      else { return [] }
+      reply = .observationFailed(inputDeliveryId: input, latest: latest, error ?? .unavailable)
+      return []
     case .shutdown:
       guard isActive else { return [] }
       // A changed generation invalidates network results. Draft completions
@@ -118,13 +142,16 @@ extension ConversationState {
         connection = .stopping(generation: generation + 1)
       }
       history = .idle
+      if case .observing(_, let input, let latest) = reply {
+        reply = .observationFailed(inputDeliveryId: input, latest: latest, .unavailable)
+      }
       if let pending = draft.content?.pending {
         delivery = .uncertain(pending, .unavailable)
       } else {
         delivery = .idle(nil)
       }
       if case .loading = draft { draft = .unloaded }
-      return [.cancelSend, .cancelHistory]
+      return [.cancelSend, .cancelHistory, .cancelReply]
     case .drained:
       guard case .stopping = connection else { return [] }
       connection = .stopped
@@ -227,12 +254,63 @@ extension ConversationState {
       historyCursor = page.messages.last?.position ?? after
       hasLoadedHistory = true
       hasMoreHistory = page.nextAfter != nil
-      if accepted != nil {
-        delivery = .idle(nil)
-        return [.cancelSend] + checkpoint(.editable(text: ""), purpose: .confirmation)
+      var replyCommands: [ConversationCommand] = []
+      if case .observing(_, let input, let latest) = reply,
+        let completed = page.messages.first(where: {
+          $0.role == .assistant && $0.inputDeliveryId == input
+        }),
+        latest == nil || completed.responseId == latest?.responseId
+      {
+        reply = .completed(completed)
+        replyCommands = [.cancelReply]
       }
-      return []
+      if let accepted {
+        delivery = .idle(nil)
+        return replyCommands + [.cancelSend]
+          + checkpoint(.editable(text: ""), purpose: .confirmation)
+          + followAcceptedInput(accepted.deliveryId)
+      }
+      return replyCommands
     }
+  }
+
+  private mutating func receiveReply(_ request: Request, _ snapshot: ReplySnapshot)
+    -> [ConversationCommand]
+  {
+    guard isActive, case .observing(let expected, let input, let latest) = reply,
+      expected == request
+    else { return [] }
+    guard snapshot.isValid, snapshot.inputDeliveryId == input,
+      latest == nil || latest?.responseId == snapshot.responseId
+    else { return failObservation(input, latest) }
+    if let latest {
+      if snapshot.sequence < latest.sequence { return [] }
+      if snapshot.sequence == latest.sequence {
+        return snapshot == latest ? [] : failObservation(input, latest)
+      }
+      guard snapshot.text.hasPrefix(latest.text) else { return failObservation(input, latest) }
+    }
+    switch snapshot.state {
+    case .waiting, .streaming: reply = .observing(request, inputDeliveryId: input, latest: snapshot)
+    case .failed:
+      guard let error = snapshot.error else { return failObservation(input, latest) }
+      reply = .providerFailed(inputDeliveryId: input, text: snapshot.text, error)
+      return [.cancelReply]
+    case .completed:
+      guard let receipt = snapshot.receipt, merge([receipt]) else {
+        return failObservation(input, latest)
+      }
+      reply = .completed(receipt)
+      return [.cancelReply]
+    }
+    return []
+  }
+
+  private mutating func failObservation(_ input: UUID, _ latest: ReplySnapshot?)
+    -> [ConversationCommand]
+  {
+    reply = .observationFailed(inputDeliveryId: input, latest: latest, .invalidResponse)
+    return [.cancelReply]
   }
 
   /// History may arrive before local loading or while a checkpoint is blocked.
@@ -247,6 +325,23 @@ extension ConversationState {
     }
     delivery = .idle(nil)
     return [.cancelSend] + checkpoint(.editable(text: ""), purpose: .confirmation)
+      + followAcceptedInput(pending.deliveryId)
+  }
+
+  /// POST and recovered history acknowledgements share the same observer handoff.
+  /// Already durable assistant evidence needs no subscription or regeneration.
+  private mutating func followAcceptedInput(_ input: UUID) -> [ConversationCommand] {
+    guard isActive else { return [] }
+    if let completed = messages.first(where: {
+      $0.role == .assistant && $0.inputDeliveryId == input
+    }) {
+      reply = .completed(completed)
+      return [.cancelReply]
+    }
+    if case .observing(_, let current, _) = reply, current == input { return [] }
+    let observation = request()
+    reply = .observing(observation, inputDeliveryId: input, latest: nil)
+    return [.cancelReply, .observeReply(observation, input)]
   }
 
   private mutating func merge(_ incoming: [ConversationMessage]) -> Bool {
