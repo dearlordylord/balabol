@@ -9,7 +9,7 @@
 
 ## Authority
 
-`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. There is no product source yet.
+`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory and Bootstrap now implement the durable text slice; the other roots remain planned.
 
 Each entrypoint hides sequencing, state coordination and implementation files. Cross-owner callers may import only the declared entrypoint; local implementation imports remain local. A dependency permission is an upper bound, not an instruction to create an interface or import it prematurely. Keep types with the concept they describe.
 
@@ -30,9 +30,9 @@ There is no separate framework memory or competing conversation state. unii stay
 
 A delivery ticket follows a capability across its backend owner, validated wire contract, Swift projection and behavioral verification. Technical subfolders may exist inside a capability; global `models`, `services`, `types` and `utils` owners do not.
 
-The Swift client has local conversation and voice-session capability slices plus a small application composition root. SwiftUI Views and MainActor ViewModels live inside those slices. They translate intents and project observable backend state; they do not become a second authority for acceptance, durability, compaction or response identity. Client transport adapters belong to the capability they serve. No Swift interfaces or folders are prebuilt in this preparatory ticket.
+The Swift client has local conversation and voice-session capability slices plus a small application composition root. SwiftUI Views and MainActor ViewModels live inside those slices. They translate intents and project observable backend state; they do not become a second authority for acceptance, durability, compaction or response identity. Client transport adapters belong to the capability they serve. The text client implements that slice; voice remains deferred.
 
-The conversation application boundary is the approved primary behavioral seam, composed later with real unii, real durable storage and deterministic fake Layers. Contract tests use public adapter interfaces. Client ViewModel tests cover projections and intents; physical audio evidence remains a separate platform qualification.
+The conversation application boundary is the approved primary behavioral seam, composed with real unii, real durable storage and deterministic fake Layers. Contract tests use public adapter interfaces. Client ViewModel tests cover projections and intents; physical audio evidence remains a separate platform qualification.
 
 ## Enforcement and review
 
@@ -41,3 +41,9 @@ The architecture CLI parses TypeScript syntax rather than matching text. It reso
 This checks declared static source dependencies, not arbitrary runtime reflection, generated bundles or Swift source. Those require their own artifact/platform checks when introduced. Swift strict concurrency, ownership review and behavioral/UI checks remain mandatory in client tickets; no absent client is reported as validated.
 
 Substantial owner/interface or composition changes require architectural agent review in addition to green checks. Planned roots must be updated deliberately when concrete implementation justifies a different boundary; do not create forwarding modules merely to match this map.
+
+## Durable text slice
+
+Conversation owns validated send/page wire contracts, conflict admission and serialized delivery. Memory owns schema-parsed durable delivery evidence and receipts, raw batches, SQLite transactions, checkpoints and the unii lifecycle. The public `DurableMemory` port supports real storage composition and fault decorators through Layers; its prepare/raw-append protocol is internal to the memory host's serialized admission. Bootstrap composes the concrete SQLite memory and HTTP server Layers. The backend defaults to loopback; explicit private-network binding is startup configuration.
+
+Acceptance commits the complete raw batch and delivery association atomically. Post-raw tree persistence failure leaves the durable receipt available for retry while new appends fail until reopen. Acknowledgement is durable input acceptance, independent of summary readiness. Bounded history queries do not imply bounded unii startup hydration. Tests exercise the real conversation seam and temporary SQLite database, socket transport, injected persistence failure and actual process termination.

@@ -17,6 +17,7 @@ The existing wayfinder map remains local Markdown under .scratch/voice-prototype
 - Publish: gh issue create --repo dearlordylord/balabol --title TITLE --body-file FILE --label ready-for-agent.
 - Comment: gh issue comment NUMBER --repo dearlordylord/balabol --body-file FILE.
 - Close only after the issue's acceptance requirements are actually met.
+- Keep per-ticket implementation evidence and review reports in GitHub issue comments, not repository Markdown reports. Present the owner with a concise summary of delivered behavior, decisions, assumptions and acceptance steps. Implement one ticket at a time; obtain owner acceptance before closing it or starting the next.
 
 ## Wayfinding operations
 

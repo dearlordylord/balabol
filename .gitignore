@@ -39,9 +39,15 @@ xcuserdata
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite-journal
+*.sqlite.writer
+*.sqlite.writer-journal
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.db.writer
+*.db.writer-journal
 *.log
 
 # Downloaded speech models and local audio

@@ -26,7 +26,8 @@
     "circular": "node scripts/quality/cli.mjs architecture && node scripts/quality/cli.mjs cycles",
     "complexity": "node scripts/quality/cli.mjs complexity",
     "check-all": "pnpm secrets:files && pnpm test:harness && node scripts/quality/cli.mjs all && pnpm check-format",
-    "verify:effect-cohort": "node scripts/quality/cli.mjs cohort"
+    "verify:effect-cohort": "node scripts/quality/cli.mjs cohort",
+    "start": "node dist/bootstrap/main.js"
   },
   "lint-staged": {
     "*.{md,json,yaml,yml}": "prettier --write",
@@ -64,5 +65,8 @@
       "esbuild",
       "dprint"
     ]
+  },
+  "dependencies": {
+    "@firfi/unii": "0.1.0"
   }
 }
