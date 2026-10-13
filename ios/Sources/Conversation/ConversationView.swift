@@ -15,7 +15,14 @@
               VStack(alignment: .leading) {
                 Text(message.role == .user ? "You" : "Assistant").font(.caption).foregroundStyle(
                   .secondary)
-                Text(message.text).accessibilityIdentifier(
+                if message.outcome == .interrupted {
+                  Text("Interrupted").font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("interrupted-message-\(message.position)")
+                }
+                Text(
+                  message.text.isEmpty && message.outcome == .interrupted
+                    ? "Interrupted before a reply appeared" : message.text
+                ).accessibilityIdentifier(
                   message.role == .assistant
                     ? "assistant-message-\(message.position)" : "message-\(message.position)")
               }
@@ -51,6 +58,14 @@
         if let failure = model.deliveryFailure {
           Text(description(failure)).foregroundStyle(.red)
             .accessibilityIdentifier("delivery-status")
+        }
+        if model.state.isWaitingForInterruptionRecovery {
+          Text("Restoring interrupted replies before sending…")
+            .accessibilityIdentifier("interrupted-receipt-waiting")
+        }
+        if model.state.interruptedReceiptFailure != nil {
+          Text("Interrupted reply could not be restored. Refresh conversation to recover it.")
+            .foregroundStyle(.red).accessibilityIdentifier("interrupted-receipt-status")
         }
         if model.historyFailure != nil {
           Text("History could not refresh. Retry without changing your draft.")

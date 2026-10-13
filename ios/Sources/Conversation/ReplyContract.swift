@@ -25,6 +25,7 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     case waiting = "Waiting"
     case streaming = "Streaming"
     case completed = "Completed"
+    case interrupted = "Interrupted"
     case failed = "Failed"
   }
   public let responseId: UUID
@@ -34,7 +35,7 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
   public let text: String
   public let error: ReplyFailure?
   public let receipt: ConversationMessage?
-  public var isTerminal: Bool { state == .completed || state == .failed }
+  public var isTerminal: Bool { state == .completed || state == .interrupted || state == .failed }
   public var isValid: Bool {
     guard sequence >= 0, responseId != inputDeliveryId, text.utf16.count <= 100_000 else {
       return false
@@ -43,12 +44,12 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     case .waiting: return text.isEmpty && error == nil && receipt == nil
     case .streaming: return !text.isEmpty && error == nil && receipt == nil
     case .failed: return error.map { !$0.code.rawValue.isEmpty } == true && receipt == nil
-    case .completed:
+    case .completed, .interrupted:
       return error == nil
         && receipt.map {
           $0.isValid && $0.role == .assistant && $0.deliveryId == responseId
             && $0.responseId == responseId && $0.inputDeliveryId == inputDeliveryId
-            && $0.text == text
+            && $0.text == text && $0.outcome == (state == .interrupted ? .interrupted : .completed)
         } == true
     }
   }
@@ -66,6 +67,16 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
   }
   private enum CodingKeys: String, CodingKey {
     case responseId, inputDeliveryId, sequence, state, text, error, receipt
+  }
+  public func encode(to encoder: any Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(responseId, forKey: .responseId)
+    try c.encode(inputDeliveryId, forKey: .inputDeliveryId)
+    try c.encode(sequence, forKey: .sequence)
+    try c.encode(state, forKey: .state)
+    try c.encode(text, forKey: .text)
+    try c.encode(error, forKey: .error)
+    try c.encode(receipt, forKey: .receipt)
   }
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -94,6 +105,9 @@ public struct ReplyObservation: Sendable {
 }
 
 extension ConversationTransport {
+  public func replySnapshot(for inputDeliveryId: UUID) async throws -> ReplySnapshot {
+    throw ConversationFailure.unavailable
+  }
   public func observeReply(for inputDeliveryId: UUID) async throws -> ReplyObservation {
     throw ConversationFailure.unavailable
   }

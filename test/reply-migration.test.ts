@@ -46,3 +46,35 @@ it("upgrades the previous durable schema without losing user identities or posit
     await fixture.close()
   }
 })
+it("migrates legacy assistant deliveries to completed without changing their identity or text", async () => {
+  const fixture = await temporaryDatabase()
+  const inputId = "11111111-1111-4111-8111-111111111111"
+  const responseId = "33333333-3333-4333-8333-333333333333"
+  try {
+    const old = new DatabaseSync(fixture.path)
+    old.exec(
+      "CREATE TABLE deliveries(deliveryId TEXT PRIMARY KEY,text TEXT NOT NULL,position INTEGER UNIQUE,firstId INTEGER,endExclusive INTEGER,role TEXT NOT NULL DEFAULT 'user',inputDeliveryId TEXT,responseId TEXT)"
+    )
+    old
+      .prepare(
+        "INSERT INTO deliveries(deliveryId,text,position,firstId,endExclusive,role,inputDeliveryId,responseId) VALUES(?,?,?,?,?,?,?,?)"
+      )
+      .run(responseId, "Legacy completed answer", 0, 0, 1, "assistant", inputId, responseId)
+    old.close()
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          const reply = yield* conversation.reply(inputId)
+          expect(reply.state).toBe("Completed")
+          expect(reply.text).toBe("Legacy completed answer")
+          expect(reply.receipt?.outcome).toBe("completed")
+          expect(reply.responseId).toBe(responseId)
+          expect((yield* conversation.page({ limit: 100 })).messages[0]?.outcome).toBe("completed")
+        })
+      ).pipe(Effect.provide(conversationLayer(fixture.path)))
+    )
+  } finally {
+    await fixture.close()
+  }
+})

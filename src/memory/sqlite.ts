@@ -3,7 +3,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Checkpoint, MemoryRecord, Storage, StoredMemory, Summary } from "@firfi/unii"
 import { Schema } from "effect"
-import { DeliveryPayload, DeliveryId, MessageText, Position, Receipt, validMessageIdentity } from "./contracts.ts"
+import { DeliveryPayload, DeliveryId, Position, Receipt, validMessageIdentity } from "./contracts.ts"
 
 const Address = Schema.Struct({ level: Schema.Int, index: Schema.Int })
 const Record = Schema.Struct({ id: Schema.Int, kind: Schema.String, text: Schema.String, date: Schema.String })
@@ -21,10 +21,11 @@ const decodePayload = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, r
   Schema.decodeUnknownSync(schema)(JSON.parse(Schema.decodeUnknownSync(Payload)(row).payload))
 const ledgerPayload = {
   deliveryId: DeliveryId,
-  text: MessageText,
+  text: Schema.String,
   role: Schema.Literals(["user", "assistant"]),
   inputDeliveryId: Schema.NullOr(DeliveryId),
-  responseId: Schema.NullOr(DeliveryId)
+  responseId: Schema.NullOr(DeliveryId),
+  outcome: Schema.NullOr(Schema.Literals(["completed", "interrupted"]))
 }
 const Ledger = Schema.Union([
   Schema.Struct({ ...ledgerPayload, firstId: Schema.Null, position: Schema.Null }),
@@ -65,6 +66,12 @@ export class SqliteStorage implements Storage {
               "ALTER TABLE deliveries ADD COLUMN role TEXT NOT NULL DEFAULT 'user'; ALTER TABLE deliveries ADD COLUMN inputDeliveryId TEXT; ALTER TABLE deliveries ADD COLUMN responseId TEXT"
             )
           )
+        if (!names.includes("outcome"))
+          this.transaction(() =>
+            this.database.exec(
+              "ALTER TABLE deliveries ADD COLUMN outcome TEXT; UPDATE deliveries SET outcome='completed' WHERE role='assistant'"
+            )
+          )
         this.database.exec(
           "CREATE UNIQUE INDEX IF NOT EXISTS replies_by_input ON deliveries(inputDeliveryId) WHERE role='assistant'"
         )
@@ -91,7 +98,7 @@ export class SqliteStorage implements Storage {
   find(deliveryId: DeliveryPayload["deliveryId"]): Ledger | undefined {
     const row = this.database
       .prepare(
-        "SELECT deliveryId,text,position,firstId,role,inputDeliveryId,responseId FROM deliveries WHERE deliveryId=?"
+        "SELECT deliveryId,text,position,firstId,role,inputDeliveryId,responseId,outcome FROM deliveries WHERE deliveryId=?"
       )
       .get(deliveryId)
     return row === undefined ? undefined : Schema.decodeUnknownSync(Ledger)(row)
@@ -106,16 +113,34 @@ export class SqliteStorage implements Storage {
     if (ledger === undefined || ledger.firstId === null) throw new Error("Invalid assistant ledger")
     return Schema.decodeUnknownSync(Receipt)({ ...ledger, recordId: ledger.firstId })
   }
+  pendingInterrupt(): DeliveryPayload | undefined {
+    const row = this.database
+      .prepare("SELECT deliveryId FROM deliveries WHERE outcome='interrupted' AND firstId IS NULL LIMIT 1")
+      .get()
+    if (row === undefined) return undefined
+    const identity = Schema.decodeUnknownSync(Schema.Struct({ deliveryId: DeliveryId }))(row)
+    const ledger = this.find(identity.deliveryId)
+    return ledger === undefined
+      ? undefined
+      : Schema.decodeUnknownSync(DeliveryPayload)({
+          ...ledger,
+          inputDeliveryId: ledger.inputDeliveryId ?? undefined,
+          responseId: ledger.responseId ?? undefined
+        })
+  }
   prepare(input: DeliveryPayload): void {
     const parsed = Schema.decodeUnknownSync(DeliveryPayload)(input)
     this.database
-      .prepare("INSERT OR IGNORE INTO deliveries(deliveryId,text,role,inputDeliveryId,responseId) VALUES(?,?,?,?,?)")
+      .prepare(
+        "INSERT OR IGNORE INTO deliveries(deliveryId,text,role,inputDeliveryId,responseId,outcome) VALUES(?,?,?,?,?,?)"
+      )
       .run(
         parsed.deliveryId,
         parsed.text,
         parsed.role ?? "user",
         parsed.inputDeliveryId ?? null,
-        parsed.responseId ?? null
+        parsed.responseId ?? null,
+        parsed.role === "assistant" ? (parsed.outcome ?? "completed") : null
       )
     this.#pending = parsed
   }
@@ -124,23 +149,24 @@ export class SqliteStorage implements Storage {
       after === undefined
         ? this.database
             .prepare(
-              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId FROM deliveries WHERE firstId IS NOT NULL ORDER BY position LIMIT ?"
+              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome FROM deliveries WHERE firstId IS NOT NULL ORDER BY position LIMIT ?"
             )
             .all(limit)
         : this.database
             .prepare(
-              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
+              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
             )
             .all(after, limit)
     return rows.map((row) => {
       const fields = Schema.decodeUnknownSync(
         Schema.Struct({ inputDeliveryId: Schema.NullOr(DeliveryId), responseId: Schema.NullOr(DeliveryId) })
       )(row)
-      const { inputDeliveryId: _input, responseId: _response, ...rest } = row
+      const { inputDeliveryId: _input, outcome: _outcome, responseId: _response, ...rest } = row
       return Schema.decodeUnknownSync(Receipt)({
         ...rest,
         ...(fields.inputDeliveryId === null ? {} : { inputDeliveryId: fields.inputDeliveryId }),
-        ...(fields.responseId === null ? {} : { responseId: fields.responseId })
+        ...(fields.responseId === null ? {} : { responseId: fields.responseId }),
+        ...(row.outcome === null ? {} : { outcome: row.outcome })
       })
     })
   }

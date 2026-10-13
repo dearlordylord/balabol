@@ -69,7 +69,12 @@ export const Reply = Schema.Union([
     error: Schema.Null,
     receipt: Schema.Null
   }),
-  Schema.Struct({ ...responseFields, state: Schema.Literal("Completed"), error: Schema.Null, receipt: Message }),
+  Schema.Struct({
+    ...responseFields,
+    state: Schema.Literals(["Completed", "Interrupted"]),
+    error: Schema.Null,
+    receipt: Message
+  }),
   Schema.Struct({ ...responseFields, state: Schema.Literal("Failed"), error: ReplyError, receipt: Schema.Null })
 ]).check(
   Schema.makeFilter((value) => {
@@ -77,7 +82,13 @@ export const Reply = Schema.Union([
     if (value.state === "Waiting") return value.text.length === 0
     if (value.state === "Streaming") return value.text.length > 0
     if (value.state === "Failed") return true
-    return validCompletion(value)
+    return (
+      value.receipt !== null &&
+      validCompletion(value) &&
+      (value.state === "Interrupted"
+        ? value.receipt.outcome === "interrupted"
+        : value.receipt.outcome !== "interrupted")
+    )
   })
 )
 export type Reply = typeof Reply.Type

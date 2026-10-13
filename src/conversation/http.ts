@@ -86,7 +86,9 @@ const events = Effect.gen(function* () {
           sequence = snapshot.sequence
         })
       ),
-      Stream.takeUntil((snapshot) => snapshot.state === "Completed" || snapshot.state === "Failed"),
+      Stream.takeUntil(
+        (snapshot) => snapshot.state === "Completed" || snapshot.state === "Interrupted" || snapshot.state === "Failed"
+      ),
       Stream.mapEffect((snapshot) => Schema.encodeUnknownEffect(Reply)(snapshot)),
       Stream.map((snapshot) => new TextEncoder().encode(`data: ${JSON.stringify(snapshot)}\n\n`)),
       Stream.ensuring(conversation.releaseReply(id, token))

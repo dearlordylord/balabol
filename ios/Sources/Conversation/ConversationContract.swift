@@ -11,6 +11,8 @@ public struct PendingDelivery: Codable, Equatable, Sendable {
 
 public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   public enum Role: String, Codable, Sendable { case user, assistant }
+  public enum Outcome: String, Codable, Sendable { case completed, interrupted }
+  public let outcome: Outcome?
   public let role: Role
   public let responseId: UUID?
   public let inputDeliveryId: UUID?
@@ -20,20 +22,25 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   public let text: String
   public var id: UUID { deliveryId }
   public var isValid: Bool {
-    guard recordId >= 0 && position >= 0 && !text.isEmpty && text.utf16.count <= 100_000 else {
+    guard
+      recordId >= 0 && position >= 0 && (!text.isEmpty || outcome == .interrupted)
+        && text.utf16.count <= 100_000
+    else {
       return false
     }
     switch role {
-    case .user: return responseId == nil && inputDeliveryId == nil
+    case .user: return responseId == nil && inputDeliveryId == nil && outcome == nil
     case .assistant:
-      return responseId == deliveryId && inputDeliveryId != nil && inputDeliveryId != deliveryId
+      return outcome != nil && responseId == deliveryId && inputDeliveryId != nil
+        && inputDeliveryId != deliveryId
     }
   }
   public init(
     deliveryId: UUID, recordId: Int, position: Int, text: String, role: Role = .user,
-    responseId: UUID? = nil, inputDeliveryId: UUID? = nil
+    responseId: UUID? = nil, inputDeliveryId: UUID? = nil, outcome: Outcome? = nil
   ) {
     self.role = role
+    self.outcome = role == .assistant ? outcome ?? .completed : outcome
     self.responseId = responseId
     self.inputDeliveryId = inputDeliveryId
     self.deliveryId = deliveryId
@@ -42,11 +49,15 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
     self.text = text
   }
   private enum CodingKeys: String, CodingKey {
-    case deliveryId, recordId, position, text, role, responseId, inputDeliveryId
+    case deliveryId, recordId, position, text, role, responseId, inputDeliveryId, outcome
   }
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     role = try container.decodeIfPresent(Role.self, forKey: .role) ?? .user
+    outcome =
+      container.contains(.outcome)
+      ? try container.decode(Outcome.self, forKey: .outcome)
+      : (role == .assistant ? .completed : nil)
     responseId = try container.decodeIfPresent(UUID.self, forKey: .responseId)
     inputDeliveryId = try container.decodeIfPresent(UUID.self, forKey: .inputDeliveryId)
     deliveryId = try container.decode(UUID.self, forKey: .deliveryId)
@@ -89,6 +100,7 @@ public enum ConversationFailure: Error, Equatable, Sendable {
 public protocol ConversationTransport: Sendable {
   func send(_ delivery: PendingDelivery) async throws -> ConversationMessage
   func history(after: Int?) async throws -> HistoryPage
+  func replySnapshot(for inputDeliveryId: UUID) async throws -> ReplySnapshot
   func observeReply(for inputDeliveryId: UUID) async throws -> ReplyObservation
 }
 

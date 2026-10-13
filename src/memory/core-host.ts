@@ -2,7 +2,7 @@ import { Memory as UniiMemory } from "@firfi/unii"
 import type { Backend, Storage } from "@firfi/unii"
 import { Schema } from "effect"
 import type { DurableMemory } from "./adapter.ts"
-import { PriorSnapshot, Receipt } from "./contracts.ts"
+import { PriorSnapshot, Receipt, samePayload } from "./contracts.ts"
 import type { DeliveryPayload } from "./contracts.ts"
 
 type CoreState =
@@ -78,11 +78,19 @@ export class CoreHost {
     this.#state = { kind: "Ready", core }
     return core
   }
+  #accepted(message: DeliveryPayload): Receipt | undefined {
+    const evidence = this.#adapter.find(message.deliveryId)
+    if (evidence?.state !== "Accepted") return undefined
+    if (!samePayload(evidence.receipt, message)) throw new Error("Conflicting delivery payload")
+    return evidence.receipt
+  }
   async append(message: DeliveryPayload): Promise<Receipt> {
+    const accepted = this.#accepted(message)
+    if (accepted !== undefined) return accepted
     const core = await this.#ready()
     try {
       this.#adapter.prepare(message)
-      const receipt = await core.append({ kind: message.role ?? "user", text: message.text })
+      const receipt = await core.append(rawInput(message))
       const evidence = this.#adapter.find(message.deliveryId)
       if (evidence?.state !== "Accepted" || evidence.receipt.recordId !== receipt.firstId)
         throw new Error("Missing durable receipt")
@@ -118,3 +126,8 @@ export class CoreHost {
     await state.core?.close()
   }
 }
+
+const rawInput = (message: DeliveryPayload) => ({
+  kind: message.outcome === "interrupted" ? "assistant_interrupted" : (message.role ?? "user"),
+  text: message.text
+})

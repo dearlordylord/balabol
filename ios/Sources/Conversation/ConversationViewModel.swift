@@ -11,6 +11,8 @@ public final class ConversationViewModel {
   @ObservationIgnored private let draftStore: any DraftStore
   @ObservationIgnored private var draftTask: Task<Void, Never>?
   @ObservationIgnored private var deliveryTask: Task<Void, Never>?
+  @ObservationIgnored private var interruptionReceiptTasks:
+    [ConversationState.Request: Task<Void, Never>] = [:]
   @ObservationIgnored private var replyTask: Task<Void, Never>?
   @ObservationIgnored private var replyRequest: ConversationState.Request?
   @ObservationIgnored private var historyTask: Task<Void, Never>?
@@ -165,6 +167,21 @@ public final class ConversationViewModel {
         self.replyRequest = nil
         self.receive(.replyEnded(request, failure))
       }
+    case .recoverInterruptedReply(let request, let input):
+      let transport = transport
+      interruptionReceiptTasks[request] = Task { [weak self] in
+        let result: Result<ReplySnapshot, ConversationFailure>
+        do { result = .success(try await transport.replySnapshot(for: input)) } catch let error
+          as ConversationFailure
+        { result = .failure(error) } catch { result = .failure(.unavailable) }
+        guard let self, self.interruptionReceiptTasks.removeValue(forKey: request) != nil else {
+          return
+        }
+        self.receive(.interruptedReplyRecovered(request, result))
+      }
+    case .cancelInterruptionRecoveries:
+      for task in interruptionReceiptTasks.values { task.cancel() }
+      interruptionReceiptTasks.removeAll()
     case .cancelReply:
       replyTask?.cancel()
       replyTask = nil

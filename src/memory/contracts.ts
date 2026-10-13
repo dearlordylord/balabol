@@ -9,30 +9,40 @@ export const validMessageIdentity = (value: {
   role?: "user" | "assistant"
   inputDeliveryId?: string | null
   responseId?: string | null
+  outcome?: "completed" | "interrupted" | null
+  text?: string
 }) => {
-  if (value.role !== "assistant") return value.inputDeliveryId == null && value.responseId == null
+  if (value.text === "" && value.outcome !== "interrupted") return false
+  if (value.role !== "assistant") return userIdentity(value)
   return (
     typeof value.inputDeliveryId === "string" &&
     value.responseId === value.deliveryId &&
     value.inputDeliveryId !== value.deliveryId
   )
 }
+const userIdentity = (value: {
+  inputDeliveryId?: string | null
+  responseId?: string | null
+  outcome?: "completed" | "interrupted" | null
+}) => value.inputDeliveryId == null && value.responseId == null && value.outcome == null
 export const DeliveryPayload = Schema.Struct({
   deliveryId: DeliveryId,
-  text: MessageText,
+  text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
-  responseId: Schema.optionalKey(DeliveryId)
+  responseId: Schema.optionalKey(DeliveryId),
+  outcome: Schema.optionalKey(Schema.Literals(["completed", "interrupted"]))
 }).check(Schema.makeFilter(validMessageIdentity))
 export type DeliveryPayload = typeof DeliveryPayload.Type
 export const Receipt = Schema.Struct({
   deliveryId: DeliveryId,
   recordId: Position,
   position: Position,
-  text: MessageText,
+  text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
-  responseId: Schema.optionalKey(DeliveryId)
+  responseId: Schema.optionalKey(DeliveryId),
+  outcome: Schema.optionalKey(Schema.Literals(["completed", "interrupted"]))
 }).check(Schema.makeFilter(validMessageIdentity))
 export type Receipt = typeof Receipt.Type
 export class StorageUnavailable extends Schema.TaggedError<StorageUnavailable>()("StorageUnavailable", {
@@ -67,3 +77,8 @@ export const defaultMemorySettings: MemorySettings = {
   summaryModel: "luna",
   summaryConcurrency: 1
 }
+
+export const samePayload = (left: DeliveryPayload, right: DeliveryPayload): boolean =>
+  (["deliveryId", "text", "role", "inputDeliveryId", "responseId", "outcome"] as const).every(
+    (key) => left[key] === right[key]
+  )

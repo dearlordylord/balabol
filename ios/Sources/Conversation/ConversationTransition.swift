@@ -13,6 +13,8 @@ enum ConversationEvent {
   case delivered(ConversationState.Request, Result<ConversationMessage, ConversationFailure>)
   case historyLoaded(ConversationState.Request, Result<HistoryPage, ConversationFailure>)
   case replyReceived(ConversationState.Request, ReplySnapshot)
+  case interruptedReplyRecovered(
+    ConversationState.Request, Result<ReplySnapshot, ConversationFailure>)
   case replyEnded(ConversationState.Request, ConversationFailure?)
   case shutdown
   case drained
@@ -24,6 +26,8 @@ enum ConversationCommand {
   case send(ConversationState.Request, PendingDelivery)
   case history(ConversationState.Request, Int?)
   case observeReply(ConversationState.Request, UUID)
+  case recoverInterruptedReply(ConversationState.Request, UUID)
+  case cancelInterruptionRecoveries
   case cancelReply
   case cancelSend
   case cancelHistory
@@ -60,6 +64,10 @@ extension ConversationState {
         return []
       }
       let pending = content.pending ?? PendingDelivery(deliveryId: identity, text: content.text)
+      // Invalidate queued old snapshots immediately. Keep its transport attached
+      // until POST decides interruption, so disconnect cannot race acceptance.
+      if case .observing(_, let input, _) = reply { interruptedInput = input }
+      reply = .idle
       delivery = .waitingCheckpoint(pending)
       if content.pending != nil, persistence == .clean { return beginSend(pending) }
       return checkpoint(.awaitingReceipt(pending), purpose: .pending)
@@ -107,11 +115,8 @@ extension ConversationState {
           return []
         }
         delivery = .idle(nil)
-        let observation = self.request()
-        reply = .observing(observation, inputDeliveryId: pending.deliveryId, latest: nil)
-        return checkpoint(.editable(text: ""), purpose: .confirmation) + [
-          .observeReply(observation, pending.deliveryId)
-        ]
+        return checkpoint(.editable(text: ""), purpose: .confirmation)
+          + followAcceptedInput(pending.deliveryId)
       case .failure(let error):
         if case .rejected(let code, _) = error, ["InvalidInput", "DeliveryConflict"].contains(code)
         {
@@ -128,6 +133,27 @@ extension ConversationState {
       return finishHistory(result, after: after)
     case .replyReceived(let request, let snapshot):
       return receiveReply(request, snapshot)
+    case .interruptedReplyRecovered(let request, let result):
+      guard isActive, let input = interruptionRecoveries.removeValue(forKey: request) else {
+        return []
+      }
+      switch result {
+      case .success(let snapshot):
+        guard snapshot.isValid, snapshot.inputDeliveryId == input, snapshot.isTerminal else {
+          interruptedReceiptFailure = .invalidResponse
+          return []
+        }
+        // A provider failure can win the race before server interruption. It
+        // contains no durable assistant receipt and must not become one here.
+        if snapshot.state == .failed { return [] }
+        guard let receipt = snapshot.receipt, merge([receipt]) else {
+          interruptedReceiptFailure = .invalidResponse
+          return []
+        }
+        interruptedReceiptFailure = nil
+      case .failure(let error): interruptedReceiptFailure = error
+      }
+      return []
     case .replyEnded(let request, let error):
       guard isActive, case .observing(let expected, let input, let latest) = reply,
         expected == request
@@ -151,7 +177,8 @@ extension ConversationState {
         delivery = .idle(nil)
       }
       if case .loading = draft { draft = .unloaded }
-      return [.cancelSend, .cancelHistory, .cancelReply]
+      interruptionRecoveries.removeAll()
+      return [.cancelSend, .cancelHistory, .cancelReply, .cancelInterruptionRecoveries]
     case .drained:
       guard case .stopping = connection else { return [] }
       connection = .stopped
@@ -296,7 +323,7 @@ extension ConversationState {
       guard let error = snapshot.error else { return failObservation(input, latest) }
       reply = .providerFailed(inputDeliveryId: input, text: snapshot.text, error)
       return [.cancelReply]
-    case .completed:
+    case .completed, .interrupted:
       guard let receipt = snapshot.receipt, merge([receipt]) else {
         return failObservation(input, latest)
       }
@@ -332,16 +359,23 @@ extension ConversationState {
   /// Already durable assistant evidence needs no subscription or regeneration.
   private mutating func followAcceptedInput(_ input: UUID) -> [ConversationCommand] {
     guard isActive else { return [] }
+    var recoveryCommands: [ConversationCommand] = []
+    if let interruptedInput {
+      let recovery = request()
+      interruptionRecoveries[recovery] = interruptedInput
+      recoveryCommands = [.recoverInterruptedReply(recovery, interruptedInput)]
+      self.interruptedInput = nil
+    }
     if let completed = messages.first(where: {
       $0.role == .assistant && $0.inputDeliveryId == input
     }) {
       reply = .completed(completed)
-      return [.cancelReply]
+      return [.cancelReply] + recoveryCommands
     }
-    if case .observing(_, let current, _) = reply, current == input { return [] }
+    if case .observing(_, let current, _) = reply, current == input { return recoveryCommands }
     let observation = request()
     reply = .observing(observation, inputDeliveryId: input, latest: nil)
-    return [.cancelReply, .observeReply(observation, input)]
+    return [.cancelReply, .observeReply(observation, input)] + recoveryCommands
   }
 
   private mutating func merge(_ incoming: [ConversationMessage]) -> Bool {

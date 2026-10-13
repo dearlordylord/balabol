@@ -5,6 +5,31 @@ const IDENTIFIER_LIMIT = 200
 const SUMMARY_OUTPUT_LIMIT = 100000
 const PRIOR_RESPONSES_LIMIT = 100
 const FAKE_SOURCE_PREVIEW_LIMIT = 80
+const FAKE_NODE_BYTE_LIMIT = 512
+const FAKE_MODEL_BYTE_LIMIT = 200
+const INTERRUPTION_NOTE =
+  "[Interrupted assistant output: generated text may not have been heard; no user agreement implied]"
+
+function utf8Preview(text: string, byteLimit: number): string {
+  let preview = ""
+  let bytes = 0
+  for (const character of text) {
+    bytes += new TextEncoder().encode(character).byteLength
+    if (bytes > byteLimit) break
+    preview += character
+  }
+  return preview
+}
+
+function fakeSummary(request: SummaryRequest): string {
+  // shortcut: controlled fake markers can occur in quoted text; use provenance-aware real summaries when integrating inference.
+  const interrupted = request.source.includes("assistant_interrupted:") || request.source.includes(INTERRUPTION_NOTE)
+  const note = interrupted ? ` ${INTERRUPTION_NOTE}` : ""
+  const prefix = `[Fake ${utf8Preview(request.model, FAKE_MODEL_BYTE_LIMIT)} summary] `
+  const available = FAKE_NODE_BYTE_LIMIT - new TextEncoder().encode(prefix + note).byteLength
+  const sourcePreview = Array.from(request.source).slice(0, FAKE_SOURCE_PREVIEW_LIMIT).join("")
+  return prefix + utf8Preview(sourcePreview, available) + note
+}
 
 // Grounding: @firfi/unii 0.1.0 CompressionRequest (src/types.ts), and
 // its memory.ts #run: attempts start at 1; source/context can be empty.
@@ -39,9 +64,9 @@ export const fakeSummaryLayer = Layer.succeed(
       Schema.decodeUnknownEffect(SummaryRequest)(raw).pipe(
         Effect.mapError(() => new SummaryFailed({ message: "Invalid summary request" })),
         Effect.flatMap((request) =>
-          Schema.encodeEffect(SummaryText)(
-            `[Fake ${request.model} summary] ${request.source.slice(0, FAKE_SOURCE_PREVIEW_LIMIT)}`
-          ).pipe(Effect.mapError(() => new SummaryFailed({ message: "Invalid completed summary" })))
+          Schema.encodeEffect(SummaryText)(fakeSummary(request)).pipe(
+            Effect.mapError(() => new SummaryFailed({ message: "Invalid completed summary" }))
+          )
         )
       )
   })

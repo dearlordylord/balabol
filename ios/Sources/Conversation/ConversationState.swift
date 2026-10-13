@@ -11,7 +11,7 @@ public struct ConversationState: Equatable, Sendable {
     case stopping(generation: Int)
     case stopped
   }
-  public struct Request: Equatable, Sendable {
+  public struct Request: Hashable, Sendable {
     public let generation: Int
     public let id: Int
   }
@@ -90,6 +90,15 @@ public struct ConversationState: Equatable, Sendable {
 
   public internal(set) var connection: Connection = .active(generation: Int())
   internal var nextRequestID = 0
+  // At most two terminal receipt reads can overlap. A stalled backend applies
+  // honest send backpressure while the editable draft remains locally saved.
+  public static let maximumInterruptionRecoveries = 2
+  public var isWaitingForInterruptionRecovery: Bool {
+    interruptionRecoveries.count >= Self.maximumInterruptionRecoveries
+  }
+  internal var interruptedInput: UUID?
+  internal var interruptionRecoveries: [Request: UUID] = [:]
+  public internal(set) var interruptedReceiptFailure: ConversationFailure?
   public internal(set) var draft: Draft = .unloaded
   public internal(set) var delivery: Delivery = .idle(nil)
   public internal(set) var history: History = .idle
@@ -146,7 +155,8 @@ public struct ConversationState: Equatable, Sendable {
     }
   }
   public var canSendDraft: Bool {
-    guard isActive, !isSending, !isObservingReply, case .available(_, let persistence) = draft
+    guard isActive, !isSending, !isWaitingForInterruptionRecovery,
+      case .available(_, let persistence) = draft
     else { return false }
     switch persistence {
     case .clean: return true

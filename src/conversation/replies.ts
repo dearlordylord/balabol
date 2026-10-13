@@ -2,8 +2,14 @@ import { createHash, randomUUID } from "node:crypto"
 import { Context, Effect, Fiber, Schema, Stream } from "effect"
 import type { Scope } from "effect"
 import { AnswerEvent, AnswerFailed, type AnswerGeneration } from "../answer-generation/index.ts"
-import type { Memory, Receipt, StorageUnavailable } from "../memory/index.ts"
-import { Reply, ReplyBusy, ReplyNotFound } from "./contracts.ts"
+import {
+  samePayload,
+  type DeliveryPayload,
+  type Memory,
+  type Receipt,
+  type StorageUnavailable
+} from "../memory/index.ts"
+import { Reply, ReplyNotFound } from "./contracts.ts"
 
 const maximumModelNameLength = 200
 const maximumReplyLength = 100_000
@@ -54,7 +60,8 @@ const responseIdentity = (inputDeliveryId: string) => {
 export class Replies {
   #state: Reply | undefined
   #task: Fiber.Fiber<void> | undefined
-  #phase: "Generating" | "Committing" | "Cancelling" | "Terminal" = "Terminal"
+  #pendingCompletion: DeliveryPayload | undefined
+  #phase: "Generating" | "Committing" | "Interrupting" | "Cancelling" | "Terminal" = "Terminal"
   #observer: string | undefined
   constructor(
     readonly memory: Memory["Service"],
@@ -62,23 +69,86 @@ export class Replies {
     readonly scope: Scope.Scope,
     readonly settings: ReplySettings
   ) {}
-  admit(): Effect.Effect<void, ReplyBusy> {
+  admit(): Effect.Effect<void, StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
-      if (this.#phase !== "Terminal")
-        return yield* new ReplyBusy({ message: "A reply is active; wait for its completion" })
+      const pending = yield* this.memory.pendingInterrupt()
+      if (pending !== undefined) yield* this.memory.append(pending)
+      yield* this.#settleCompletion()
+      const state = this.#state
+      if (state === undefined || this.#phase === "Terminal") return
+      if (this.#phase === "Committing") {
+        if (this.#task !== undefined) yield* Fiber.await(this.#task)
+        yield* this.#settleCompletion()
+        return
+      }
+      this.#phase = "Interrupting"
+      const task = this.#task
+      this.#task = undefined
+      if (task !== undefined) yield* Fiber.interrupt(task)
+      const payload = {
+        deliveryId: state.responseId,
+        responseId: state.responseId,
+        inputDeliveryId: state.inputDeliveryId,
+        role: "assistant" as const,
+        outcome: "interrupted" as const,
+        text: state.text
+      }
+      const receipt = yield* this.#appendReply(payload)
+      this.#phase = "Terminal"
+      this.#state = Schema.decodeUnknownSync(Reply)({
+        ...state,
+        sequence: state.sequence + 1,
+        state: "Interrupted",
+        error: null,
+        receipt
+      })
     })
+  }
+  #settleCompletion(): Effect.Effect<void, StorageUnavailable> {
+    return Effect.gen({ self: this }, function* () {
+      const payload = this.#pendingCompletion
+      if (payload === undefined || this.#phase === "Committing") return
+      const receipt = yield* this.#appendReply(payload)
+      this.#pendingCompletion = undefined
+      const state = this.#state
+      if (state === undefined) return
+      this.#phase = "Terminal"
+      this.#state = Schema.decodeUnknownSync(Reply)({
+        ...state,
+        sequence: state.sequence + 1,
+        state: "Completed",
+        error: null,
+        receipt
+      })
+    })
+  }
+  #appendReply(payload: DeliveryPayload) {
+    return this.memory
+      .append(payload)
+      .pipe(
+        Effect.catch((error) =>
+          this.memory
+            .find(payload.deliveryId)
+            .pipe(
+              Effect.flatMap((found) =>
+                found?.state === "Accepted" && samePayload(found.receipt, payload)
+                  ? Effect.succeed(found.receipt)
+                  : Effect.fail(error)
+              )
+            )
+        )
+      )
   }
   current(inputDeliveryId: string): Effect.Effect<Reply, ReplyNotFound | StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
-      const state = this.#state?.inputDeliveryId === inputDeliveryId ? this.#state : undefined
-      if (state !== undefined) return state
+      if (this.#state?.inputDeliveryId === inputDeliveryId) return this.#state
       const receipt = yield* this.memory.findReply(inputDeliveryId)
       if (receipt !== undefined)
         return Schema.decodeUnknownSync(Reply)({
           responseId: receipt.deliveryId,
           inputDeliveryId,
-          sequence: 0,
-          state: "Completed",
+          sequence: maximumReplyLength + 1,
+          state: receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
           text: receipt.text,
           error: null,
           receipt
@@ -98,7 +168,7 @@ export class Replies {
     })
   }
   #acceptsUpdate(previous: Reply, next: Omit<Reply, "sequence">): boolean {
-    if (this.#phase === "Terminal") return false
+    if (this.#phase === "Terminal" || this.#phase === "Interrupting") return false
     if (this.#phase === "Cancelling" && next.state !== "Failed") return false
     return previous.responseId === next.responseId
   }
@@ -150,13 +220,22 @@ export class Replies {
       )
     })
   }
-  #generate(input: Receipt, base: { responseId: string; inputDeliveryId: string }) {
+  #snapshot(input: Receipt) {
     return Effect.gen({ self: this }, function* () {
       let snapshot = yield* this.memory.snapshot(input.recordId)
       for (let attempts = 0; snapshot.state === "pending" && attempts < this.settings.contextWaitAttempts; attempts++) {
         yield* Effect.sleep(this.settings.contextWaitMillis)
         snapshot = yield* this.memory.snapshot(input.recordId)
       }
+      return snapshot
+    })
+  }
+  #canCommit(responseId: string): boolean {
+    return this.#phase === "Generating" && this.#state?.responseId === responseId
+  }
+  #generate(input: Receipt, base: { responseId: string; inputDeliveryId: string }) {
+    return Effect.gen({ self: this }, function* () {
+      const snapshot = yield* this.#snapshot(input)
       if (snapshot.state !== "ready") {
         this.#update({
           ...base,
@@ -175,7 +254,9 @@ export class Replies {
       yield* this.answer
         .generate({
           model: this.settings.answerModel,
-          prior: snapshot.text,
+          prior: /^[0-9]+\+[0-9]+\|assistant_interrupted:/m.test(snapshot.text)
+            ? `[Interrupted assistant output: generated text may not have been heard; no user agreement implied]\n${snapshot.text}`
+            : snapshot.text,
           input: input.text,
           capabilities: ["memory.context"]
         })
@@ -199,25 +280,26 @@ export class Replies {
         )
       if (!completed || text.length === 0)
         return yield* new AnswerFailed({ message: "Provider stream lacks nonempty completed answer" })
+      if (!this.#canCommit(base.responseId)) return
       this.#phase = "Committing"
+      this.#pendingCompletion = {
+        deliveryId: base.responseId,
+        responseId: base.responseId,
+        inputDeliveryId: input.deliveryId,
+        role: "assistant",
+        outcome: "completed",
+        text
+      }
       yield* Effect.gen({ self: this }, function* () {
-        const receipt = yield* this.memory
-          .append({
-            deliveryId: base.responseId,
-            role: "assistant",
-            inputDeliveryId: input.deliveryId,
-            responseId: base.responseId,
-            text
-          })
-          .pipe(
-            Effect.catch((error) =>
-              this.memory
-                .findReply(input.deliveryId)
-                .pipe(
-                  Effect.flatMap((receipt) => (receipt === undefined ? Effect.fail(error) : Effect.succeed(receipt)))
-                )
-            )
-          )
+        const receipt = yield* this.#appendReply({
+          deliveryId: base.responseId,
+          role: "assistant",
+          outcome: "completed",
+          inputDeliveryId: input.deliveryId,
+          responseId: base.responseId,
+          text
+        })
+        this.#pendingCompletion = undefined
         this.#update({ ...base, state: "Completed", text, error: null, receipt })
       }).pipe(Effect.uninterruptible)
     })
@@ -233,11 +315,16 @@ export class Replies {
   release(inputDeliveryId: string, token: string): Effect.Effect<void> {
     return Effect.suspend(() => (this.#observer === token ? this.cancel(inputDeliveryId) : Effect.void))
   }
+  #canCancel(inputDeliveryId: string): boolean {
+    return (
+      this.#state?.inputDeliveryId === inputDeliveryId && this.#phase !== "Terminal" && this.#phase !== "Interrupting"
+    )
+  }
   cancel(inputDeliveryId: string): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       const state = this.#state
       const task = this.#task
-      if (state?.inputDeliveryId !== inputDeliveryId || this.#phase === "Terminal") return
+      if (!this.#canCancel(inputDeliveryId) || state === undefined) return
       if (this.#phase === "Committing") {
         if (task !== undefined) yield* Fiber.await(task)
         return

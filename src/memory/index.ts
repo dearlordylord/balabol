@@ -19,6 +19,7 @@ export { DurableMemory, sqliteLayer } from "./adapter.ts"
 export class Memory extends Context.Service<
   Memory,
   {
+    pendingInterrupt: () => Effect.Effect<DeliveryPayload | undefined, StorageUnavailable>
     findReply: (inputDeliveryId: string) => Effect.Effect<Receipt | undefined, StorageUnavailable>
     snapshot: (before: number) => Effect.Effect<PriorSnapshot, StorageUnavailable>
     find: (deliveryId: DeliveryPayload["deliveryId"]) => Effect.Effect<DeliveryEvidence | undefined, StorageUnavailable>
@@ -66,6 +67,7 @@ export const configuredUniiLayer = (settings: MemorySettings = defaultMemorySett
         )
       )
       return Memory.of({
+        pendingInterrupt: () => Effect.try({ try: () => adapter.pendingInterrupt(), catch: unavailable }),
         findReply: (id) => Effect.try({ try: () => adapter.findReply(id), catch: unavailable }),
         snapshot: (before) =>
           Effect.tryPromise({ try: () => host.snapshot(before), catch: unavailable }).pipe(semaphore.withPermits(1)),

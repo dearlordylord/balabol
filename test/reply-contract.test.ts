@@ -114,7 +114,6 @@ it("cancels a suspended provider without masking interruption and ignores stale 
           const active = yield* conversation.observeReply(input.deliveryId)
           yield* conversation.releaseReply(input.deliveryId, stale)
           expect((yield* conversation.reply(input.deliveryId)).state).not.toBe("Failed")
-          expect((yield* Effect.flip(conversation.send(later)))._tag).toBe("ReplyBusy")
           yield* conversation.releaseReply(input.deliveryId, active)
           expect((yield* conversation.reply(input.deliveryId)).state).toBe("Failed")
           yield* conversation.send(later)
@@ -221,6 +220,18 @@ it("cancels generation when no observer attaches within the configured deadline"
 it("rejects incomplete or contradictory assistant identities at memory boundaries", () => {
   const base = { deliveryId: input.deliveryId, recordId: 0, position: 0, text: "reply" }
   expect(() => Schema.decodeUnknownSync(Receipt)({ ...base, role: "assistant" })).toThrow()
+  expect(() => Schema.decodeUnknownSync(Receipt)({ ...base, role: "user", outcome: "interrupted" })).toThrow()
+  expect(() => Schema.decodeUnknownSync(DeliveryPayload)({ ...input, text: "" })).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(DeliveryPayload)({
+      ...input,
+      text: "",
+      role: "assistant",
+      inputDeliveryId: later.deliveryId,
+      responseId: input.deliveryId,
+      outcome: "completed"
+    })
+  ).toThrow()
   expect(() => Schema.decodeUnknownSync(Receipt)({ ...base, role: "user", responseId: input.deliveryId })).toThrow()
   expect(() =>
     Schema.decodeUnknownSync(DeliveryPayload)({

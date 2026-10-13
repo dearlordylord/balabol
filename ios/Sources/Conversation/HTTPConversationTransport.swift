@@ -26,6 +26,12 @@ public struct HTTPConversationTransport: ConversationTransport {
     request.httpBody = try JSONEncoder().encode(delivery)
     return try await execute(request, as: ConversationMessage.self)
   }
+  public func replySnapshot(for inputDeliveryId: UUID) async throws -> ReplySnapshot {
+    let url = baseURL.appendingPathComponent("conversation/replies/" + inputDeliveryId.uuidString)
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 15
+    return try await execute(request, as: ReplySnapshot.self)
+  }
   public func observeReply(for inputDeliveryId: UUID) async throws -> ReplyObservation {
     let url = baseURL.appendingPathComponent(
       "conversation/replies/" + inputDeliveryId.uuidString + "/events")

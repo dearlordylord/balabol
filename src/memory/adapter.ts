@@ -9,6 +9,7 @@ import { SqliteStorage } from "./sqlite.ts"
 export class DurableMemory extends Context.Service<
   DurableMemory,
   {
+    pendingInterrupt: () => DeliveryPayload | undefined
     storage: Storage
     findReply: (inputDeliveryId: string) => Receipt | undefined
     prepare: (payload: DeliveryPayload) => void
@@ -30,6 +31,7 @@ export const sqliteLayer = (path: string) =>
       )
       return DurableMemory.of({
         storage,
+        pendingInterrupt: () => storage.pendingInterrupt(),
         findReply: (id) => storage.findReply(id),
         find: (id) => {
           const row = storage.find(id)
@@ -39,7 +41,8 @@ export const sqliteLayer = (path: string) =>
             text: row.text,
             role: row.role,
             ...(row.inputDeliveryId === null ? {} : { inputDeliveryId: row.inputDeliveryId }),
-            ...(row.responseId === null ? {} : { responseId: row.responseId })
+            ...(row.responseId === null ? {} : { responseId: row.responseId }),
+            ...(row.outcome === null ? {} : { outcome: row.outcome })
           }
           return Schema.decodeUnknownSync(DeliveryEvidence)(
             row.firstId === null
