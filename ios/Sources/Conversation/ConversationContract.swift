@@ -85,14 +85,12 @@ public enum SavedDraft: Codable, Equatable, Sendable {
   }
 }
 
-@MainActor
-public protocol DraftStore {
-  func load() throws -> SavedDraft
-  func save(_ draft: SavedDraft) throws
+public protocol DraftStore: Sendable {
+  func load() async throws -> SavedDraft
+  func save(_ draft: SavedDraft) async throws
 }
 
-@MainActor
-public final class MemoryDraftStore: DraftStore {
+public actor MemoryDraftStore: DraftStore {
   private var value = SavedDraft.editable(text: "")
   public init() {}
   public func load() throws -> SavedDraft { value }

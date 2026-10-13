@@ -7,6 +7,7 @@ final class ConversationViewModelTests: XCTestCase {
   func testReceiptConfirmsTranscriptAndClearsDraft() async throws {
     let transport = ScriptedTransport()
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
+    await model.start()
     model.editDraft("Bonjour")
     await model.send()
     XCTAssertEqual(model.messages.map(\.text), ["Bonjour"])

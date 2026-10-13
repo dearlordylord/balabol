@@ -74,17 +74,20 @@ private struct ConversationRoot: View {
       .toolbar {
         if model != nil {
           Button("Server") {
-            session?.invalidateAndCancel()
-            session = nil
-            model = nil
+            Task {
+              guard let current = model, current.canSwitchServer else { return }
+              await current.shutdown()
+              session?.invalidateAndCancel()
+              session = nil
+              model = nil
+            }
           }
-          .disabled(
-            model?.isSending == true || model?.pendingDelivery != nil
-              || model?.draftStorageReady == false)
+          .disabled(model?.canSwitchServer != true)
         }
       }
     }
     .onAppear {
+      guard model == nil else { return }
       urlInput = configuredURL
       if !configuredURL.isEmpty {
         connect()
@@ -97,6 +100,8 @@ private struct ConversationRoot: View {
     }
   }
   private func connect() {
+    // Live connections are retired only through the awaited Server action.
+    guard model == nil, session == nil else { return }
     do {
       guard let url = URL(string: urlInput) else { throw ConversationFailure.invalidInput }
       let configuration = URLSessionConfiguration.ephemeral

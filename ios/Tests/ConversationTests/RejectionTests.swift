@@ -8,6 +8,7 @@ final class RejectionTests: XCTestCase {
     for code in ["InvalidInput", "DeliveryConflict"] {
       let transport = RejectionTransport(code: code)
       let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
+      await model.start()
       model.editDraft("Original")
       await model.send()
       XCTAssertNil(model.pendingDelivery)

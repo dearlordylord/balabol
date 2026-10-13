@@ -2,6 +2,7 @@
   import SwiftUI
 
   public struct ConversationView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable private var model: ConversationViewModel
     public init(model: ConversationViewModel) { self.model = model }
     public var body: some View {
@@ -15,23 +16,30 @@
               .disabled(model.isLoading)
           }
         }
-        if let failure = model.failure {
+        if let failure = model.deliveryFailure {
           Text(description(failure)).foregroundStyle(.red)
             .accessibilityIdentifier("delivery-status")
         }
+        if model.historyFailure != nil {
+          Text("History could not refresh. Retry without changing your draft.")
+            .foregroundStyle(.red).accessibilityIdentifier("history-status")
+        }
+        if model.draftFailure != nil {
+          Text("Draft could not be saved. Retry local saving before sending.")
+            .foregroundStyle(.red).accessibilityIdentifier("draft-status")
+        }
+        if model.isSavingDraft { Text("Saving draft…") }
         if !model.draftStorageReady {
-          Button("Reload saved draft") { model.reloadDraft() }
+          Button("Retry saved draft") { Task { await model.reloadDraft() } }
         }
-        if !model.hasLoadedHistory {
-          Button("Load conversation") { Task { await model.loadHistory() } }
-            .disabled(model.isLoading)
-        }
+        Button("Refresh conversation") { Task { await model.refreshHistory() } }
+          .disabled(model.isLoading)
         TextField(
           "Message", text: Binding(get: { model.draft }, set: model.editDraft), axis: .vertical
         )
         .lineLimit(2...6)
         .textFieldStyle(.roundedBorder)
-        .disabled(!model.draftStorageReady || model.pendingDelivery != nil || model.isSending)
+        .disabled(!model.canEditDraft)
         .accessibilityIdentifier("message-draft")
         Button(
           model.isSending
@@ -40,14 +48,20 @@
           Task { await model.send() }
         }
         .disabled(
-          model.isSending || !model.draftStorageReady
-            || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          !model.canSendDraft || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
         .accessibilityIdentifier("send-message")
       }
       .padding()
       .navigationTitle("Conversation")
-      .task { await model.loadHistory() }
+      .task {
+        await model.start()
+        await model.refreshHistory()
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active { Task { await model.refreshHistory() } }
+        if phase == .background { Task { await model.flushDraft() } }
+      }
     }
     private func description(_ failure: ConversationFailure) -> String {
       switch failure {

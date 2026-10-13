@@ -2,8 +2,8 @@ import Foundation
 
 /// Stores only client input in the app sandbox, never server credentials.
 /// Atomic replacement keeps the retry identity and payload in one checkpoint.
-@MainActor
-public final class FileDraftStore: DraftStore {
+/// Actor isolation runs Foundation I/O off MainActor and serializes replacements.
+public actor FileDraftStore: DraftStore {
   private let url: URL
   public init(url: URL) { self.url = url }
   public func load() throws -> SavedDraft {

@@ -1,159 +1,156 @@
 import Foundation
 import Observation
 
-/// Projects the one server-owned conversation. A pending identity cannot be edited
-/// until its outcome is resolved; successful HTTP alone does not confirm acceptance.
+/// Native MVVM interpreter for this feature's concrete commands. Tasks are owned
+/// here, not in the transition; request identities reject canceled/late results.
+/// File work is serialized by DraftStore and at most one checkpoint task exists.
 @MainActor @Observable
 public final class ConversationViewModel {
-  public private(set) var messages: [ConversationMessage] = []
-  public private(set) var draft = ""
-  public private(set) var pendingDelivery: PendingDelivery?
-  public private(set) var isSending = false
-  public private(set) var isLoading = false
-  public private(set) var failure: ConversationFailure?
-  public private(set) var nextAfter: Int?
-  public private(set) var hasLoadedHistory = false
-  public private(set) var draftStorageReady = false
-  private let transport: any ConversationTransport
-  private let draftStore: any DraftStore
+  public private(set) var state = ConversationState()
+  @ObservationIgnored private let transport: any ConversationTransport
+  @ObservationIgnored private let draftStore: any DraftStore
+  @ObservationIgnored private var draftTask: Task<Void, Never>?
+  @ObservationIgnored private var deliveryTask: Task<Void, Never>?
+  @ObservationIgnored private var historyTask: Task<Void, Never>?
+  @ObservationIgnored private var draftRequest: ConversationState.Request?
+  @ObservationIgnored private var deliveryRequest: ConversationState.Request?
+  @ObservationIgnored private var historyRequest: ConversationState.Request?
 
   public init(transport: any ConversationTransport, draftStore: any DraftStore) {
     self.transport = transport
     self.draftStore = draftStore
-    reloadDraft()
   }
 
-  public func reloadDraft() {
-    guard !isSending else { return }
-    do {
-      let saved = try draftStore.load()
-      draft = saved.text
-      pendingDelivery = saved.pending
-      draftStorageReady = true
-      failure = nil
-    } catch {
-      draftStorageReady = false
-      failure = .draftStorageUnavailable
-    }
+  public var messages: [ConversationMessage] { state.messages }
+  public var draft: String { state.draftText }
+  public var pendingDelivery: PendingDelivery? { state.pendingDelivery }
+  public var isSending: Bool { state.isSending }
+  public var isLoading: Bool { state.isLoadingHistory }
+  public var isSavingDraft: Bool { state.isSavingDraft }
+  public var draftStorageReady: Bool {
+    if case .available = state.draft { return true }
+    return false
   }
+  public var canSendDraft: Bool { state.canSendDraft }
+  public var canEditDraft: Bool { state.canEditDraft }
+  public var canSwitchServer: Bool { state.canSwitchServer }
+  public var hasLoadedHistory: Bool { state.hasLoadedHistory }
+  public var nextAfter: Int? { state.hasMoreHistory ? state.historyCursor : nil }
+  public var draftFailure: ConversationFailure? { state.draftFailure }
+  public var deliveryFailure: ConversationFailure? { state.deliveryFailure }
+  public var historyFailure: ConversationFailure? { state.historyFailure }
+  // Compatibility projection only; views render each lifecycle's error itself.
+  public var failure: ConversationFailure? { draftFailure ?? deliveryFailure ?? historyFailure }
 
-  public func editDraft(_ text: String) {
-    guard draftStorageReady, !isSending, pendingDelivery == nil else { return }
-    do {
-      try draftStore.save(SavedDraft.editable(text: text))
-      draft = text
-      failure = nil
-    } catch {
-      draftStorageReady = false
-      failure = .draftStorageUnavailable
-    }
+  public func start() async {
+    receive(.start)
+    await flushDraft()
   }
-
+  public func reloadDraft() async {
+    receive(.recoverDraft)
+    await flushDraft()
+  }
+  public func editDraft(_ text: String) { receive(.edit(text)) }
   public func send() async {
-    guard draftStorageReady else {
-      failure = .draftStorageUnavailable
-      return
-    }
-    guard !isSending else { return }
-    guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      draft.utf16.count <= 100_000
-    else {
-      failure = .invalidInput
-      return
-    }
-    let delivery = pendingDelivery ?? PendingDelivery(deliveryId: UUID(), text: draft)
-    do {
-      try draftStore.save(SavedDraft.awaitingReceipt(delivery))
-    } catch {
-      draftStorageReady = false
-      failure = .draftStorageUnavailable
-      return
-    }
-    pendingDelivery = delivery
-    isSending = true
-    failure = nil
-    defer { isSending = false }
-    do {
-      let receipt = try await transport.send(delivery)
-      guard receipt.deliveryId == delivery.deliveryId, receipt.text == delivery.text,
-        receipt.isValid
-      else {
-        throw ConversationFailure.invalidResponse
-      }
-      try merge([receipt])
-      try clearConfirmedDraft()
-    } catch let error as ConversationFailure {
-      if case .rejected(let code, _) = error, ["InvalidInput", "DeliveryConflict"].contains(code) {
-        do {
-          try draftStore.save(SavedDraft.editable(text: draft))
-          pendingDelivery = nil
-          failure = error
-        } catch {
-          draftStorageReady = false
-          failure = .draftStorageUnavailable
-        }
-      } else {
-        failure = error
-      }
-    } catch { failure = .unavailable }
+    receive(.send(UUID()))
+    await flushDraft()
+    if let task = deliveryTask { await task.value }
+    await flushDraft()
   }
-
   public func loadHistory() async {
-    guard !isLoading, !hasLoadedHistory || nextAfter != nil else { return }
-    isLoading = true
-    failure = nil
-    defer { isLoading = false }
-    do {
-      let page = try await transport.history(after: hasLoadedHistory ? nextAfter : nil)
-      guard page.messages.count <= HistoryPage.maximumMessages,
-        page.messages.allSatisfy(\.isValid),
-        zip(page.messages, page.messages.dropFirst()).allSatisfy({ $0.position < $1.position }),
-        page.messages.first.map({ $0.position > (nextAfter ?? -1) }) ?? true,
-        page.nextAfter == nil || page.nextAfter == page.messages.last?.position
-      else {
-        throw ConversationFailure.invalidResponse
-      }
-      if let pendingDelivery,
-        let accepted = page.messages.first(where: { $0.deliveryId == pendingDelivery.deliveryId })
-      {
-        guard accepted.text == pendingDelivery.text else {
-          throw ConversationFailure.invalidResponse
-        }
-        try merge(page.messages)
-        try clearConfirmedDraft()
-      } else {
-        try merge(page.messages)
-      }
-      nextAfter = page.nextAfter
-      hasLoadedHistory = true
-    } catch let error as ConversationFailure { failure = error } catch { failure = .unavailable }
+    receive(.loadHistory(refresh: false))
+    if let task = historyTask { await task.value }
+    if state.isSavingDraft { await flushDraft() }
+  }
+  /// One page per foreground/explicit refresh, including after an earlier EOF.
+  /// Further pages remain an explicit Load more intent rather than an auto drain.
+  public func refreshHistory() async {
+    receive(.loadHistory(refresh: true))
+    if let task = historyTask { await task.value }
+    if state.isSavingDraft { await flushDraft() }
+  }
+  /// A foreground/background owner can await local durability without shutting
+  /// down the conversation. This includes already queued protected checkpoints.
+  public func flushDraft() async {
+    while let task = draftTask { await task.value }
+  }
+  /// Explicit replacement owns shutdown. It cancels network work, denies new
+  /// intents immediately, and waits for existing local checkpoints to quiesce.
+  public func shutdown() async {
+    receive(.shutdown)
+    await flushDraft()
+    receive(.drained)
   }
 
-  private func clearConfirmedDraft() throws {
-    do { try draftStore.save(SavedDraft.editable(text: "")) } catch {
-      draftStorageReady = false
-      throw ConversationFailure.draftStorageUnavailable
-    }
-    draft = ""
-    pendingDelivery = nil
+  private func receive(_ event: ConversationEvent) {
+    let commands = state.transition(event)
+    for command in commands { execute(command) }
   }
 
-  private func merge(_ incoming: [ConversationMessage]) throws {
-    var merged = messages
-    for message in incoming {
-      if let existing = merged.first(where: { $0.deliveryId == message.deliveryId }) {
-        guard existing == message else { throw ConversationFailure.invalidResponse }
-      } else {
-        guard
-          !merged.contains(where: {
-            $0.position == message.position || $0.recordId == message.recordId
-          })
-        else {
-          throw ConversationFailure.invalidResponse
+  private func execute(_ command: ConversationCommand) {
+    switch command {
+    case .loadDraft(let request):
+      let store = draftStore
+      draftRequest = request
+      draftTask = Task { [weak self] in
+        let result: Result<SavedDraft, ConversationFailure>
+        do { result = .success(try await store.load()) } catch {
+          result = .failure(.draftStorageUnavailable)
         }
-        merged.append(message)
+        self?.finishDraft(request, event: .draftLoaded(request, result))
       }
+    case .saveDraft(let request, let checkpoint):
+      let store = draftStore
+      draftRequest = request
+      draftTask = Task { [weak self] in
+        let result: Result<Void, ConversationFailure>
+        do {
+          try await store.save(checkpoint)
+          result = .success(())
+        } catch { result = .failure(.draftStorageUnavailable) }
+        self?.finishDraft(request, event: .draftSaved(request, result))
+      }
+    case .send(let request, let pending):
+      let transport = transport
+      deliveryRequest = request
+      deliveryTask = Task { [weak self] in
+        let result: Result<ConversationMessage, ConversationFailure>
+        do { result = .success(try await transport.send(pending)) } catch let failure
+          as ConversationFailure
+        { result = .failure(failure) } catch { result = .failure(.unavailable) }
+        guard let self, self.deliveryRequest == request else { return }
+        self.deliveryTask = nil
+        self.deliveryRequest = nil
+        self.receive(.delivered(request, result))
+      }
+    case .history(let request, let after):
+      let transport = transport
+      historyRequest = request
+      historyTask = Task { [weak self] in
+        let result: Result<HistoryPage, ConversationFailure>
+        do { result = .success(try await transport.history(after: after)) } catch let failure
+          as ConversationFailure
+        { result = .failure(failure) } catch { result = .failure(.unavailable) }
+        guard let self, self.historyRequest == request else { return }
+        self.historyTask = nil
+        self.historyRequest = nil
+        self.receive(.historyLoaded(request, result))
+      }
+    case .cancelSend:
+      deliveryTask?.cancel()
+      deliveryTask = nil
+      deliveryRequest = nil
+    case .cancelHistory:
+      historyTask?.cancel()
+      historyTask = nil
+      historyRequest = nil
     }
-    messages = merged.sorted { $0.position < $1.position }
+  }
+
+  private func finishDraft(_ request: ConversationState.Request, event: ConversationEvent) {
+    guard draftRequest == request else { return }
+    draftTask = nil
+    draftRequest = nil
+    receive(event)
   }
 }

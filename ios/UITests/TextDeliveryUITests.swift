@@ -22,7 +22,11 @@ final class TextDeliveryUITests: XCTestCase {
     app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
     app.launch()
     let server = app.buttons["Server"]
-    if server.waitForExistence(timeout: 5) { server.tap() }
+    XCTAssertTrue(server.waitForExistence(timeout: 5))
+    let ready = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "enabled == true"), object: server)
+    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+    server.tap()
     let address = app.textFields["server-url"]
     XCTAssertTrue(address.waitForExistence(timeout: 5))
     address.tap()

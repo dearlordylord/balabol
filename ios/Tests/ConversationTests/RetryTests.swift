@@ -8,12 +8,14 @@ final class RetryTests: XCTestCase {
     let transport = UncertainTransport()
     let store = MemoryDraftStore()
     let first = ConversationViewModel(transport: transport, draftStore: store)
+    await first.start()
     first.editDraft("Retry me")
     await first.send()
     let identity = try XCTUnwrap(first.pendingDelivery?.deliveryId)
     XCTAssertEqual(first.draft, "Retry me")
     XCTAssertTrue(first.messages.isEmpty)
     let reopened = ConversationViewModel(transport: transport, draftStore: store)
+    await reopened.start()
     reopened.editDraft("Different payload")
     XCTAssertEqual(reopened.draft, "Retry me")
     await reopened.send()
@@ -43,17 +45,18 @@ final class DraftRecoveryTests: XCTestCase {
     let transport = UncertainTransport()
     let store = UnreadableDraftStore()
     let model = ConversationViewModel(transport: transport, draftStore: store)
+    await model.start()
     model.editDraft("New message")
     await model.send()
     XCTAssertEqual(model.failure, .draftStorageUnavailable)
-    XCTAssertFalse(store.saved)
+    let savedToStore = await store.saved
+    XCTAssertFalse(savedToStore)
     let attempts = await transport.attempts
     XCTAssertTrue(attempts.isEmpty)
   }
 }
 
-@MainActor
-final class UnreadableDraftStore: DraftStore {
+actor UnreadableDraftStore: DraftStore {
   var saved = false
   func load() throws -> SavedDraft { throw ConversationFailure.draftStorageUnavailable }
   func save(_ draft: SavedDraft) throws { saved = true }
@@ -65,21 +68,23 @@ final class DraftSaveFailureTests: XCTestCase {
     let transport = UncertainTransport()
     let store = AmbiguousSaveStore()
     let model = ConversationViewModel(transport: transport, draftStore: store)
+    await model.start()
     model.editDraft("Checkpoint")
-    store.failNextSave = true
+    await model.flushDraft()
+    await store.failNextCheckpoint()
     await model.send()
     XCTAssertFalse(model.draftStorageReady)
     let attempts = await transport.attempts
     XCTAssertTrue(attempts.isEmpty)
-    let saved = try store.load()
-    model.reloadDraft()
+    let saved = try await store.load()
+    await model.reloadDraft()
     XCTAssertEqual(model.pendingDelivery?.deliveryId, saved.pending?.deliveryId)
   }
 }
 
-@MainActor
-final class AmbiguousSaveStore: DraftStore {
+actor AmbiguousSaveStore: DraftStore {
   var failNextSave = false
+  func failNextCheckpoint() { failNextSave = true }
   private var value = SavedDraft.editable(text: "")
   func load() throws -> SavedDraft { value }
   func save(_ draft: SavedDraft) throws {

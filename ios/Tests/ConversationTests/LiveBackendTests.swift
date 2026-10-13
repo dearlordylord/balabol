@@ -17,6 +17,7 @@ final class LiveBackendTests: XCTestCase {
     defer { session.invalidateAndCancel() }
     let transport = try HTTPConversationTransport(baseURL: url, session: session)
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
+    await model.start()
     let text = "Bonjour — English — 日本語 " + UUID().uuidString
     model.editDraft(text)
     await model.send()
@@ -28,6 +29,7 @@ final class LiveBackendTests: XCTestCase {
       PendingDelivery(deliveryId: accepted.deliveryId, text: text))
     XCTAssertEqual(duplicate, accepted)
     let reopened = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
+    await reopened.start()
     repeat {
       await reopened.loadHistory()
     } while reopened.nextAfter != nil && reopened.failure == nil

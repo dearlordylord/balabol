@@ -34,6 +34,14 @@ The Swift client has local conversation and voice-session capability slices plus
 
 The conversation application boundary is the approved primary behavioral seam, composed with real unii, real durable storage and deterministic fake Layers. Contract tests use public adapter interfaces. Client ViewModel tests cover projections and intents; physical audio evidence remains a separate platform qualification.
 
+### Native client state and the TCA adoption condition
+
+Start new client behavior in its capability's state, event and transition definitions. The transition owns decisions; the MainActor ViewModel projects state and interprets concrete commands through injected adapters. Keep independently concurrent lifecycles and failures separate. Async results carry operation identities; cancellation and stale-result rejection are distinct responsibilities. Backend receipts/history own accepted conversation facts, while the client owns draft delivery and observation progress. A merged receipt must not advance the history cursor past unloaded records.
+
+Keep this pattern discoverable in capability-local source names and short invariant comments. Do not build a generic Store, middleware, task router, effect algebra or test runtime.
+
+Consider [TCA](https://github.com/pointfreeco/swift-composable-architecture) only when a concrete capability being delivered requires shared effect orchestration, nested feature lifetimes or composed async-effect testing that the concrete capability pattern cannot reasonably satisfy without building such generic infrastructure. Record the concrete scenario and why feature-local state and owned tasks are insufficient before adopting it. More screens, hypothetical voice complexity or a preference for Redux syntax alone do not trigger adoption. If TCA is selected, revise the MVVM decision explicitly and use its Store as the presentation authority; do not mirror Store state in another ViewModel. Backend acceptance and unii memory authority remain unchanged.
+
 ## Enforcement and review
 
 The architecture CLI parses TypeScript syntax rather than matching text. It resolves compiler aliases and local imports, exports, type queries and literal dynamic imports, follows the complete resolved local source closure and rejects file cycles and declared owner cycles. It rejects undeclared owners/packages, cross-owner private entrypoints, invalid manifests, computed imports and unresolved targets. It checks canonical paths so symlink escapes do not silently grant access. dpdm adds independent runtime import-cycle evidence.

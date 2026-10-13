@@ -7,13 +7,14 @@ final class HistoryTests: XCTestCase {
   func testDurableHistoryResolvesAnUncertainPendingDelivery() async throws {
     let id = UUID()
     let store = MemoryDraftStore()
-    try store.save(
+    try await store.save(
       SavedDraft.awaitingReceipt(PendingDelivery(deliveryId: id, text: "Already saved")))
     let message = ConversationMessage(
       deliveryId: id, recordId: 4, position: 0, text: "Already saved")
     let model = ConversationViewModel(
       transport: PageTransport(pages: [HistoryPage(messages: [message], nextAfter: nil)]),
       draftStore: store)
+    await model.start()
     await model.loadHistory()
     XCTAssertEqual(model.messages, [message])
     XCTAssertEqual(model.draft, "")
@@ -43,6 +44,7 @@ final class PagingTests: XCTestCase {
       HistoryPage(messages: [first], nextAfter: 0), HistoryPage(messages: [second], nextAfter: nil),
     ])
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
+    await model.start()
     await model.loadHistory()
     await model.loadHistory()
     XCTAssertEqual(model.messages.map(\.text), ["First", "Second"])
@@ -53,11 +55,13 @@ final class PagingTests: XCTestCase {
   func testConflictingHistoryReceiptCannotClearPendingDraft() async throws {
     let id = UUID()
     let store = MemoryDraftStore()
-    try store.save(SavedDraft.awaitingReceipt(PendingDelivery(deliveryId: id, text: "Original")))
+    try await store.save(
+      SavedDraft.awaitingReceipt(PendingDelivery(deliveryId: id, text: "Original")))
     let conflict = ConversationMessage(deliveryId: id, recordId: 4, position: 0, text: "Changed")
     let model = ConversationViewModel(
       transport: PageTransport(pages: [HistoryPage(messages: [conflict], nextAfter: nil)]),
       draftStore: store)
+    await model.start()
     await model.loadHistory()
     XCTAssertEqual(model.failure, .invalidResponse)
     XCTAssertEqual(model.draft, "Original")
@@ -73,6 +77,7 @@ final class InvalidHistoryTests: XCTestCase {
       let model = ConversationViewModel(
         transport: PageTransport(pages: [HistoryPage(messages: [invalid], nextAfter: nil)]),
         draftStore: MemoryDraftStore())
+      await model.start()
       await model.loadHistory()
       XCTAssertEqual(model.failure, .invalidResponse)
       XCTAssertTrue(model.messages.isEmpty)
