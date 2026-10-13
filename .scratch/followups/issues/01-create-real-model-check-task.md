@@ -1,4 +1,4 @@
-# Создать таск проверки реальных моделей
+# Create the real-model qualification task
 
 Id: followup-01
 Type: task

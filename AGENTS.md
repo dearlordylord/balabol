@@ -7,6 +7,7 @@
 **Expected use:** Apply before changing product code, contracts, tooling or documentation.
 **Lifecycle:** Review when scope, state ownership, testing or delivery policy changes.
 
+- Write repository documentation, specifications, issue titles/bodies, comments and commit messages in English. User-facing conversation may use the user's language.
 - Before implementation, read the published prototype issue identified in README; use the [glossary](GLOSSARY.md).
 - Before designing or changing owners, imports or interfaces, read [engineering standards](docs/engineering/standards.md). Domain owners and vertical slices apply to Swift and TS; MVVM lives inside Swift slices.
 - Before TS implementation, port the complete hulymcp quality harness described in the standards. The current repository hooks cover scaffolding only; they do not prove product checks pass.

@@ -11,12 +11,12 @@ Balabol is a personal conversational assistant with one enduring conversation.
 
 ## Language
 
-**Conversation / Разговор**:
+**Conversation**:
 The single continuing exchange between the user and the assistant. Ending a voice session or restarting the application does not create another conversation.
 _Avoid_: Chat collection, conversation picker
 
-**Voice session / Голосовой сеанс**:
+**Voice session**:
 A period of live spoken interaction within the conversation. The same conversation can continue across many voice sessions.
 
-**Memory / Память**:
+**Memory**:
 The enduring record and retained context of the conversation, available to the assistant across voice sessions.
