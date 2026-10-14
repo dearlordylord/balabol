@@ -133,8 +133,12 @@ private struct VoiceFixtureCurrent: Decodable {
 }
 
 private func voiceFixtureControlURL() throws -> URL {
-  let value =
-    ProcessInfo.processInfo.environment["BALABOL_VOICE_UI_CONTROL_URL"] ?? "http://127.0.0.1:8788"
+  let configured = ProcessInfo.processInfo.environment["BALABOL_VOICE_UI_CONTROL_URL"]
+  #if targetEnvironment(simulator)
+    let value = configured ?? "http://127.0.0.1:8788"
+  #else
+    guard let value = configured else { throw URLError(.badURL) }
+  #endif
   guard let url = URL(string: value), ["http", "https"].contains(url.scheme), url.host != nil,
     url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
     ["", "/"].contains(url.path)
