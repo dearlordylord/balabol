@@ -61,6 +61,20 @@ public struct ConversationState: Equatable, Sendable {
     case providerFailed(inputDeliveryId: UUID, text: String, ReplyFailure)
     case observationFailed(inputDeliveryId: UUID, latest: ReplySnapshot?, ConversationFailure)
   }
+  public var replyHasSnapshot: Bool {
+    if case .observing(_, _, let latest) = reply { return latest != nil }
+    return false
+  }
+  internal var replyRetryRequest: Request?
+  public var isRetryingReply: Bool { replyRetryRequest != nil }
+  internal var currentRequest: Request?
+  public internal(set) var currentFailure: ConversationFailure?
+  public var canRetryReply: Bool {
+    guard isActive, !isSending, case .available(.editable, _) = draft,
+      case .providerFailed(let input, _, _) = reply
+    else { return false }
+    return messages.last(where: { $0.role == .user })?.deliveryId == input
+  }
   public internal(set) var reply: Reply = .idle
   public var replyText: String {
     switch reply {

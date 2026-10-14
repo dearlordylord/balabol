@@ -98,6 +98,8 @@ public enum ConversationFailure: Error, Equatable, Sendable {
 }
 
 public protocol ConversationTransport: Sendable {
+  func currentTurn() async throws -> CurrentTurn?
+  func retryReply(for inputDeliveryId: UUID) async throws -> ReplySnapshot
   func send(_ delivery: PendingDelivery) async throws -> ConversationMessage
   func history(after: Int?) async throws -> HistoryPage
   func replySnapshot(for inputDeliveryId: UUID) async throws -> ReplySnapshot

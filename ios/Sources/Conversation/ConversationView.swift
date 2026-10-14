@@ -31,7 +31,12 @@
               VStack(alignment: .leading) {
                 Text("Assistant").font(.caption).foregroundStyle(.secondary)
                 if model.replyIsWaiting {
-                  Text("Preparing conversation context…").accessibilityIdentifier("reply-waiting")
+                  Text(
+                    model.state.isRetryingReply
+                      ? "Retrying reply…"
+                      : model.state.replyHasSnapshot
+                        ? "Preparing conversation context…" : "Waiting for reply…"
+                  ).accessibilityIdentifier("reply-waiting")
                 }
                 if !model.replyText.isEmpty {
                   Text(model.replyText).accessibilityIdentifier("reply-progress")
@@ -48,11 +53,23 @@
           .onChange(of: model.replyIsWaiting) { _, _ in scrollToLatest(proxy) }
         }
         if let failure = model.replyProviderFailure {
-          Text("Message saved. Reply unavailable (\(failure.code.rawValue)).")
-            .foregroundStyle(.red).accessibilityIdentifier("reply-provider-status")
+          Text(
+            failure.code == .memoryFailed || failure.code == .memoryPending
+              ? "Message saved. Conversation context couldn’t be prepared."
+              : "Message saved. Reply unavailable."
+          )
+          .foregroundStyle(.red).accessibilityIdentifier("reply-provider-status")
+        }
+        if model.canRetryReply {
+          Button("Retry reply") { Task { await model.retryReply() } }
+            .accessibilityIdentifier("retry-reply")
+        }
+        if model.state.currentFailure != nil && model.messages.isEmpty {
+          Text("Reply status unavailable. Refresh to recover.")
+            .foregroundStyle(.red).accessibilityIdentifier("current-turn-status")
         }
         if model.replyObservationFailure != nil {
-          Text("Connection lost. Refresh to recover the reply.")
+          Text("Reply status unavailable. Refresh to recover.")
             .foregroundStyle(.red).accessibilityIdentifier("reply-observation-status")
         }
         if let failure = model.deliveryFailure {

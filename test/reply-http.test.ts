@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import { HttpServer } from "effect/http"
 import { expect, it } from "vitest"
 import { parseConfig, serverLayer } from "../src/bootstrap/index.ts"
-import { Reply } from "../src/conversation/index.ts"
+import { Reply, CurrentTurn } from "../src/conversation/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 
 it("observes authoritative bounded SSE snapshots and durable completion over a real socket", async () => {
@@ -16,6 +16,10 @@ it("observes authoritative bounded SSE snapshots and durable completion over a r
         Effect.gen(function* () {
           const address = yield* HttpServer.addressFormattedWith(Effect.succeed)
           const id = "11111111-1111-4111-8111-111111111111"
+          const empty = yield* Effect.tryPromise(() =>
+            fetch(`${address}/conversation/current`).then((response) => response.json())
+          )
+          expect(empty).toBeNull()
           const missing = yield* Effect.tryPromise(() => fetch(`${address}/conversation/replies/${id}`))
           expect(missing.status).toBe(404)
           const accepted = yield* Effect.tryPromise(() =>
@@ -49,6 +53,15 @@ it("observes authoritative bounded SSE snapshots and durable completion over a r
             Effect.flatMap(Schema.decodeUnknownEffect(Reply))
           )
           expect(latest).toEqual(snapshots.at(-1))
+          const current = yield* Effect.tryPromise(() =>
+            fetch(`${address}/conversation/current`).then((response) => response.json())
+          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(CurrentTurn)))
+          expect(current?.input.deliveryId).toBe(id)
+          expect(current?.reply).toEqual(latest)
+          const retried = yield* Effect.tryPromise(() =>
+            fetch(`${address}/conversation/replies/${id}/retry`, { method: "POST" }).then((response) => response.json())
+          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Reply)))
+          expect(retried).toEqual(latest)
           const recovered = yield* Effect.tryPromise(() => fetch(`${address}/conversation/replies/${id}/events`))
           const final = yield* Effect.tryPromise(() => recovered.text())
           expect(final.trim().split("\n\n")).toHaveLength(1)

@@ -109,6 +109,10 @@ export class CoreHost {
     const snapshot = core.snapshot({ before })
     return Schema.decodeUnknownSync(PriorSnapshot)({ state: snapshot.state, text: snapshot.text })
   }
+  async retryFailed(): Promise<number> {
+    const core = await this.#ready()
+    return core.retryFailed()
+  }
   async pump(): Promise<void> {
     if (this.#state.kind !== "Ready") return
     const core = this.#state.core

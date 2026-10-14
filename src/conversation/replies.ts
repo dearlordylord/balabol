@@ -71,7 +71,7 @@ export class Replies {
   ) {}
   admit(): Effect.Effect<void, StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
-      const pending = yield* this.memory.pendingInterrupt()
+      const pending = yield* this.memory.pendingReply()
       if (pending !== undefined) yield* this.memory.append(pending)
       yield* this.#settleCompletion()
       const state = this.#state
@@ -141,18 +141,11 @@ export class Replies {
   }
   current(inputDeliveryId: string): Effect.Effect<Reply, ReplyNotFound | StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
-      if (this.#state?.inputDeliveryId === inputDeliveryId) return this.#state
+      const local = this.#local(inputDeliveryId)
+      if (local !== undefined && local.state !== "Failed") return local
       const receipt = yield* this.memory.findReply(inputDeliveryId)
-      if (receipt !== undefined)
-        return Schema.decodeUnknownSync(Reply)({
-          responseId: receipt.deliveryId,
-          inputDeliveryId,
-          sequence: maximumReplyLength + 1,
-          state: receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
-          text: receipt.text,
-          error: null,
-          receipt
-        })
+      if (receipt !== undefined) return this.#restored(receipt, inputDeliveryId)
+      if (local !== undefined) return local
       const input = yield* this.memory.find(inputDeliveryId)
       if (input?.state !== "Accepted" || input.receipt.role === "assistant")
         return yield* new ReplyNotFound({ message: "Unknown accepted input" })
@@ -162,9 +155,23 @@ export class Replies {
         sequence: 0,
         state: "Failed",
         text: "",
-        error: { code: "Restarted", message: "Reply state was lost at backend restart; send a new input" },
+        error: { code: "Restarted", message: "Reply state was lost at backend restart; retry the accepted input" },
         receipt: null
       }
+    })
+  }
+  #local(inputDeliveryId: string): Reply | undefined {
+    return this.#state?.inputDeliveryId === inputDeliveryId ? this.#state : undefined
+  }
+  #restored(receipt: Receipt, inputDeliveryId: string): Reply {
+    return Schema.decodeUnknownSync(Reply)({
+      responseId: receipt.deliveryId,
+      inputDeliveryId,
+      sequence: maximumReplyLength + 1,
+      state: receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
+      text: receipt.text,
+      error: null,
+      receipt
     })
   }
   #acceptsUpdate(previous: Reply, next: Omit<Reply, "sequence">): boolean {
@@ -179,10 +186,20 @@ export class Replies {
     if (next.state === "Completed" || next.state === "Failed") this.#phase = "Terminal"
     this.#state = Schema.decodeUnknownSync(Reply)({ ...next, sequence: previous.sequence + 1 })
   }
-  start(input: Receipt): Effect.Effect<void> {
+  retry(input: Receipt): Effect.Effect<Reply, ReplyNotFound | StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
-      if (this.#state?.inputDeliveryId === input.deliveryId) return
-      const responseId = responseIdentity(input.deliveryId)
+      yield* this.admit()
+      const existing = yield* this.current(input.deliveryId)
+      if (existing.state === "Completed" || existing.state === "Interrupted") return existing
+      yield* this.memory.retryFailed()
+      yield* this.start(input, true)
+      return yield* this.current(input.deliveryId)
+    })
+  }
+  start(input: Receipt, retry = false): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      if (!retry && this.#state?.inputDeliveryId === input.deliveryId) return
+      const responseId = retry ? randomUUID() : responseIdentity(input.deliveryId)
       const base = { responseId, inputDeliveryId: input.deliveryId }
       this.#phase = "Generating"
       this.#observer = undefined

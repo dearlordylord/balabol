@@ -57,17 +57,34 @@ export class SummaryGeneration extends Context.Service<
   SummaryGeneration,
   { summarize: (request: SummaryRequest) => Effect.Effect<string, SummaryFailed> }
 >()("balabol/summary-generation") {}
-export const fakeSummaryLayer = Layer.succeed(
-  SummaryGeneration,
-  SummaryGeneration.of({
-    summarize: (raw) =>
-      Schema.decodeUnknownEffect(SummaryRequest)(raw).pipe(
-        Effect.mapError(() => new SummaryFailed({ message: "Invalid summary request" })),
-        Effect.flatMap((request) =>
-          Schema.encodeEffect(SummaryText)(fakeSummary(request)).pipe(
-            Effect.mapError(() => new SummaryFailed({ message: "Invalid completed summary" }))
+export const FakeSummarySettings = Schema.Struct({
+  failFirstJob: Schema.Boolean,
+  delayMillis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 60000 })),
+  invalidCompletion: Schema.Boolean
+})
+export type FakeSummarySettings = typeof FakeSummarySettings.Type
+export const configurableFakeSummaryLayer = (
+  settings: FakeSummarySettings = { failFirstJob: false, delayMillis: 0, invalidCompletion: false }
+) =>
+  Layer.sync(SummaryGeneration, () => {
+    const configuration = Schema.decodeUnknownSync(FakeSummarySettings)(settings)
+    let failedJob: string | undefined
+    return SummaryGeneration.of({
+      summarize: (raw) =>
+        Schema.decodeUnknownEffect(SummaryRequest)(raw).pipe(
+          Effect.mapError(() => new SummaryFailed({ message: "Invalid summary request" })),
+          Effect.flatMap((request) =>
+            Effect.gen(function* () {
+              yield* Effect.sleep(configuration.delayMillis)
+              if (configuration.failFirstJob && failedJob === undefined) failedJob = request.jobId
+              if (configuration.failFirstJob && request.jobId === failedJob)
+                return yield* new SummaryFailed({ message: "Scripted first summary job failure" })
+              return yield* Schema.encodeEffect(SummaryText)(
+                configuration.invalidCompletion ? "" : fakeSummary(request)
+              ).pipe(Effect.mapError(() => new SummaryFailed({ message: "Invalid completed summary" })))
+            })
           )
         )
-      )
+    })
   })
-)
+export const fakeSummaryLayer = configurableFakeSummaryLayer()

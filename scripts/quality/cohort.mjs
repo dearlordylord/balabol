@@ -36,7 +36,10 @@ export const checkCohort = (root) => {
     if (installed.version !== version.replace("npm:typescript@", ""))
       throw new Error(`Cohort installed mismatch: ${name}`);
   }
-  if (manifest.pnpm?.patchedDependencies) throw new Error("Effect cohort must remain unpatched");
+  // Plain memory extensions may be patched; the entire Effect cohort remains pristine.
+  const patches = Object.keys(manifest.pnpm?.patchedDependencies ?? {});
+  if (patches.some((name) => name === "effect" || name.startsWith("effect@") || name.startsWith("@effect/")))
+    throw new Error("Effect cohort must remain unpatched");
   const shared = read(
     resolve(
       dirname(realpathSync(resolve(root, "node_modules/@effect/platform-node"))),

@@ -105,10 +105,35 @@ public struct ReplyObservation: Sendable {
 }
 
 extension ConversationTransport {
+  public func currentTurn() async throws -> CurrentTurn? { throw ConversationFailure.unavailable }
+  public func retryReply(for inputDeliveryId: UUID) async throws -> ReplySnapshot {
+    throw ConversationFailure.unavailable
+  }
   public func replySnapshot(for inputDeliveryId: UUID) async throws -> ReplySnapshot {
     throw ConversationFailure.unavailable
   }
   public func observeReply(for inputDeliveryId: UUID) async throws -> ReplyObservation {
     throw ConversationFailure.unavailable
+  }
+}
+
+/// One bounded authoritative turn, independent of transcript pagination.
+public struct CurrentTurn: Codable, Equatable, Sendable {
+  public let input: ConversationMessage
+  public let reply: ReplySnapshot
+  public var isValid: Bool {
+    input.isValid && input.role == .user && reply.isValid
+      && reply.inputDeliveryId == input.deliveryId
+      && (reply.receipt.map { $0.position > input.position } ?? true)
+  }
+  public init(input: ConversationMessage, reply: ReplySnapshot) {
+    self.input = input
+    self.reply = reply
+  }
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    input = try c.decode(ConversationMessage.self, forKey: .input)
+    reply = try c.decode(ReplySnapshot.self, forKey: .reply)
+    guard isValid else { throw ConversationFailure.invalidResponse }
   }
 }

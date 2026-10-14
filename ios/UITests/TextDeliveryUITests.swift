@@ -185,4 +185,67 @@ final class TextDeliveryUITests: XCTestCase {
     XCTAssertTrue(retained.exists)
   }
 
+  func testFailedMemoryReplyRetriesWithoutReplacingDraftAndRestoresOnRelaunch() async throws {
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
+    var probe = URLRequest(url: URL(string: "http://127.0.0.1:8788/conversation/current")!)
+    probe.timeoutInterval = 2
+    guard let (data, response) = try? await session.data(for: probe),
+      (response as? HTTPURLResponse)?.statusCode == 200,
+      let turn = try? JSONDecoder().decode(MemoryFixtureTurn.self, from: data),
+      turn.reply.state == "Failed"
+    else { throw XCTSkip("Preseed the isolated failed-summary fixture on port 8788.") }
+    let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
+    app.launch()
+    let server = app.buttons["Server"]
+    XCTAssertTrue(server.waitForExistence(timeout: 5))
+    let ready = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "enabled == true"), object: server)
+    let readiness = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
+    XCTAssertEqual(readiness, .completed)
+    server.tap()
+    let address = app.textFields["server-url"]
+    XCTAssertTrue(address.waitForExistence(timeout: 5))
+    address.tap()
+    if let current = address.value as? String {
+      address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
+    }
+    address.typeText("http://127.0.0.1:8788")
+    app.buttons["Connect"].tap()
+    let failure = app.staticTexts["reply-provider-status"]
+    XCTAssertTrue(failure.waitForExistence(timeout: 10))
+    XCTAssertEqual(failure.label, "Message saved. Conversation context couldn’t be prepared.")
+    let retry = app.buttons["retry-reply"]
+    XCTAssertTrue(retry.exists)
+    let draft = app.textFields["message-draft"]
+    draft.tap()
+    draft.typeText("Preserve my next thought")
+    retry.tap()
+    let answer = app.staticTexts.matching(
+      NSPredicate(
+        format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+        "assistant-message-", turn.input.text)
+    ).firstMatch
+    XCTAssertTrue(answer.waitForExistence(timeout: 20))
+    XCTAssertEqual(draft.value as? String, "Preserve my next thought")
+    XCTAssertFalse(retry.exists)
+    XCTAssertFalse(failure.exists)
+    let completedText = answer.label
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(answer.waitForExistence(timeout: 10))
+    XCTAssertEqual(answer.label, completedText)
+    XCTAssertEqual(app.textFields["message-draft"].value as? String, "Preserve my next thought")
+    XCTAssertFalse(app.buttons["retry-reply"].exists)
+  }
+
+}
+
+private struct MemoryFixtureTurn: Decodable {
+  struct Input: Decodable { let text: String }
+  struct Reply: Decodable { let state: String }
+  let input: Input
+  let reply: Reply
 }

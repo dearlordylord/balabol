@@ -132,9 +132,27 @@ export class SqliteStorage implements Storage {
     if (ledger === undefined || ledger.firstId === null) throw new Error("Invalid assistant ledger")
     return Schema.decodeUnknownSync(Receipt)({ ...ledger, recordId: ledger.firstId })
   }
-  pendingInterrupt(): DeliveryPayload | undefined {
+  latestInput(): Receipt | undefined {
     const row = this.database
-      .prepare("SELECT deliveryId FROM deliveries WHERE outcome='interrupted' AND firstId IS NULL LIMIT 1")
+      .prepare(
+        "SELECT deliveryId FROM deliveries WHERE role='user' AND firstId IS NOT NULL ORDER BY position DESC LIMIT 1"
+      )
+      .get()
+    if (row === undefined) return undefined
+    const id = Schema.decodeUnknownSync(Schema.Struct({ deliveryId: DeliveryId }))(row).deliveryId
+    const ledger = this.find(id)
+    if (ledger === undefined || ledger.firstId === null) throw new Error("Invalid latest input")
+    return Schema.decodeUnknownSync(Receipt)({
+      deliveryId: ledger.deliveryId,
+      text: ledger.text,
+      role: ledger.role,
+      position: ledger.position,
+      recordId: ledger.firstId
+    })
+  }
+  pendingReply(): DeliveryPayload | undefined {
+    const row = this.database
+      .prepare("SELECT deliveryId FROM deliveries WHERE role='assistant' AND firstId IS NULL LIMIT 1")
       .get()
     if (row === undefined) return undefined
     const identity = Schema.decodeUnknownSync(Schema.Struct({ deliveryId: DeliveryId }))(row)
@@ -164,6 +182,8 @@ export class SqliteStorage implements Storage {
     this.#pending = parsed
   }
   page(after: number | undefined, limit: number): readonly Receipt[] {
+    Schema.decodeUnknownSync(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })))(limit)
+    if (after !== undefined) Schema.decodeUnknownSync(Position)(after)
     const rows =
       after === undefined
         ? this.database

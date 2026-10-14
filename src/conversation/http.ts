@@ -1,7 +1,7 @@
 import { Effect, Schema, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { DeliveryId } from "../memory/index.ts"
-import { maximumPageSize, Reply } from "./contracts.ts"
+import { maximumPageSize, Reply, CurrentTurn } from "./contracts.ts"
 import type { DeliveryConflict, ReplyBusy, ReplyNotFound, StorageUnavailable } from "./contracts.ts"
 import { Conversation, ErrorResponse, InvalidInput, Message, MessagePage, PageRequest, SendMessage } from "./service.ts"
 
@@ -67,6 +67,15 @@ const reply = Effect.gen(function* () {
   const conversation = yield* Conversation
   return yield* HttpServerResponse.schemaJson(Reply)(yield* conversation.reply(id))
 })
+const currentTurn = Effect.gen(function* () {
+  const conversation = yield* Conversation
+  return yield* HttpServerResponse.schemaJson(CurrentTurn)(yield* conversation.currentTurn())
+})
+const retry = Effect.gen(function* () {
+  const id = yield* readReplyId
+  const conversation = yield* Conversation
+  return yield* HttpServerResponse.schemaJson(Reply)(yield* conversation.retryReply(id))
+})
 const cancel = Effect.gen(function* () {
   const id = yield* readReplyId
   const conversation = yield* Conversation
@@ -98,6 +107,8 @@ const events = Effect.gen(function* () {
 })
 export const conversationRoutes = HttpRouter.use(
   Effect.fn(function* (router) {
+    yield* router.add("GET", "/conversation/current", currentTurn.pipe(errors))
+    yield* router.add("POST", "/conversation/replies/:deliveryId/retry", retry.pipe(errors))
     yield* router.add("DELETE", "/conversation/replies/:deliveryId", cancel.pipe(errors))
     yield* router.add("GET", "/conversation/replies/:deliveryId", reply.pipe(errors))
     yield* router.add("GET", "/conversation/replies/:deliveryId/events", events.pipe(errors))

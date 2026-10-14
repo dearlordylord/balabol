@@ -15,6 +15,8 @@ public final class ConversationViewModel {
     [ConversationState.Request: Task<Void, Never>] = [:]
   @ObservationIgnored private var replyTask: Task<Void, Never>?
   @ObservationIgnored private var replyRequest: ConversationState.Request?
+  @ObservationIgnored private var currentTask: Task<Void, Never>?
+  @ObservationIgnored private var currentRequest: ConversationState.Request?
   @ObservationIgnored private var historyTask: Task<Void, Never>?
   @ObservationIgnored private var draftRequest: ConversationState.Request?
   @ObservationIgnored private var deliveryRequest: ConversationState.Request?
@@ -25,6 +27,7 @@ public final class ConversationViewModel {
     self.draftStore = draftStore
   }
 
+  public var canRetryReply: Bool { state.canRetryReply }
   public var replyText: String { state.replyText }
   public var replyIsWaiting: Bool { state.replyIsWaiting }
   public var isObservingReply: Bool { state.isObservingReply }
@@ -54,10 +57,16 @@ public final class ConversationViewModel {
   public func start() async {
     receive(.start)
     await flushDraft()
+    receive(.refreshCurrent)
+    if let task = currentTask { await task.value }
   }
   public func reloadDraft() async {
     receive(.recoverDraft)
     await flushDraft()
+  }
+  public func retryReply() async {
+    receive(.retryReply)
+    if let task = replyTask { await task.value }
   }
   public func editDraft(_ text: String) { receive(.edit(text)) }
   public func send() async {
@@ -74,8 +83,10 @@ public final class ConversationViewModel {
   /// One page per foreground/explicit refresh, including after an earlier EOF.
   /// Further pages remain an explicit Load more intent rather than an auto drain.
   public func refreshHistory() async {
+    receive(.refreshCurrent)
     receive(.loadHistory(refresh: true))
     if let task = historyTask { await task.value }
+    if let task = currentTask { await task.value }
     if state.isSavingDraft { await flushDraft() }
   }
   /// A foreground/background owner can await local durability without shutting
@@ -98,6 +109,40 @@ public final class ConversationViewModel {
 
   private func execute(_ command: ConversationCommand) {
     switch command {
+    case .current(let request):
+      let transport = transport
+      currentRequest = request
+      currentTask = Task { [weak self] in
+        let result: Result<CurrentTurn?, ConversationFailure>
+        do { result = .success(try await transport.currentTurn()) } catch let error
+          as ConversationFailure
+        {
+          result = .failure(error)
+        } catch { result = .failure(.unavailable) }
+        guard let self, self.currentRequest == request else { return }
+        self.currentTask = nil
+        self.currentRequest = nil
+        self.receive(.currentLoaded(request, result))
+      }
+    case .retryReply(let request, let input):
+      let transport = transport
+      replyRequest = request
+      replyTask = Task { [weak self] in
+        let result: Result<ReplySnapshot, ConversationFailure>
+        do { result = .success(try await transport.retryReply(for: input)) } catch let error
+          as ConversationFailure
+        {
+          result = .failure(error)
+        } catch { result = .failure(.unavailable) }
+        guard let self, self.replyRequest == request else { return }
+        self.replyTask = nil
+        self.replyRequest = nil
+        self.receive(.retryLoaded(request, result))
+      }
+    case .cancelCurrent:
+      currentTask?.cancel()
+      currentTask = nil
+      currentRequest = nil
     case .loadDraft(let request):
       let store = draftStore
       draftRequest = request

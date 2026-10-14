@@ -4,6 +4,10 @@ import Foundation
 /// Commands describe work; they do not execute it or acquire resources here.
 enum ConversationEvent {
   case start
+  case refreshCurrent
+  case retryReply
+  case currentLoaded(ConversationState.Request, Result<CurrentTurn?, ConversationFailure>)
+  case retryLoaded(ConversationState.Request, Result<ReplySnapshot, ConversationFailure>)
   case recoverDraft
   case edit(String)
   case send(UUID)
@@ -21,6 +25,9 @@ enum ConversationEvent {
 }
 
 enum ConversationCommand {
+  case current(ConversationState.Request)
+  case retryReply(ConversationState.Request, UUID)
+  case cancelCurrent
   case loadDraft(ConversationState.Request)
   case saveDraft(ConversationState.Request, SavedDraft)
   case send(ConversationState.Request, PendingDelivery)
@@ -41,6 +48,64 @@ extension ConversationState {
       let request = request()
       draft = .loading(request, previous: nil)
       return [.loadDraft(request)]
+    case .refreshCurrent:
+      guard isActive, !isSending, replyRetryRequest == nil, currentRequest == nil else { return [] }
+      let request = request()
+      currentRequest = request
+      return [.current(request)]
+    case .currentLoaded(let request, let result):
+      guard isActive, currentRequest == request else { return [] }
+      currentRequest = nil
+      switch result {
+      case .failure(let error):
+        currentFailure = error
+        return []
+      case .success(nil):
+        currentFailure = nil
+        return []
+      case .success(.some(let turn)):
+        guard turn.isValid, merge([turn.input]) else {
+          currentFailure = .invalidResponse
+          return []
+        }
+        currentFailure = nil
+        let reconciliation = draft.content.flatMap { reconcilePending($0) } ?? []
+        guard case .available(.editable, _) = draft, !isSending,
+          messages.last(where: { $0.role == .user })?.deliveryId == turn.input.deliveryId
+        else { return reconciliation }
+        if case .observing(let existing, let input, _) = reply,
+          input == turn.input.deliveryId
+        {
+          return reconciliation + receiveReply(existing, turn.reply)
+        }
+        let observation = self.request()
+        reply = .observing(observation, inputDeliveryId: turn.input.deliveryId, latest: nil)
+        let terminalCommands = receiveReply(observation, turn.reply)
+        return reconciliation + [.cancelReply] + terminalCommands
+          + (turn.reply.isTerminal ? [] : [.observeReply(observation, turn.input.deliveryId)])
+      }
+    case .retryReply:
+      guard canRetryReply, case .providerFailed(let input, _, _) = reply else { return [] }
+      currentRequest = nil
+      let request = request()
+      replyRetryRequest = request
+      reply = .observing(request, inputDeliveryId: input, latest: nil)
+      return [.cancelCurrent, .cancelReply, .retryReply(request, input)]
+    case .retryLoaded(let request, let result):
+      guard isActive, case .observing(let expected, let input, _) = reply,
+        expected == request
+      else { return [] }
+      replyRetryRequest = nil
+      switch result {
+      case .failure(let error):
+        reply = .observationFailed(inputDeliveryId: input, latest: nil, error)
+        return []
+      case .success(let snapshot):
+        let commands = receiveReply(request, snapshot)
+        return commands
+          + (snapshot.isTerminal || replyObservationFailure != nil
+            ? [] : [.observeReply(request, input)])
+      }
     case .recoverDraft:
       guard isActive, case .blocked(let previous, _) = draft else { return [] }
       if let previous {
@@ -67,6 +132,8 @@ extension ConversationState {
       // Invalidate queued old snapshots immediately. Keep its transport attached
       // until POST decides interruption, so disconnect cannot race acceptance.
       if case .observing(_, let input, _) = reply { interruptedInput = input }
+      currentRequest = nil
+      replyRetryRequest = nil
       reply = .idle
       delivery = .waitingCheckpoint(pending)
       if content.pending != nil, persistence == .clean { return beginSend(pending) }
@@ -167,6 +234,8 @@ extension ConversationState {
       if case .active(let generation) = connection {
         connection = .stopping(generation: generation + 1)
       }
+      currentRequest = nil
+      replyRetryRequest = nil
       history = .idle
       if case .observing(_, let input, let latest) = reply {
         reply = .observationFailed(inputDeliveryId: input, latest: latest, .unavailable)
@@ -178,7 +247,9 @@ extension ConversationState {
       }
       if case .loading = draft { draft = .unloaded }
       interruptionRecoveries.removeAll()
-      return [.cancelSend, .cancelHistory, .cancelReply, .cancelInterruptionRecoveries]
+      return [
+        .cancelCurrent, .cancelSend, .cancelHistory, .cancelReply, .cancelInterruptionRecoveries,
+      ]
     case .drained:
       guard case .stopping = connection else { return [] }
       connection = .stopped
@@ -246,7 +317,7 @@ extension ConversationState {
   private mutating func beginSend(_ pending: PendingDelivery) -> [ConversationCommand] {
     let request = request()
     delivery = .sending(request, pending)
-    return [.send(request, pending)]
+    return [.cancelCurrent, .send(request, pending)]
   }
 
   private mutating func finishHistory(
@@ -358,7 +429,9 @@ extension ConversationState {
   /// POST and recovered history acknowledgements share the same observer handoff.
   /// Already durable assistant evidence needs no subscription or regeneration.
   private mutating func followAcceptedInput(_ input: UUID) -> [ConversationCommand] {
-    guard isActive else { return [] }
+    guard isActive,
+      messages.last(where: { $0.role == .user })?.deliveryId == input
+    else { return [] }
     var recoveryCommands: [ConversationCommand] = []
     if let interruptedInput {
       let recovery = request()

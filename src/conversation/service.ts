@@ -3,19 +3,21 @@ import { defaultReplySettings, Replies, ReplyConfiguration } from "./replies.ts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { DeliveryId, Memory } from "../memory/index.ts"
 import {
+  type CurrentTurn,
+  ReplyBusy,
   InvalidInput,
   SendMessage,
   DeliveryConflict,
   type Reply,
-  type ReplyBusy,
   type ReplyNotFound,
   type Message,
   type MessagePage,
-  type PageRequest,
+  PageRequest,
   type StorageUnavailable
 } from "./contracts.ts"
 
 export {
+  CurrentTurn,
   ReplyNotFound,
   ReplyBusy,
   Reply,
@@ -38,6 +40,8 @@ const assertIdentity = (payload: { text: string; role?: "user" | "assistant" } |
 export class Conversation extends Context.Service<
   Conversation,
   {
+    currentTurn: () => Effect.Effect<CurrentTurn, ReplyNotFound | StorageUnavailable>
+    retryReply: (id: string) => Effect.Effect<Reply, ReplyBusy | ReplyNotFound | StorageUnavailable | InvalidInput>
     observeReply: (inputDeliveryId: string) => Effect.Effect<string, ReplyNotFound | StorageUnavailable | InvalidInput>
     releaseReply: (inputDeliveryId: string, token: string) => Effect.Effect<void, InvalidInput>
     reply: (inputDeliveryId: string) => Effect.Effect<Reply, ReplyNotFound | StorageUnavailable | InvalidInput>
@@ -45,7 +49,7 @@ export class Conversation extends Context.Service<
     send: (
       message: SendMessage
     ) => Effect.Effect<Message, DeliveryConflict | ReplyBusy | StorageUnavailable | InvalidInput>
-    page: (request: PageRequest) => Effect.Effect<MessagePage, StorageUnavailable>
+    page: (request: PageRequest) => Effect.Effect<MessagePage, StorageUnavailable | InvalidInput>
   }
 >()("balabol/conversation") {
   static readonly configuredLayer = Layer.effect(
@@ -72,14 +76,36 @@ export class Conversation extends Context.Service<
         semaphore.withPermits(1),
         Effect.uninterruptible
       )
-      const page = Effect.fn("Conversation.page")(function* (request: PageRequest) {
+      const page = Effect.fn("Conversation.page")(function* (raw: PageRequest) {
+        const request = yield* Schema.decodeUnknownEffect(PageRequest)(raw).pipe(Effect.mapError(invalidIdentity))
         const messages = yield* memory.page(request.after, request.limit)
         return {
           messages,
           nextAfter: messages.length === request.limit ? (messages[messages.length - 1]?.position ?? null) : null
         }
       })
+      const currentTurn = Effect.gen(function* () {
+        const input = yield* memory.latestInput()
+        return input === undefined ? null : { input, reply: yield* replies.current(input.deliveryId) }
+      }).pipe(semaphore.withPermits(1))
+      const retryReply = (id: string) =>
+        parseId(id).pipe(
+          Effect.flatMap((parsed) =>
+            Effect.gen(function* () {
+              const input = yield* memory.latestInput()
+              if (input?.deliveryId !== parsed)
+                return yield* new ReplyBusy({ message: "Only the latest accepted input can be retried" })
+              const state = yield* replies.current(parsed)
+              if (state.state !== "Failed") return state
+              return yield* replies.retry(input)
+            })
+          ),
+          semaphore.withPermits(1),
+          Effect.uninterruptible
+        )
       return Conversation.of({
+        currentTurn: () => currentTurn,
+        retryReply,
         observeReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.observe(parsed))),
         releaseReply: (id, token) => parseId(id).pipe(Effect.flatMap((parsed) => replies.release(parsed, token))),
         page,

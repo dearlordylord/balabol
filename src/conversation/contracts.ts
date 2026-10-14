@@ -96,3 +96,6 @@ export type Reply = typeof Reply.Type
 export class ReplyBusy extends Schema.TaggedError<ReplyBusy>()("ReplyBusy", { message: Schema.String }) {}
 
 export class ReplyNotFound extends Schema.TaggedError<ReplyNotFound>()("ReplyNotFound", { message: Schema.String }) {}
+
+export const CurrentTurn = Schema.NullOr(Schema.Struct({ input: Message, reply: Reply }))
+export type CurrentTurn = typeof CurrentTurn.Type

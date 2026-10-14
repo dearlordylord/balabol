@@ -64,7 +64,10 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "dprint"
-    ]
+    ],
+    "patchedDependencies": {
+      "@firfi/unii@0.1.0": "patches/@firfi__unii@0.1.0.patch"
+    }
   },
   "dependencies": {
     "@firfi/unii": "0.1.0"

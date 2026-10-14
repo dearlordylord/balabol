@@ -16,18 +16,22 @@ import { welcomeRoutes } from "./welcome.ts"
 import { configuredUniiLayer, sqliteLayer, MemorySettings, defaultMemorySettings } from "../memory/index.ts"
 
 import { fakeAnswerLayer } from "../answer-generation/index.ts"
-import { fakeSummaryLayer } from "../summary-generation/index.ts"
+import { FakeSummarySettings, configurableFakeSummaryLayer } from "../summary-generation/index.ts"
 export const conversationLayer = (
   path: string,
   settings: ReplySettings = defaultReplySettings,
-  memorySettings: MemorySettings = defaultMemorySettings
+  memorySettings: MemorySettings = defaultMemorySettings,
+  summarySettings?: FakeSummarySettings
 ) =>
   Conversation.configuredLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
         fakeAnswerLayer(settings.deltaMillis),
         Layer.succeed(ReplyConfiguration, settings),
-        configuredUniiLayer(memorySettings).pipe(Layer.provide(fakeSummaryLayer), Layer.provide(sqliteLayer(path)))
+        configuredUniiLayer(memorySettings).pipe(
+          Layer.provide(configurableFakeSummaryLayer(summarySettings)),
+          Layer.provide(sqliteLayer(path))
+        )
       )
     )
   )
@@ -37,6 +41,7 @@ export const ServerConfig = Schema.Struct({
   port: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(maximumPort)),
   database: Schema.String.check(Schema.isMinLength(1)),
   memory: Schema.optionalKey(MemorySettings),
+  fakeSummary: Schema.optionalKey(FakeSummarySettings),
   reply: Schema.optionalKey(ReplySettings)
 })
 export type ServerConfig = typeof ServerConfig.Type
@@ -60,11 +65,16 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
       summaryModel: environment.BALABOL_SUMMARY_MODEL ?? "luna",
       summaryConcurrency: Number(environment.BALABOL_SUMMARY_CONCURRENCY ?? "1")
     },
+    fakeSummary: {
+      failFirstJob: environment.BALABOL_FAKE_SUMMARY_FAIL_FIRST_JOB === "true",
+      delayMillis: Number(environment.BALABOL_FAKE_SUMMARY_DELAY_MILLIS ?? "0"),
+      invalidCompletion: environment.BALABOL_FAKE_SUMMARY_INVALID === "true"
+    },
     reply: { ...providerSelection(environment), ...replyTiming(environment) }
   })
 export const serverLayer = (config: ServerConfig) =>
   HttpRouter.serve(Layer.merge(conversationRoutes, welcomeRoutes)).pipe(
-    Layer.provide(conversationLayer(config.database, config.reply, config.memory)),
+    Layer.provide(conversationLayer(config.database, config.reply, config.memory, config.fakeSummary)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { host: config.host, port: config.port }))
   )
 export const prepareDataDirectory = (config: ServerConfig) =>

@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { AnswerGeneration, AnswerRequest, fakeAnswerLayer } from "../src/answer-generation/index.ts"
-import { SummaryGeneration, fakeSummaryLayer } from "../src/summary-generation/index.ts"
+import { SummaryGeneration, fakeSummaryLayer, configurableFakeSummaryLayer } from "../src/summary-generation/index.ts"
 
 const answerRequest: AnswerRequest = {
   model: "sol",
@@ -100,4 +100,34 @@ it.effect("produces one complete bounded summary of a real unii request and reje
       "Failure"
     )
   }).pipe(Effect.provide(fakeSummaryLayer))
+)
+
+it.effect("rejects invalid completed fake summaries and cancels delayed summary work", () =>
+  Effect.gen(function* () {
+    const summary = yield* SummaryGeneration
+    const request = {
+      model: "luna",
+      jobId: "job",
+      attemptId: "job:1",
+      attempt: 1,
+      node: { level: 0, index: 0 },
+      source: "source",
+      context: "",
+      priorResponses: [],
+      feedback: null
+    }
+    const task = yield* Effect.forkChild(summary.summarize(request))
+    yield* TestClock.adjust(10)
+    yield* Fiber.interrupt(task)
+    yield* TestClock.adjust(1000)
+    const cancelled = yield* Fiber.await(task)
+    expect(Exit.isFailure(cancelled)).toBe(true)
+    const invalid = yield* Effect.forkChild(summary.summarize({ ...request, jobId: "next" }).pipe(Effect.result))
+    yield* TestClock.adjust(1000)
+    const result = yield* Fiber.join(invalid)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") expect(result.failure._tag).toBe("SummaryFailed")
+  }).pipe(
+    Effect.provide(configurableFakeSummaryLayer({ failFirstJob: false, delayMillis: 100, invalidCompletion: true }))
+  )
 )

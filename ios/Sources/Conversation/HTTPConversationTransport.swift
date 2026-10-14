@@ -16,6 +16,18 @@ public struct HTTPConversationTransport: ConversationTransport {
     self.baseURL = baseURL
     self.session = session
   }
+  public func currentTurn() async throws -> CurrentTurn? {
+    var request = URLRequest(url: baseURL.appendingPathComponent("conversation/current"))
+    request.timeoutInterval = 15
+    return try await execute(request, as: CurrentTurn?.self)
+  }
+  public func retryReply(for inputDeliveryId: UUID) async throws -> ReplySnapshot {
+    var request = URLRequest(url: baseURL.appendingPathComponent(
+      "conversation/replies/" + inputDeliveryId.uuidString + "/retry"))
+    request.httpMethod = "POST"
+    request.timeoutInterval = 15
+    return try await execute(request, as: ReplySnapshot.self)
+  }
   public func send(_ delivery: PendingDelivery) async throws -> ConversationMessage {
     guard !delivery.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw ConversationFailure.invalidInput

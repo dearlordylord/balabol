@@ -410,6 +410,29 @@ test("cohort detects a declared version drift", () =>
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Cohort manifest mismatch/);
   }));
+test("cohort allows a plain memory patch while rejecting every Effect patch", () => {
+  configured({}, (root) => {
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    manifest.pnpm.patchedDependencies = { "@firfi/unii@0.1.0": "patches/unii.patch" };
+    writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+    let result = run(root, "cohort");
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    for (const dependency of [
+      "effect",
+      "effect@4.0.0",
+      "@effect/platform-node@4.0.0",
+      "@effect/platform-node-shared@4.0.0",
+      "@effect/tsgo@0.36.4",
+    ]) {
+      manifest.pnpm.patchedDependencies[dependency] = "patches/forbidden.patch";
+      writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+      result = run(root, "cohort");
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Effect cohort must remain unpatched/);
+      delete manifest.pnpm.patchedDependencies[dependency];
+    }
+  });
+});
 test("CLI rejects unknown gates instead of accepting object prototype names", () =>
   assertGate({}, "toString", false, /Unknown quality gate/));
 

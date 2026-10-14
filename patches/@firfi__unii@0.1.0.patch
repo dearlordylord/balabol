@@ -1,0 +1,40 @@
+diff --git a/dist/memory.d.ts b/dist/memory.d.ts
+index 66857b8a05dc5318d95e402fe09861e1f3d056c1..54aa5c3ad8d1236d5aec7bf925927f2d23f13b7e 100644
+--- a/dist/memory.d.ts
++++ b/dist/memory.d.ts
+@@ -32,6 +32,8 @@ export declare class Memory {
+         pages: number;
+     };
+     date(id: number): string;
++    /** Requeue at most limit failed nodes without changing records or starting provider I/O. */
++    retryFailed(limit?: number): number;
+     /** Schedule work without waiting for provider I/O. No autonomous retry timers. */
+     step(): void;
+     /** Wait for all currently schedulable tree work, or expose terminal failures. */
+diff --git a/dist/memory.js b/dist/memory.js
+index c5260305eef477d92851c91822d1385d961a346f..daf8d604078f891c0c609588c9a382af75e02522 100644
+--- a/dist/memory.js
++++ b/dist/memory.js
+@@ -242,6 +242,22 @@ export class Memory {
+     }
+     date(id) { this.#check(); if (!Number.isSafeInteger(id) || id < 0 || !this.#records[id])
+         throw new Error('Invalid record ID'); return this.#records[id].date; }
++    /** Requeue at most limit failed nodes without changing records or starting provider I/O. */
++    retryFailed(limit = this.#policy.concurrency) {
++        this.#check();
++        if (!Number.isSafeInteger(limit) || limit <= 0 || limit > this.#policy.concurrency)
++            throw new Error('Invalid retry limit');
++        let count = 0;
++        for (const id of this.#failed.keys()) {
++            if (count === limit)
++                break;
++            this.#failed.delete(id);
++            count++;
++        }
++        if (count)
++            this.#event('retry-eligible', { count });
++        return count;
++    }
+     /** Schedule work without waiting for provider I/O. No autonomous retry timers. */
+     step() {
+         this.#check();

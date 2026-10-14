@@ -7,13 +7,18 @@ settings:
 overrides:
   '@effect/platform-node-shared': 4.0.0
 
+patchedDependencies:
+  '@firfi/unii@0.1.0':
+    hash: 1156910918654ce37afd18053355db9c946673a5d15fdc202c1e9ab8b18e50c1
+    path: patches/@firfi__unii@0.1.0.patch
+
 importers:
 
   .:
     dependencies:
       '@firfi/unii':
         specifier: 0.1.0
-        version: 0.1.0
+        version: 0.1.0(patch_hash=1156910918654ce37afd18053355db9c946673a5d15fdc202c1e9ab8b18e50c1)
     devDependencies:
       '@crap4ts/crap4ts':
         specifier: 1.1.0
@@ -2037,7 +2042,7 @@ snapshots:
   '@esbuild/win32-x64@0.27.2':
     optional: true
 
-  '@firfi/unii@0.1.0': {}
+  '@firfi/unii@0.1.0(patch_hash=1156910918654ce37afd18053355db9c946673a5d15fdc202c1e9ab8b18e50c1)': {}
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
