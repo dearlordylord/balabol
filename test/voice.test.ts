@@ -1,10 +1,12 @@
+import { voiceAdmissionsFixture, startVoiceRequest } from "./voice-admission-fixture.ts"
 import { Effect, Layer } from "effect"
 import { describe, expect, it } from "vitest"
 import { Voice } from "../src/voice/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
-import { conversationLayer } from "../src/bootstrap/index.ts"
+import { replyLayer } from "./reply-fixture.ts"
+import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
 const script = (text: string, delayMillis = 0) =>
@@ -27,9 +29,17 @@ const runVoice = async (
 ) => {
   const database = await temporaryDatabase()
   const fixture = voiceTransportFixture()
-  const conversation = conversationLayer(database.path)
+  const conversation = replyLayer(database.path, fakeAnswerLayer())
   const voice = Voice.layer.pipe(
-    Layer.provide(Layer.mergeAll(conversation, fixture.layer, provider, fakeSynthesisLayer()))
+    Layer.provide(
+      Layer.mergeAll(
+        conversation,
+        fixture.layer,
+        provider,
+        fakeSynthesisLayer(),
+        voiceAdmissionsFixture().pipe(Layer.provide(conversation))
+      )
+    )
   )
   try {
     await Effect.runPromise(Effect.scoped(program(fixture)).pipe(Effect.provide(Layer.merge(voice, conversation))))
@@ -44,10 +54,10 @@ describe("voice input uses the sole durable conversation", () => {
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
-        const joined = yield* voice.start()
+        const joined = yield* voice.start(startVoiceRequest())
         yield* voice.authorize(joined.sessionId, joined.controlToken)
         expect((yield* Effect.flip(voice.authorize(joined.sessionId, "wrong"))).code).toBe("Unauthorized")
-        expect((yield* Effect.flip(voice.start())).code).toBe("VoiceBusy")
+        expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("VoiceBusy")
         yield* fixture.segment
         yield* settle
         const snapshot = yield* voice.snapshot(joined.sessionId, 0)
@@ -70,7 +80,7 @@ describe("voice input uses the sole durable conversation", () => {
         Effect.gen(function* () {
           const voice = yield* Voice
           const conversation = yield* Conversation
-          const joined = yield* voice.start()
+          const joined = yield* voice.start(startVoiceRequest())
           yield* fixture.send(fixture.audio(0))
           yield* fixture.send({ ...fixture.audio(1000), channels: 2 })
           yield* fixture.segment
@@ -91,7 +101,7 @@ describe("voice input uses the sole durable conversation", () => {
         Effect.gen(function* () {
           const voice = yield* Voice
           const conversation = yield* Conversation
-          const joined = yield* voice.start()
+          const joined = yield* voice.start(startVoiceRequest())
           yield* fixture.segment
           yield* voice.mute(joined.sessionId, true)
           yield* fixture.segment
@@ -110,16 +120,16 @@ it("bounds pending recognition and retains only two recent session controls", ()
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
-        const first = yield* voice.start()
+        const first = yield* voice.start(startVoiceRequest())
         yield* fixture.segment
         yield* fixture.segment
         yield* fixture.segment
         const overloaded = yield* voice.snapshot(first.sessionId, 0)
         expect(overloaded.events.some((event) => event.kind === "Error" && event.code === "Overloaded")).toBe(true)
         yield* voice.end(first.sessionId)
-        const second = yield* voice.start()
+        const second = yield* voice.start(startVoiceRequest())
         yield* voice.end(second.sessionId)
-        const third = yield* voice.start()
+        const third = yield* voice.start(startVoiceRequest())
         expect(third.sessionId).not.toBe(first.sessionId)
         expect((yield* Effect.flip(voice.snapshot(first.sessionId, 0))).code).toBe("SessionNotFound")
         yield* voice.end(third.sessionId)
@@ -133,7 +143,7 @@ it("reports deterministic recognition failures without saving an input", () =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
-        const session = yield* voice.start()
+        const session = yield* voice.start(startVoiceRequest())
         yield* fixture.segment
         yield* settle
         expect(

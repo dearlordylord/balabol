@@ -34,23 +34,30 @@
               Text("Saving: \(text)").accessibilityIdentifier("voice-saving")
             case .checking(_, let text):
               Text("Checking whether saved: \(text)").accessibilityIdentifier("voice-checking")
-            case .failed(let text, _): Text("Not saved: \(text)").foregroundStyle(.red)
+            case .failed(let text, _):
+              Text("Please repeat the speech: \(text)").foregroundStyle(.red)
             case .saved: Text("Voice message saved").accessibilityIdentifier("voice-saved")
             }
           }
+        }
+        if model.state.admissionFailure != nil && model.state.hasPendingAdmission {
+          Text("Unable to check whether previous speech was saved")
+            .foregroundStyle(.secondary).accessibilityIdentifier("voice-admission-unavailable")
         }
         HStack {
           if model.state.canStart {
             Button(model.state.capture == .idle ? "Start voice" : "Try again") { model.start() }
               .accessibilityIdentifier("start-voice")
           }
-          if model.state.capture == .listening || model.state.capture == .muted {
-            Button(model.state.capture == .muted ? "Unmute" : "Mute") { model.toggleMute() }
+          if model.state.wantsListening {
+            Button(model.state.wantsMuted ? "Unmute" : "Mute") { model.toggleMute() }
               .accessibilityIdentifier("mute-voice")
               .disabled(model.state.isChangingMute)
           }
-          if [.requestingMicrophone, .connecting, .listening, .muted].contains(model.state.capture)
-          {
+          if [
+            .requestingMicrophone, .connecting, .reconnecting, .hostUnavailable,
+            .checkingPreviousSpeech, .listening, .muted,
+          ].contains(model.state.capture) {
             Button("End") { model.end() }.accessibilityIdentifier("end-voice")
           }
           if model.state.capture == .failed(.permissionDenied) {
@@ -64,13 +71,22 @@
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal)
+      .task { await model.restore() }
     }
     private var status: String {
+      if model.state.hasPendingAdmission && model.state.wantsListening,
+        [.hostUnavailable, .reconnecting, .checkingPreviousSpeech].contains(model.state.capture)
+      {
+        return "Checking previous speech…"
+      }
       if model.state.isChangingMute { return "Changing microphone…" }
       return switch model.state.capture {
       case .idle: "Voice is off"
       case .requestingMicrophone: "Requesting microphone…"
       case .connecting: "Connecting microphone…"
+      case .reconnecting: "Reconnecting…"
+      case .hostUnavailable: "Host unavailable · reconnecting…"
+      case .checkingPreviousSpeech: "Checking previous speech…"
       case .listening: "Listening"
       case .muted: "Microphone muted"
       case .ending: "Ending voice…"

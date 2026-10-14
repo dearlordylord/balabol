@@ -87,7 +87,8 @@ private struct ConversationRoot: View {
         if model != nil {
           Button("Server") {
             Task {
-              guard let current = model, current.canSwitchServer, voice?.state.canStart != false
+              guard let current = model, current.canSwitchServer,
+                voice?.state.canSwitchServer != false
               else { return }
               await voice?.shutdown()
               voice = nil
@@ -97,7 +98,7 @@ private struct ConversationRoot: View {
               model = nil
             }
           }
-          .disabled(model?.canSwitchServer != true || voice?.state.canStart == false)
+          .disabled(model?.canSwitchServer != true || voice?.state.canSwitchServer == false)
         }
       }
     }
@@ -149,8 +150,17 @@ private struct ConversationRoot: View {
         transport: transport, draftStore: draftStore,
         inputIntent: { id in inputRelay.send(id) })
       let control = try HTTPVoiceControl(baseURL: url, session: candidate)
+      let checkpointDirectory = localState.draftURL(in: directory).deletingLastPathComponent()
+      let checkpoint = try FileVoiceAdmissionCheckpoint(
+        url: FileVoiceAdmissionCheckpoint.fileURL(in: checkpointDirectory, controlOrigin: url),
+        controlOrigin: url)
       voice = VoiceViewModel(
-        control: control, media: LiveKitVoiceMedia(evidenceEnabled: localState.testNamespace != nil)
+        control: control,
+        media: LiveKitVoiceMedia(evidenceEnabled: localState.testNamespace != nil),
+        checkpoint: checkpoint,
+        refreshConversation: { [weak conversation] in
+          conversation?.refreshReconnectDisplay()
+        }
       ) {
         [weak conversation] receipt in
         conversation?.acceptVoiceReceipt(receipt)

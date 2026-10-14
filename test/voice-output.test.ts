@@ -1,3 +1,4 @@
+import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { Effect, Layer, Stream } from "effect"
 import { expect, it } from "vitest"
 import { SpeechSynthesis, fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
@@ -12,7 +13,7 @@ it("starts no reply PCM before exact publication readiness and settles durable o
     Effect.gen(function* () {
       const voice = yield* Voice
       const conversation = yield* Conversation
-      const join = yield* voice.start()
+      const join = yield* voice.start(startVoiceRequest())
       yield* conversation.send(outputInput)
       const waiting = yield* waitForOutput(voice, join.sessionId, "AwaitingReady")
       const output = waiting.output
@@ -47,7 +48,7 @@ it("speech onset fences audio before final recognition and empty recognition can
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
-        const join = yield* voice.start()
+        const join = yield* voice.start(startVoiceRequest())
         yield* conversation.send(outputInput)
         const waiting = yield* waitForOutput(voice, join.sessionId, "AwaitingReady")
         const output = waiting.output
@@ -107,7 +108,7 @@ it("keeps an emoji whole at the phrase bound without dropping ordered reply text
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
-        const join = yield* voice.start()
+        const join = yield* voice.start(startVoiceRequest())
         yield* conversation.send(outputInput)
         const waiting = yield* waitForOutput(voice, join.sessionId, "AwaitingReady")
         const output = waiting.output
@@ -130,7 +131,7 @@ it("a text send fences the old epoch and stale controls cannot interrupt the new
     Effect.gen(function* () {
       const voice = yield* Voice
       const conversation = yield* Conversation
-      const join = yield* voice.start()
+      const join = yield* voice.start(startVoiceRequest())
       yield* conversation.send(outputInput)
       const first = (yield* waitForOutput(voice, join.sessionId, "AwaitingReady")).output
       if (first?.manifest == null) throw new Error("Missing first publication")
@@ -175,7 +176,7 @@ it("joining voice never attaches audio to a reply that already started", () =>
       const conversation = yield* Conversation
       yield* conversation.send(outputInput)
       yield* conversation.observeReply(outputInput.deliveryId)
-      const join = yield* voice.start()
+      const join = yield* voice.start(startVoiceRequest())
       yield* Effect.sleep(100)
       expect((yield* voice.snapshot(join.sessionId, 0)).output).toBeNull()
       expect(transport.captured).toEqual([])

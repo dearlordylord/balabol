@@ -154,6 +154,121 @@ final class VoiceCaptureUITests: XCTestCase {
     XCTAssertTrue(visible)
   }
 
+  func testRealSDKBackendRestartPreservesMutedIntentDraftAndInterruptedReceipt() async throws {
+    let app = try await launchVoiceFixture(test: self)
+    defer { app.terminate() }
+    app.buttons["start-voice"].tap()
+    guard await handleMicrophonePermission(app, test: self) else { return }
+    let status = app.staticTexts["voice-status"]
+    let listening = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Listening"), object: status)
+    guard await XCTWaiter.fulfillment(of: [listening], timeout: 30) == .completed else {
+      XCTFail("Real SDK microphone did not publish before restart test")
+      return
+    }
+    app.buttons["mute-voice"].tap()
+    let muted = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Microphone muted"), object: status)
+    guard await XCTWaiter.fulfillment(of: [muted], timeout: 10) == .completed else {
+      XCTFail("Capture must be muted before fixture playback")
+      return
+    }
+    let draft = app.textFields["message-draft"]
+    let suffix = String(UUID().uuidString.prefix(8))
+    let sent = "Restart fixture " + suffix
+    let unsent = "Keep " + suffix
+    draft.tap()
+    draft.typeText(sent)
+    app.buttons["send-message"].tap()
+    let playing = app.staticTexts["voice-output-playing"]
+    guard playing.waitForExistence(timeout: 20) else {
+      XCTFail("Real subscribed SDK fixture PCM did not reach Playing")
+      return
+    }
+    let prior = try await currentVoiceFixtureTurn()
+    XCTAssertEqual(prior.input.text, sent)
+    let response = try XCTUnwrap(prior.reply?.responseId)
+    draft.tap()
+    draft.typeText(unsent)
+    XCTAssertEqual(draft.value as? String, unsent)
+    XCTAssertEqual(status.label, "Microphone muted")
+    guard playing.exists else {
+      XCTFail("Fixture playback ended before the controlled restart marker")
+      return
+    }
+    let logger = os.Logger(subsystem: "app.balabol.voice.evidence", category: "restart-sync")
+    logger.notice(
+      "backend restart ready response=\(response.uuidString, privacy: .public) input=\(prior.input.deliveryId.uuidString, privacy: .public)"
+    )
+    // The external driver retires only its owned backend listener, waits four
+    // seconds, and restarts the same fixture database. No source or audio is injected.
+    let reconnecting = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label CONTAINS[c] %@", "reconnect"), object: status)
+    guard await XCTWaiter.fulfillment(of: [reconnecting], timeout: 20) == .completed else {
+      XCTFail("Backend outage did not enter the owned reconnect lifecycle")
+      return
+    }
+    XCTAssertEqual(draft.value as? String, unsent)
+    XCTAssertFalse(playing.exists)
+    let restoredMute = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Microphone muted"), object: status)
+    guard await XCTWaiter.fulfillment(of: [restoredMute], timeout: 45) == .completed else {
+      XCTFail("Fresh SDK room did not restore muted user intent: " + status.label)
+      return
+    }
+    XCTAssertEqual(app.buttons["mute-voice"].label, "Unmute")
+    XCTAssertEqual(draft.value as? String, unsent)
+    XCTAssertFalse(playing.exists)
+    logger.notice("backend restart reconnected response=\(response.uuidString, privacy: .public)")
+    try await Task.sleep(for: .milliseconds(750))
+    XCTAssertEqual(status.label, "Microphone muted")
+    XCTAssertFalse(playing.exists)
+    // Existing INFO control-route evidence identifies distinct old/new room
+    // sessions; the UI exposes intent and actual connection, never capabilities.
+    let interrupted = try await interruptedVoiceFixtureReply(input: prior.input.deliveryId)
+    XCTAssertEqual(interrupted.responseId, response)
+    XCTAssertEqual(interrupted.state, "Interrupted")
+    let receipt = try XCTUnwrap(interrupted.receipt)
+    XCTAssertEqual(receipt.deliveryId, response)
+    XCTAssertEqual(receipt.responseId, response)
+    XCTAssertEqual(receipt.inputDeliveryId, prior.input.deliveryId)
+    XCTAssertEqual(receipt.role, "assistant")
+    XCTAssertEqual(receipt.outcome, "interrupted")
+    let current = try await currentVoiceFixtureTurn()
+    XCTAssertEqual(current.input.deliveryId, prior.input.deliveryId)
+    let tail = try await voiceFixtureHistory(after: prior.input.position)
+    XCTAssertNil(tail.nextAfter)
+    XCTAssertEqual(tail.messages.filter { $0.role == "user" }.count, 0)
+    XCTAssertEqual(tail.messages.filter { $0.deliveryId == response }.count, 1)
+    app.buttons["end-voice"].tap()
+    let ended = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Voice ended"), object: status)
+    let endResult = await XCTWaiter.fulfillment(of: [ended], timeout: 10)
+    XCTAssertEqual(endResult, .completed)
+    XCTAssertEqual(draft.value as? String, unsent)
+    let visibleBeforeRelaunch = await revealInterruptedReceipt(
+      app, position: receipt.position, test: self)
+    XCTAssertTrue(visibleBeforeRelaunch)
+    XCTAssertEqual(app.staticTexts["assistant-message-\(receipt.position)"].label, receipt.text)
+    app.terminate()
+    app.launch()
+    let restoredDraft = app.textFields["message-draft"]
+    let draftRestored = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", unsent), object: restoredDraft)
+    let draftResult = await XCTWaiter.fulfillment(of: [draftRestored], timeout: 10)
+    XCTAssertEqual(draftResult, .completed)
+    XCTAssertEqual(restoredDraft.value as? String, unsent)
+    XCTAssertEqual(app.staticTexts["voice-status"].label, "Voice is off")
+    XCTAssertFalse(app.staticTexts["voice-output-playing"].exists)
+    let visibleAfterRelaunch = await revealInterruptedReceipt(
+      app, position: receipt.position, test: self)
+    XCTAssertTrue(visibleAfterRelaunch)
+    XCTAssertEqual(app.staticTexts["assistant-message-\(receipt.position)"].label, receipt.text)
+    let relaunched = try await currentVoiceFixtureTurn()
+    XCTAssertEqual(relaunched.input.deliveryId, prior.input.deliveryId)
+    logger.notice("backend restart durable proof response=\(response.uuidString, privacy: .public)")
+  }
+
   func testActualMicrophoneUtteranceIsSavedWithoutChangingDraftAndSurvivesRelaunch() async throws {
     let app = try await launchVoiceFixture(test: self)
     defer { app.terminate() }
@@ -334,7 +449,15 @@ private struct VoiceFixtureCurrent: Decodable {
 }
 
 private struct VoiceFixtureReply: Decodable {
-  struct Receipt: Decodable { let position: Int }
+  struct Receipt: Decodable {
+    let deliveryId: UUID
+    let responseId: UUID
+    let inputDeliveryId: UUID
+    let position: Int
+    let text: String
+    let role: String
+    let outcome: String
+  }
   let responseId: UUID
   let state: String
   let receipt: Receipt?
@@ -387,4 +510,35 @@ private func voiceFixtureControlURL() throws -> URL {
     ["", "/"].contains(url.path)
   else { throw URLError(.badURL) }
   return url
+}
+
+private struct VoiceFixtureHistory: Decodable {
+  struct Message: Decodable {
+    let deliveryId: UUID
+    let role: String
+    let position: Int
+  }
+  let messages: [Message]
+  let nextAfter: Int?
+}
+
+private func voiceFixtureHistory(after: Int) async throws -> VoiceFixtureHistory {
+  let base = try voiceFixtureControlURL().appendingPathComponent("conversation/messages")
+  guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+    throw URLError(.badURL)
+  }
+  components.queryItems = [
+    URLQueryItem(name: "after", value: String(after)), URLQueryItem(name: "limit", value: "100"),
+  ]
+  guard let url = components.url else { throw URLError(.badURL) }
+  let configuration = URLSessionConfiguration.ephemeral
+  configuration.timeoutIntervalForRequest = 3
+  configuration.timeoutIntervalForResource = 3
+  let session = URLSession(configuration: configuration)
+  defer { session.invalidateAndCancel() }
+  let (data, response) = try await session.data(from: url)
+  guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+    throw URLError(.badServerResponse)
+  }
+  return try JSONDecoder().decode(VoiceFixtureHistory.self, from: data)
 }

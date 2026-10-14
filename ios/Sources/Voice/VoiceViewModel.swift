@@ -15,19 +15,46 @@ import Observation
   @ObservationIgnored private var outputRequest = UUID()
   @ObservationIgnored private let control: any VoiceControl
   @ObservationIgnored private let media: any VoiceMedia
+  @ObservationIgnored private let retryClock: any VoiceRetryClock
+  @ObservationIgnored private let checkpoint: any VoiceAdmissionCheckpoint
+  @ObservationIgnored private let refreshConversation: @MainActor () -> Void
+  @ObservationIgnored private var retryTask: Task<Void, Never>?
+  @ObservationIgnored private var restoreTask: Task<Void, Never>?
+  @ObservationIgnored private var resolutionTask: Task<Void, Never>?
+  @ObservationIgnored private var checkpointTask: Task<Void, Never>?
   @ObservationIgnored private let accepted: @MainActor (ConversationMessage) -> Void
   @ObservationIgnored private var startTask: Task<Void, Never>?
   @ObservationIgnored private var observationTask: Task<Void, Never>?
   @ObservationIgnored private var stopTask: Task<Void, Never>?
+  @ObservationIgnored private var serverEndTask: Task<Void, Never>?
   @ObservationIgnored private var muteTask: Task<Void, Never>?
 
   public init(
     control: any VoiceControl, media: any VoiceMedia,
+    checkpoint: any VoiceAdmissionCheckpoint = VolatileVoiceAdmissionCheckpoint(),
+    retryClock: any VoiceRetryClock = SystemVoiceRetryClock(),
+    refreshConversation: @escaping @MainActor () -> Void = {},
     accepted: @escaping @MainActor (ConversationMessage) -> Void
   ) {
     self.control = control
     self.media = media
     self.accepted = accepted
+    self.retryClock = retryClock
+    self.checkpoint = checkpoint
+    self.refreshConversation = refreshConversation
+  }
+  public func restore() async {
+    guard !state.isRetired, !state.checkpointLoaded else { return }
+    if restoreTask == nil {
+      let checkpoint = checkpoint
+      restoreTask = Task { [weak self] in
+        do { self?.receive(.restored(try await checkpoint.load())) } catch {
+          self?.receive(.failed(self?.state.generation ?? -1, .checkpointUnavailable))
+        }
+      }
+    }
+    await restoreTask?.value
+    if !state.checkpointLoaded { restoreTask = nil }
   }
   public func start() { receive(.start) }
   public func end() {
@@ -38,14 +65,26 @@ import Observation
   public func speechStarted() { cutOutput() }
   public func toggleMute() { receive(.mute) }
   public func shutdown() async {
-    end()
+    cutOutput()
+    receive(.shutdown)
+    // Fence and quiesce every producer before draining the latest checkpoint.
+    await retryTask?.value
+    await startTask?.value
+    await muteTask?.value
+    await observationTask?.value
+    await resolutionTask?.value
+    await restoreTask?.value
     await stopTask?.value
+    await serverEndTask?.value
     await interruptionTask?.value
     await outputTask?.value
+    await checkpointTask?.value
+    retryTask = nil
+    observationTask = nil
+    resolutionTask = nil
+    checkpointTask = nil
     interruptionTask = nil
     outputTask = nil
-    observationTask?.cancel()
-    observationTask = nil
   }
   private func receive(_ event: VoiceEvent) {
     for command in state.transition(event) { execute(command) }
@@ -65,11 +104,12 @@ import Observation
       let priorStart = startTask
       let priorStop = stopTask
       startTask = Task { [weak self] in
+        await self?.restore()
         await priorStart?.value
         await priorStop?.value
         await priorOutput?.value
         await priorInterruption?.value
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, self?.state.checkpointLoaded == true else { return }
         let allowed = await media.requestPermission()
         self?.receive(.permission(generation, allowed))
         guard allowed, !Task.isCancelled, self?.state.generation == generation,
@@ -77,15 +117,21 @@ import Observation
         else { return }
         var join: VoiceJoin?
         do {
-          let value = try await control.start()
+          guard let requestId = self?.state.startRequestId,
+            let requestedMute = self?.state.startMuted
+          else { return }
+          let value = try await control.start(requestId: requestId, muted: requestedMute)
           join = value
           guard !Task.isCancelled, self?.state.capture == .connecting else {
             try? await control.end(sessionId: value.sessionId)
             return
           }
-          self?.receive(.bootstrapped(generation, value.sessionId))
+          self?.receive(.bootstrapped(generation, value.sessionId, value.backendIncarnationId))
+          let initiallyMuted =
+            requestedMute || self?.state.wantsMuted == true
+            || self?.state.hasPendingAdmission == true
           try await media.connect(
-            value,
+            value, initiallyMuted: initiallyMuted,
             failure: { [weak self] in
               Task { @MainActor in
                 guard self?.state.generation == generation else { return }
@@ -114,7 +160,7 @@ import Observation
             try? await control.end(sessionId: value.sessionId)
             return
           }
-          self?.receive(.connected(generation, value.sessionId))
+          self?.receive(.connected(generation, value.sessionId, initiallyMuted))
         } catch {
           await media.disconnect()
           if let join { try? await control.end(sessionId: join.sessionId) }
@@ -129,18 +175,29 @@ import Observation
       receiveOutput(.disconnected)
       let media = media
       let control = control
-      stopTask = Task { [weak self] in
-        let remoteEnd: Task<Void, Never>? = session.map { id in
-          Task { try? await control.end(sessionId: id) }
+      if let session {
+        let previous = serverEndTask
+        previous?.cancel()
+        serverEndTask = Task {
+          await previous?.value
+          guard !Task.isCancelled else { return }
+          try? await control.end(sessionId: session)
         }
+      }
+      let previousStop = stopTask
+      stopTask = Task { [weak self] in
+        await previousStop?.value
         await media.disconnect()
-        await remoteEnd?.value
         self?.receive(.ended(generation))
       }
     case .setMuted(let generation, let session, let muted):
       let media = media
       let control = control
+      let previousMute = muteTask
+      previousMute?.cancel()
       muteTask = Task { [weak self] in
+        await previousMute?.value
+        guard !Task.isCancelled else { return }
         do {
           try await media.mute(muted)
           guard !Task.isCancelled else { return }
@@ -150,13 +207,20 @@ import Observation
       }
     case .observe(let generation, let session):
       let control = control
+      let previous = observationTask
+      previous?.cancel()
       observationTask = Task { [weak self] in
+        await previous?.value
         while !Task.isCancelled {
           do {
             guard let self, self.state.generation == generation else { return }
             let page = try await control.snapshot(sessionId: session, after: self.state.sequence)
+            guard !Task.isCancelled, self.state.generation == generation, !self.state.isRetired
+            else { return }
             self.receive(.snapshot(generation, page))
             for event in page.events {
+              guard !Task.isCancelled, self.state.generation == generation, !self.state.isRetired
+              else { return }
               self.receive(.wire(generation, event))
               if let value = event.output {
                 self.receiveOutput(value, sequence: event.sequence, generation: generation)
@@ -169,13 +233,83 @@ import Observation
             try await Task.sleep(for: .milliseconds(250))
           } catch {
             guard !Task.isCancelled else { return }
-            self?.receive(.observationFailed(generation))
+            self?.receive(.observationFailed(generation, error as? VoiceFailure ?? .connection))
             // Final admission is read-only retryable after network uncertainty.
             guard self?.state.hasPendingAdmission == true else { return }
             try? await Task.sleep(for: .seconds(1))
           }
         }
       }
+    case .retry(let generation, let milliseconds):
+      let previousRetry = retryTask
+      previousRetry?.cancel()
+      let clock = retryClock
+      retryTask = Task { [weak self] in
+        await previousRetry?.value
+        guard !Task.isCancelled else { return }
+        do {
+          try await clock.sleep(milliseconds: milliseconds)
+          guard !Task.isCancelled else { return }
+          self?.receive(.retryReady(generation))
+        } catch {}
+      }
+    case .cancelRetry: retryTask?.cancel()
+    case .cancelProducers:
+      retryTask?.cancel()
+      startTask?.cancel()
+      restoreTask?.cancel()
+      muteTask?.cancel()
+      observationTask?.cancel()
+      resolutionTask?.cancel()
+    case .checkpoint(let revision, let admissions):
+      let previous = checkpointTask
+      let checkpoint = checkpoint
+      let control = control
+      checkpointTask = Task { [weak self] in
+        await previous?.value
+        do {
+          try await checkpoint.save(admissions)
+          await control.retain(admissions: admissions)
+          self?.receive(.checkpointSaved(revision))
+        } catch { self?.receive(.checkpointFailed(revision)) }
+      }
+    case .resolve(let admissions):
+      guard !admissions.isEmpty else { return }
+      let previous = resolutionTask
+      previous?.cancel()
+      let control = control
+      let clock = retryClock
+      resolutionTask = Task { [weak self] in
+        await previous?.value
+        var step = 0
+        while !Task.isCancelled {
+          guard let self, !self.state.associations.isEmpty else { return }
+          let requested = self.state.pendingAssociations
+          do {
+            let response = try await control.resolve(admissions: requested)
+            guard !Task.isCancelled else { return }
+            self.receive(.resolved(requested, response))
+            if self.state.associations.isEmpty { return }
+          } catch {
+            guard !Task.isCancelled else { return }
+            let failure = error as? VoiceFailure ?? .connection
+            self.receive(.resolutionFailed(failure))
+            switch failure {
+            case .connection: break
+            case .backend(let code, _):
+              guard ["Unavailable", "StorageUnavailable", "VoiceBusy"].contains(code) else {
+                return
+              }
+            default: return
+            }
+          }
+          do {
+            try await clock.sleep(milliseconds: [500, 1000, 2000, 4000, 8000][min(step, 4)])
+          } catch { return }
+          step = min(step + 1, 4)
+        }
+      }
+    case .refreshConversation: refreshConversation()
     case .accepted(let receipt):
       receiveOutput(.inputAccepted(receipt.deliveryId))
       accepted(receipt)

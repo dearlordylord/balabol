@@ -1,18 +1,24 @@
-import { Context, Effect, Layer, Schema, Queue, Redacted, Scope, Exit, Semaphore } from "effect"
+import { Context, Effect, Layer, Schema, Clock, Queue, Redacted, Scope, Exit, Semaphore } from "effect"
 import { Conversation } from "../conversation/index.ts"
 import { SpeechRecognition } from "../speech-recognition/index.ts"
 import { SpeechSynthesis } from "../speech-synthesis/index.ts"
 import { VoiceTransport, SessionId, OutputReady, OutputInterrupt, failed } from "./contracts.ts"
 import type { VoiceJoin, VoiceSnapshot, VoiceFailed } from "./contracts.ts"
+import { StartVoiceRequest, ResolveSpeechAdmissions } from "./recovery-contracts.ts"
+import type { SpeechResolutions } from "./recovery-contracts.ts"
+import { VoiceAdmissions, speechPayloadHash } from "./admissions.ts"
 import { Session } from "./session.ts"
 import { ReplyAudio } from "./output.ts"
 const maximumSessions = 2
 const disconnectPollMillis = 20
+const joinMillis = 10000
+const controlMillis = 30000
 export class Voice extends Context.Service<
   Voice,
   {
     authorize: (id: string, token: string) => Effect.Effect<void, VoiceFailed>
-    start: () => Effect.Effect<VoiceJoin, VoiceFailed>
+    start: (request: StartVoiceRequest) => Effect.Effect<VoiceJoin, VoiceFailed>
+    resolve: (request: ResolveSpeechAdmissions) => Effect.Effect<SpeechResolutions, VoiceFailed>
     snapshot: (id: string, after: number) => Effect.Effect<VoiceSnapshot, VoiceFailed>
     mute: (id: string, muted: boolean) => Effect.Effect<VoiceSnapshot, VoiceFailed>
     ready: (id: string, input: OutputReady) => Effect.Effect<VoiceSnapshot, VoiceFailed>
@@ -23,36 +29,57 @@ export class Voice extends Context.Service<
   static readonly layer = Layer.effect(
     Voice,
     Effect.gen(function* () {
+      const admissions = yield* VoiceAdmissions
       const conversation = yield* Conversation
       const provider = yield* SpeechRecognition
       const synthesis = yield* SpeechSynthesis
       const transport = yield* VoiceTransport
       const scope = yield* Effect.scope
-      const sessions = new Map<string, Session>()
+      const sessions = new Map<string, { session: Session; join: Redacted.Redacted<VoiceJoin> }>()
       const starts = yield* Semaphore.make(1)
       const get = (id: string) =>
         Schema.decodeUnknownEffect(SessionId)(id).pipe(
           Effect.mapError(() => failed("InvalidSession", "Invalid session identity")),
           Effect.flatMap((parsed) => {
-            const session = sessions.get(parsed.toLowerCase())
+            const session = sessions.get(parsed.toLowerCase())?.session
             return session === undefined
               ? Effect.fail(failed("SessionNotFound", "Voice session unavailable"))
-              : Effect.succeed(session)
+              : expire(session).pipe(Effect.as(session))
           })
         )
       const end = (session: Session) =>
         Effect.gen(function* () {
           if (session.status === "ended") return session.snapshot(0)
           session.status = "ended"
-          yield* session.stop()
           session.audio?.retire()
+          yield* session.stop()
           yield* session.connection?.close() ?? Effect.void
           yield* session.audio?.close() ?? Effect.void
           yield* session.release
           yield* session.emit({ kind: "Ended" })
           return session.snapshot(0)
         })
-      yield* Effect.addFinalizer(() => Effect.forEach(sessions.values(), end, { discard: true }))
+      const expire = (session: Session) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            session.status === "active" &&
+            ((!session.joined && now >= session.joinDeadlineAt) || now >= session.controlDeadlineAt)
+              ? end(session).pipe(Effect.asVoid)
+              : Effect.void
+          )
+        )
+      const renew = (session: Session) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.tap((now) =>
+            Effect.sync(() => {
+              if (session.status === "active") session.controlDeadlineAt = now + controlMillis
+            })
+          ),
+          Effect.asVoid
+        )
+      yield* Effect.addFinalizer(() =>
+        Effect.forEach(sessions.values(), (record) => end(record.session), { discard: true })
+      )
       return Voice.of({
         authorize: (id, token) =>
           get(id).pipe(
@@ -62,18 +89,42 @@ export class Voice extends Context.Service<
                 : Effect.fail(failed("Unauthorized", "Invalid session capability"))
             )
           ),
-        start: () =>
+        start: (raw) =>
           Effect.gen(function* () {
-            if ([...sessions.values()].some((session) => session.status === "active"))
+            const request = yield* Schema.decodeUnknownEffect(StartVoiceRequest)(raw).pipe(
+              Effect.mapError(() => failed("InvalidInput", "Invalid voice start payload"))
+            )
+            const prior = [...sessions.values()].find(
+              (record) => record.session.startRequestId === request.startRequestId
+            )
+            if (prior !== undefined) {
+              yield* expire(prior.session)
+              if (prior.session.initialMuted !== request.muted)
+                return yield* failed("StartConflict", "Voice start identity has another initial mute intent")
+              if (prior.session.status !== "active")
+                return yield* failed("StartExpired", "The original voice session has ended")
+              return Redacted.value(prior.join)
+            }
+            if ([...sessions.values()].some((record) => record.session.status === "active"))
               return yield* failed("VoiceBusy", "A voice session is already active")
             if (sessions.size >= maximumSessions) {
               const ended = [...sessions.values()].find(
-                (session) => session.status === "ended" && session.admissions === 0
+                (record) => record.session.status === "ended" && record.session.admissions === 0
               )
               if (ended === undefined) return yield* failed("VoiceBusy", "Previous acceptance is still pending")
-              sessions.delete(ended.id)
+              sessions.delete(ended.session.id)
             }
-            const session = new Session(conversation, provider, scope)
+            const session = new Session(
+              conversation,
+              provider,
+              scope,
+              admissions,
+              request.startRequestId,
+              request.muted
+            )
+            const startedAt = yield* Clock.currentTimeMillis
+            session.joinDeadlineAt = startedAt + joinMillis
+            session.controlDeadlineAt = startedAt + controlMillis
             const sessionScope = yield* Scope.fork(scope)
             session.release = Scope.close(sessionScope, Exit.void)
             const frames = yield* Queue.make<{ track: string; raw: unknown; generation: number }>({ capacity: 8 })
@@ -94,12 +145,18 @@ export class Voice extends Context.Service<
                 },
                 () => {
                   disconnected = "MediaDisconnected"
+                },
+                () => {
+                  session.joined = true
                 }
               )
               .pipe(Effect.onError(() => session.release))
             yield* Effect.gen(function* () {
               while (session.status === "active") {
                 yield* Effect.sleep(disconnectPollMillis)
+                const now = yield* Clock.currentTimeMillis
+                if ((!session.joined && now >= session.joinDeadlineAt) || now >= session.controlDeadlineAt)
+                  disconnected = "SessionExpired"
                 if (disconnected !== undefined) {
                   yield* session.emit({
                     kind: "Error",
@@ -127,17 +184,61 @@ export class Voice extends Context.Service<
                 }).pipe(Effect.andThen(opened.connection.close()), Effect.andThen(session.release))
               )
             )
-            sessions.set(session.id, session)
-            return { ...opened.join, controlToken: Redacted.value(session.controlToken) }
+            const join = {
+              ...opened.join,
+              backendIncarnationId: session.backendIncarnationId,
+              startRequestId: session.startRequestId,
+              joinDeadlineAt: session.joinDeadlineAt,
+              controlDeadlineAt: session.controlDeadlineAt,
+              controlToken: Redacted.value(session.controlToken)
+            }
+            sessions.set(session.id, { session, join: Redacted.make(join) })
+            return join
           }).pipe(starts.withPermits(1)),
+        resolve: (raw) =>
+          Schema.decodeUnknownEffect(ResolveSpeechAdmissions)(raw).pipe(
+            Effect.mapError(() => failed("InvalidInput", "Invalid speech recovery identities")),
+            Effect.flatMap((request) =>
+              Effect.forEach(request.admissions, (association) =>
+                admissions.find(association).pipe(
+                  Effect.flatMap((checkpoint) => {
+                    if (checkpoint === null)
+                      return Effect.succeed({ ...association, status: "Unknown" as const, receipt: null })
+                    return conversation
+                      .receipt(association.deliveryId)
+                      .pipe(
+                        Effect.map((receipt) =>
+                          receipt !== null &&
+                          receipt.role === "user" &&
+                          speechPayloadHash(receipt.text) === checkpoint.payloadHash
+                            ? { ...association, status: "Accepted" as const, receipt }
+                            : {
+                                ...association,
+                                status: checkpoint.state === "Sealed" ? ("NotAccepted" as const) : ("Unknown" as const),
+                                receipt: null
+                              }
+                        )
+                      )
+                  }),
+                  Effect.catch(() => Effect.succeed({ ...association, status: "Unknown" as const, receipt: null }))
+                )
+              ).pipe(Effect.map((results) => ({ admissions: results })))
+            )
+          ),
         snapshot: (id, after) =>
           get(id).pipe(
-            Effect.flatMap((session) => session.reconcile().pipe(Effect.map(() => session.snapshot(after))))
+            Effect.flatMap((session) =>
+              session.reconcile().pipe(
+                Effect.andThen(renew(session)),
+                Effect.map(() => session.snapshot(after))
+              )
+            )
           ),
         mute: (id, muted) =>
           get(id).pipe(
             Effect.flatMap((session) =>
               Effect.gen(function* () {
+                yield* renew(session)
                 session.muted = muted
                 yield* session.stop()
                 yield* session.emit({ kind: "Muted", muted })
@@ -151,6 +252,7 @@ export class Voice extends Context.Service<
               Schema.decodeUnknownEffect(OutputReady)(raw).pipe(
                 Effect.mapError(() => failed("InvalidInput", "Invalid output readiness")),
                 Effect.flatMap((input) => session.audio?.ready(input) ?? Effect.void),
+                Effect.andThen(renew(session)),
                 Effect.map(() => session.snapshot(0))
               )
             )
@@ -161,6 +263,7 @@ export class Voice extends Context.Service<
               Schema.decodeUnknownEffect(OutputInterrupt)(raw).pipe(
                 Effect.mapError(() => failed("InvalidInput", "Invalid output interruption")),
                 Effect.flatMap((input) => session.audio?.interrupt(input) ?? Effect.void),
+                Effect.andThen(renew(session)),
                 Effect.map(() => session.snapshot(0))
               )
             )

@@ -6,19 +6,24 @@ import type { VoiceFrame, VoiceEvent } from "../src/voice/index.ts"
 const frameSamples = 320
 const speechSample = 1200
 const silenceFrames = 20
-export const voiceTransportFixture = () => {
+export const voiceTransportFixture = (joinImmediately = true) => {
   let receive: ((track: string, raw: unknown) => void) | undefined
+  let markJoined: (() => void) | undefined
+  let opens = 0
   let disconnect: (() => void) | undefined
   const captured: { outputEpoch: string; frames: number }[] = []
   const backendParticipantIdentity = randomUUID()
   const published: VoiceEvent[] = []
   let closed = false
   const layer = Layer.succeed(VoiceTransport, {
-    open: (identity, frame, disconnected) =>
+    open: (identity, frame, disconnected, connected) =>
       Effect.sync(() => {
         receive = frame
         disconnect = disconnected
         closed = false
+        opens += 1
+        markJoined = connected
+        if (joinImmediately) connected()
         return {
           join: {
             ...identity,
@@ -72,5 +77,16 @@ export const voiceTransportFixture = () => {
     yield* send(audio(speechSample))
     for (let i = 0; i < silenceFrames; i++) yield* send(audio(0))
   })
-  return { layer, send, audio, segment, published, captured, disconnect: () => disconnect?.(), closed: () => closed }
+  return {
+    layer,
+    send,
+    audio,
+    segment,
+    published,
+    captured,
+    joined: () => markJoined?.(),
+    opens: () => opens,
+    disconnect: () => disconnect?.(),
+    closed: () => closed
+  }
 }

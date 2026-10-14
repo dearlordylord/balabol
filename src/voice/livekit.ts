@@ -43,7 +43,7 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
       )
       const scope = yield* Effect.scope
       return VoiceTransport.of({
-        open: (identity, frame, disconnected) =>
+        open: (identity, frame, disconnected, connected) =>
           Effect.gen(function* () {
             const roomScope = yield* Scope.fork(scope)
             return yield* Effect.gen(function* () {
@@ -116,6 +116,9 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
               })
               room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
                 if (participant.identity === identity.participantIdentity && publication.sid === trackSid) stopTrack()
+              })
+              room.on(RoomEvent.ParticipantConnected, (participant) => {
+                if (!closed && participant.identity === identity.participantIdentity) connected()
               })
               room.on(RoomEvent.ParticipantDisconnected, (participant) => {
                 if (participant.identity === identity.participantIdentity) disconnected()

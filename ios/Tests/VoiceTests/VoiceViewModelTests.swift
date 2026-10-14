@@ -221,11 +221,19 @@ import XCTest
     let receipt = ConversationMessage(
       deliveryId: id, recordId: 50, position: 30, text: "Recovered saved speech")
     let pending = VoicePending(
-      utteranceId: id, deliveryId: id, text: receipt.text, receipt: receipt, error: nil)
+      utteranceId: id,
+      backendIncarnationId: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+      deliveryId: id, text: receipt.text, receipt: receipt, error: nil)
     await control.installRecovery(
       pending, event: try event(session: session, sequence: 100, kind: "Ended", fields: [:]))
-    await settle { receipts.count == 1 && model.state.capture == .ended }
+    await settle { receipts.count == 1 && model.state.capture == .hostUnavailable }
     XCTAssertEqual(receipts, [receipt])
+    await settle { model.state.capture == .listening }
+    let freshSession = await control.identity()
+    XCTAssertNotEqual(freshSession, session)
+    XCTAssertEqual(receipts, [receipt])
+    XCTAssertEqual(media.preparedOutputs, 0)
+    XCTAssertNil(model.output.current)
     XCTAssertFalse(model.state.hasPendingAdmission)
     XCTAssertEqual(model.state.tentative, "")
     await model.shutdown()
@@ -601,6 +609,392 @@ import XCTest
     }
   }
 
+  func testUncertainBootstrapKeepsIdentityAcrossBoundedBackoffAndEndCancelsRetry() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let clock = FixtureRetryClock()
+    await control.failStarts(6)
+    let model = VoiceViewModel(control: control, media: media, retryClock: clock) { _ in }
+    model.start()
+    for expected in [500, 1000, 2000, 4000, 8000] {
+      for _ in 0..<200 {
+        if await clock.lastDelay() == expected { break }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+      let delay = await clock.lastDelay()
+      XCTAssertEqual(delay, expected)
+      if expected != 8000 { await clock.advance() }
+    }
+    let requests = await control.requestIdentities()
+    XCTAssertEqual(requests.count, 5)
+    XCTAssertEqual(Set(requests).count, 1)
+    XCTAssertEqual(model.state.capture, .hostUnavailable)
+    model.end()
+    await settle { model.state.capture == .ended }
+    await clock.advance()
+    try await Task.sleep(for: .milliseconds(30))
+    let later = await control.requestIdentities()
+    XCTAssertEqual(later, requests)
+    await model.shutdown()
+  }
+
+  func testFinalWaitsForPrivateCheckpointAndUnknownSurvivesEndAndClientRestart() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let checkpoint = GatedVoiceCheckpoint()
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let session = await control.identity()
+    let delivery = UUID()
+    await control.append(
+      try event(
+        session: session, sequence: 1, kind: "Final",
+        fields: [
+          "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString,
+          "text": "Handed final",
+        ]))
+    for _ in 0..<200 {
+      if await checkpoint.isSaving() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let saving = await checkpoint.isSaving()
+    XCTAssertTrue(saving)
+    guard saving else {
+      await model.shutdown()
+      return
+    }
+    XCTAssertNil(model.state.admission)
+    model.end()
+    await settle { model.state.capture == .ended }
+    await checkpoint.release()
+    await settle { model.state.admission == .checking(deliveryId: delivery, text: "Handed final") }
+    await model.shutdown()
+    let saved = try await checkpoint.load()
+    XCTAssertEqual(saved.map(\.deliveryId), [delivery])
+    XCTAssertEqual(saved.map(\.sessionId), [session])
+    var receipts: [ConversationMessage] = []
+    let restartedMedia = FixtureMedia(allowed: true)
+    let restarted = VoiceViewModel(control: control, media: restartedMedia, checkpoint: checkpoint)
+    { receipts.append($0) }
+    await restarted.restore()
+    XCTAssertEqual(restarted.state.capture, .idle)
+    XCTAssertTrue(restarted.state.hasPendingAdmission)
+    XCTAssertTrue(receipts.isEmpty)
+    let receipt = ConversationMessage(
+      deliveryId: delivery, recordId: 12, position: 4, text: "Handed final")
+    await control.acceptAdmission(receipt)
+    await settle { receipts == [receipt] }
+    XCTAssertFalse(restarted.state.hasPendingAdmission)
+    let cleaned = try await checkpoint.load()
+    XCTAssertTrue(cleaned.isEmpty)
+    await restarted.shutdown()
+  }
+
+  func testMutedReconnectUsesFreshIdentityAndVoiceBusyRetriesUntilLeaseClears() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let clock = FixtureRetryClock()
+    let model = VoiceViewModel(control: control, media: media, retryClock: clock) { _ in
+      XCTFail("No admission")
+    }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let initial = await control.requestIdentities()
+    model.toggleMute()
+    await settle { model.state.capture == .muted }
+    let oldFailure = media.failure
+    await control.holdVoiceBusy(1)
+    oldFailure?()
+    await settle { model.state.capture == .hostUnavailable }
+    await clock.advance()
+    for _ in 0..<200 {
+      if await control.requestIdentities().count == 2 { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(model.state.wantsMuted)
+    XCTAssertTrue(model.state.wantsListening)
+    await clock.advance()
+    await settle { model.state.capture == .muted }
+    let requests = await control.requestIdentities()
+    let muteRequests = await control.muteRequests()
+    XCTAssertEqual(requests.count, 3)
+    XCTAssertNotEqual(requests[1], initial[0])
+    XCTAssertEqual(requests[1], requests[2])
+    XCTAssertEqual(muteRequests, [false, true, true])
+    XCTAssertTrue(media.muted)
+    oldFailure?()
+    try await Task.sleep(for: .milliseconds(30))
+    XCTAssertEqual(model.state.capture, .muted)
+    XCTAssertNil(model.output.current)
+    await model.shutdown()
+  }
+
+  func testShutdownRejectsLateSnapshotAndWaitsForItsProducer() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let checkpoint = VolatileVoiceAdmissionCheckpoint()
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) {
+      receipts.append($0)
+    }
+    model.start()
+    await settle { model.state.capture == .listening }
+    await control.holdSnapshots()
+    for _ in 0..<300 {
+      if await control.snapshotWaiting() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let waiting = await control.snapshotWaiting()
+    XCTAssertTrue(waiting)
+    let session = await control.identity()
+    let delivery = UUID()
+    await control.append(
+      try event(
+        session: session, sequence: 1, kind: "Final",
+        fields: [
+          "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString,
+          "text": "Late final",
+        ]))
+    var finished = false
+    let shutdown = Task {
+      await model.shutdown()
+      finished = true
+    }
+    await settle { media.disconnected }
+    XCTAssertFalse(finished)
+    await control.releaseSnapshot()
+    await shutdown.value
+    XCTAssertTrue(finished)
+    XCTAssertNil(model.state.admission)
+    XCTAssertTrue(receipts.isEmpty)
+    let persisted = try await checkpoint.load()
+    XCTAssertTrue(persisted.isEmpty)
+    model.start()
+    XCTAssertFalse(model.state.wantsListening)
+  }
+
+  func testShutdownRejectsLateResolutionWithoutDeletingUncertainProvenance() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let checkpoint = VolatileVoiceAdmissionCheckpoint()
+    let association = VoiceAdmissionAssociation(
+      backendIncarnationId: UUID(), sessionId: UUID(), deliveryId: UUID())
+    try await checkpoint.save([association])
+    await control.acceptAdmission(
+      ConversationMessage(
+        deliveryId: association.deliveryId, recordId: 91, position: 91, text: "Accepted later"))
+    await control.holdResolutions()
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) {
+      receipts.append($0)
+    }
+    await model.restore()
+    for _ in 0..<300 {
+      if await control.resolutionWaiting() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let waiting = await control.resolutionWaiting()
+    XCTAssertTrue(waiting)
+    var finished = false
+    let shutdown = Task {
+      await model.shutdown()
+      finished = true
+    }
+    await settle { model.state.isRetired }
+    XCTAssertFalse(finished)
+    await control.releaseResolution()
+    await shutdown.value
+    XCTAssertTrue(receipts.isEmpty)
+    XCTAssertTrue(model.state.hasPendingAdmission)
+    let persisted = try await checkpoint.load()
+    XCTAssertEqual(persisted, [association])
+  }
+
+  func testShutdownDrainsFinalCheckpointAndAlreadyQueuedReceiptCleanup() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let checkpoint = GatedVoiceCheckpoint()
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) {
+      receipts.append($0)
+    }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let session = await control.identity()
+    let delivery = UUID()
+    await control.append(
+      try event(
+        session: session, sequence: 1, kind: "Final",
+        fields: [
+          "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString, "text": "Final",
+        ]))
+    await checkpoint.waitForSave()
+    let receipt = ConversationMessage(
+      deliveryId: delivery, recordId: 92, position: 92, text: "Final")
+    let receiptJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt))
+    await control.append(
+      try event(
+        session: session, sequence: 2, kind: "Accepted",
+        fields: [
+          "utteranceId": delivery.uuidString, "receipt": receiptJSON,
+        ]))
+    await settle { receipts == [receipt] }
+    var finished = false
+    let shutdown = Task {
+      await model.shutdown()
+      finished = true
+    }
+    await settle { media.disconnected }
+    XCTAssertFalse(finished)
+    await checkpoint.release()
+    await shutdown.value
+    let persisted = try await checkpoint.load()
+    XCTAssertTrue(persisted.isEmpty)
+    XCTAssertEqual(receipts, [receipt])
+    XCTAssertTrue(finished)
+  }
+
+  func testAdmissionSettledDuringBootstrapStillJoinsMutedThenUnmutesBothOwners() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let checkpoint = VolatileVoiceAdmissionCheckpoint()
+    let association = VoiceAdmissionAssociation(
+      backendIncarnationId: UUID(), sessionId: UUID(), deliveryId: UUID())
+    try await checkpoint.save([association])
+    await control.holdBootstrap()
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) {
+      receipts.append($0)
+    }
+    model.start()
+    for _ in 0..<300 {
+      if await control.bootstrapWaiting() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let waiting = await control.bootstrapWaiting()
+    XCTAssertTrue(waiting)
+    let initialMute = await control.muteRequests()
+    XCTAssertEqual(initialMute, [true])
+    let receipt = ConversationMessage(
+      deliveryId: association.deliveryId,
+      recordId: 97, position: 97, text: "Prior speech")
+    await control.acceptAdmission(receipt)
+    await settle { receipts == [receipt] && !model.state.hasPendingAdmission }
+    await control.releaseBootstrap()
+    await settle { model.state.capture == .listening }
+    XCTAssertEqual(media.joinMutes, [true])
+    let controlMutes = await control.controlMuteRequests()
+    XCTAssertEqual(controlMutes, [false])
+    XCTAssertFalse(media.muted)
+    XCTAssertFalse(model.state.wantsMuted)
+    await model.shutdown()
+  }
+
+  func testMuteIntentDuringBootstrapReconcilesImmutableBackendModeAndLocalCapture() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    await control.holdBootstrap()
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    for _ in 0..<300 {
+      if await control.bootstrapWaiting() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let waiting = await control.bootstrapWaiting()
+    XCTAssertTrue(waiting)
+    model.toggleMute()
+    XCTAssertTrue(model.state.wantsMuted)
+    await control.releaseBootstrap()
+    await settle { model.state.capture == .muted && !model.state.isChangingMute }
+    let requestModes = await control.muteRequests()
+    XCTAssertEqual(requestModes, [false])
+    XCTAssertEqual(media.joinMutes, [true])
+    let controlModes = await control.controlMuteRequests()
+    XCTAssertEqual(controlModes, [true])
+    XCTAssertTrue(media.muted)
+    await model.shutdown()
+  }
+
+  func testUnknownPreviousSpeechKeepsReconnectMutedUntilExactNotAcceptedResolution() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let checkpoint = VolatileVoiceAdmissionCheckpoint()
+    let association = VoiceAdmissionAssociation(
+      backendIncarnationId: UUID(), sessionId: UUID(), deliveryId: UUID())
+    try await checkpoint.save([association])
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) {
+      receipts.append($0)
+    }
+    model.start()
+    await settle { model.state.capture == .checkingPreviousSpeech }
+    XCTAssertTrue(model.state.wantsListening)
+    XCTAssertFalse(model.state.wantsMuted)
+    XCTAssertTrue(media.muted)
+    XCTAssertEqual(media.joinMutes, [true])
+    XCTAssertEqual(model.state.admission, .checking(deliveryId: association.deliveryId, text: ""))
+    let before = try await checkpoint.load()
+    XCTAssertEqual(before, [association])
+    await control.rejectAdmission(association.deliveryId)
+    await settle { model.state.capture == .listening && !model.state.hasPendingAdmission }
+    if case .failed(_, .backend(let code, _)) = model.state.admission {
+      XCTAssertEqual(code, "NotAccepted")
+    } else {
+      XCTFail("Only exact NotAccepted may ask for repetition")
+    }
+    XCTAssertTrue(receipts.isEmpty)
+    XCTAssertFalse(media.muted)
+    await model.shutdown()
+    let after = try await checkpoint.load()
+    XCTAssertTrue(after.isEmpty)
+  }
+
+  func testEndedCanonicalSnapshotReconnectsEvenWhenEndedEventWasEvicted() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let clock = FixtureRetryClock()
+    let model = VoiceViewModel(control: control, media: media, retryClock: clock) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let oldSession = await control.identity()
+    try await control.end(sessionId: oldSession)
+    await settle { model.state.capture == .hostUnavailable }
+    XCTAssertTrue(model.state.wantsListening)
+    XCTAssertNil(model.output.current)
+    await clock.advance()
+    await settle { model.state.capture == .listening }
+    let newSession = await control.identity()
+    XCTAssertNotEqual(newSession, oldSession)
+    XCTAssertEqual(media.preparedOutputs, 0)
+    await model.shutdown()
+  }
+
+  func testUnreadableCheckpointPreventsCaptureAndExplicitRetryReloadsRepairedFile() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let origin = try XCTUnwrap(URL(string: "http://127.0.0.1:8788"))
+    let file = try FileVoiceAdmissionCheckpoint.fileURL(in: directory, controlOrigin: origin)
+    try Data("Invalid checkpoint".utf8).write(to: file)
+    let checkpoint = try FileVoiceAdmissionCheckpoint(url: file, controlOrigin: origin)
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) { _ in }
+    await model.restore()
+    XCTAssertEqual(model.state.capture, .failed(.checkpointUnavailable))
+    model.start()
+    await settle { model.state.capture == .failed(.checkpointUnavailable) }
+    let unopened = await control.openedCount()
+    XCTAssertEqual(unopened, 0)
+    XCTAssertTrue(media.joinMutes.isEmpty)
+    try await checkpoint.save([])
+    model.start()
+    await settle { model.state.capture == .listening }
+    XCTAssertEqual(media.joinMutes, [false])
+    await model.shutdown()
+  }
+
   private func outputValue(session: UUID, input: UUID, response: UUID, epoch: UUID) -> [String: Any]
   {
     [
@@ -629,6 +1023,7 @@ import XCTest
     value["sessionId"] = session.uuidString
     value["sequence"] = sequence
     value["kind"] = kind
+    if kind == "Final" { value["backendIncarnationId"] = "11111111-1111-4111-8111-111111111111" }
     return try JSONDecoder().decode(
       VoiceWireEvent.self, from: JSONSerialization.data(withJSONObject: value))
   }
@@ -655,6 +1050,7 @@ import XCTest
   var holdConnect = false
   var connectWaiting = false
   var muted = false
+  var joinMutes: [Bool] = []
   var disconnected = false
   var connectFailure: VoiceFailure?
   var muteFailure: VoiceFailure?
@@ -674,11 +1070,13 @@ import XCTest
     permission = nil
   }
   func connect(
-    _ join: VoiceJoin, failure: @escaping @Sendable () -> Void,
+    _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,
     speechStarted: @escaping @Sendable () -> Void,
     outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
   ) async throws {
     if let connectFailure { throw connectFailure }
+    joinMutes.append(initiallyMuted)
+    self.muted = initiallyMuted
     self.failure = failure
     self.speech = speechStarted
     self.received = outputReceived
@@ -743,6 +1141,35 @@ import XCTest
 }
 
 private actor FixtureControl: VoiceControl {
+  private var holdStart = false
+  private var startGate: CheckedContinuation<Void, Never>?
+  private var controlMutes: [Bool] = []
+  func holdBootstrap() { holdStart = true }
+  func bootstrapWaiting() -> Bool { startGate != nil }
+  func releaseBootstrap() {
+    holdStart = false
+    startGate?.resume()
+    startGate = nil
+  }
+  func controlMuteRequests() -> [Bool] { controlMutes }
+  private var holdSnapshot = false
+  private var snapshotGate: CheckedContinuation<Void, Never>?
+  func holdSnapshots() { holdSnapshot = true }
+  func snapshotWaiting() -> Bool { snapshotGate != nil }
+  func releaseSnapshot() {
+    holdSnapshot = false
+    snapshotGate?.resume()
+    snapshotGate = nil
+  }
+  private var holdResolution = false
+  private var resolutionGate: CheckedContinuation<Void, Never>?
+  func holdResolutions() { holdResolution = true }
+  func resolutionWaiting() -> Bool { resolutionGate != nil }
+  func releaseResolution() {
+    holdResolution = false
+    resolutionGate?.resume()
+    resolutionGate = nil
+  }
   private var snapshotFailure = false
   func failSnapshots() { snapshotFailure = true }
   private var holdReady = false
@@ -766,25 +1193,75 @@ private actor FixtureControl: VoiceControl {
     interruptCount += 1
     return try await snapshot(sessionId: sessionId, after: 0)
   }
+  private let incarnation = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+  private var notAccepted: Set<UUID> = []
+  func rejectAdmission(_ id: UUID) { notAccepted.insert(id) }
+  private var admissionReceipts: [UUID: ConversationMessage] = [:]
+  func acceptAdmission(_ receipt: ConversationMessage) {
+    admissionReceipts[receipt.deliveryId] = receipt
+  }
+  private var busyStarts = 0
+  private var requestedMute: [Bool] = []
+  func holdVoiceBusy(_ count: Int) { busyStarts = count }
+  func muteRequests() -> [Bool] { requestedMute }
+  private var startFailures = 0
+  private var startIdentities: [UUID] = []
+  func failStarts(_ count: Int) { startFailures = count }
+  func requestIdentities() -> [UUID] { startIdentities }
   private var session = UUID()
   private var opened = 0
   private var ended = false
   private var events: [VoiceWireEvent] = []
   private var pending: [VoicePending] = []
-  func start() async throws -> VoiceJoin {
+  func start(requestId: UUID, muted: Bool) async throws -> VoiceJoin {
+    startIdentities.append(requestId)
+    requestedMute.append(muted)
+    if busyStarts > 0 {
+      busyStarts -= 1
+      throw VoiceFailure.backend(code: "VoiceBusy", message: "Prior voice lease active")
+    }
+    if startFailures > 0 {
+      startFailures -= 1
+      throw VoiceFailure.connection
+    }
+    if holdStart { await withCheckedContinuation { startGate = $0 } }
     opened += 1
     ended = false
     session = UUID()
     events = []
+    pending = []
     return try JSONDecoder().decode(
       VoiceJoin.self,
       from: JSONSerialization.data(withJSONObject: [
         "sessionId": session.uuidString, "roomName": session.uuidString,
+        "startRequestId": requestId.uuidString, "backendIncarnationId": incarnation.uuidString,
+        "joinDeadlineAt": 9_999_999_999_999, "controlDeadlineAt": 9_999_999_999_999,
         "participantIdentity": UUID().uuidString, "backendParticipantIdentity": UUID().uuidString,
         "mediaUrl": "ws://127.0.0.1:7880",
         "token": "fixture", "controlToken": String(repeating: "a", count: 64),
         "expiresAt": 9_999_999_999_999,
       ]))
+  }
+  func resolve(admissions: [VoiceAdmissionAssociation]) async throws -> VoiceAdmissionResolution {
+    if holdResolution { await withCheckedContinuation { resolutionGate = $0 } }
+    var answers: [[String: Any]] = []
+    for association in admissions {
+      let receipt = admissionReceipts[association.deliveryId]
+      let encoded: Any =
+        try receipt.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+        ?? NSNull()
+      answers.append([
+        "backendIncarnationId": association.backendIncarnationId.uuidString,
+        "sessionId": association.sessionId.uuidString,
+        "deliveryId": association.deliveryId.uuidString,
+        "status": receipt == nil
+          ? (notAccepted.contains(association.deliveryId) ? "NotAccepted" : "Unknown") : "Accepted",
+        "receipt": encoded,
+      ])
+    }
+    return try JSONDecoder().decode(
+      VoiceAdmissionResolution.self,
+      from: JSONSerialization.data(withJSONObject: ["admissions": answers]))
   }
   func identity() -> UUID { session }
   func openedCount() -> Int { opened }
@@ -796,15 +1273,56 @@ private actor FixtureControl: VoiceControl {
     ended = true
   }
   func snapshot(sessionId: UUID, after: Int) async throws -> VoiceSnapshot {
+    if holdSnapshot { await withCheckedContinuation { snapshotGate = $0 } }
     if snapshotFailure { throw VoiceFailure.connection }
     let payload =
-      "{\"sessionId\":\"\(session.uuidString)\",\"status\":\"\(ended ? "ended" : "active")\",\"muted\":false,\"sequence\":\(events.last?.sequence ?? 0),\"events\":[],\"nextAfter\":null,\"firstSequence\":1,\"audioFramesReceived\":0,\"sampleFramesReceived\":0,\"pending\":[]}"
+      "{\"backendIncarnationId\":\"\(incarnation.uuidString)\",\"controlDeadlineAt\":9999999999999,\"sessionId\":\"\(session.uuidString)\",\"status\":\"\(ended ? "ended" : "active")\",\"muted\":false,\"sequence\":\(events.last?.sequence ?? 0),\"events\":[],\"nextAfter\":null,\"firstSequence\":1,\"audioFramesReceived\":0,\"sampleFramesReceived\":0,\"pending\":[]}"
     let empty = try JSONDecoder().decode(VoiceSnapshot.self, from: Data(payload.utf8))
     return VoiceSnapshot(
       sessionId: empty.sessionId, status: empty.status, muted: false, sequence: empty.sequence,
+      backendIncarnationId: incarnation,
       events: events.filter { $0.sequence > after }, nextAfter: nil,
       firstSequence: events.first?.sequence, pending: pending)
   }
-  func mute(sessionId: UUID, muted: Bool) async throws {}
+  func mute(sessionId: UUID, muted: Bool) async throws { controlMutes.append(muted) }
   func end(sessionId: UUID) async throws { ended = true }
+}
+
+private actor FixtureRetryClock: VoiceRetryClock {
+  private let gate = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+  private var delays: [Int] = []
+  func sleep(milliseconds: Int) async throws {
+    try Task.checkCancellation()
+    delays.append(milliseconds)
+    var iterator = gate.stream.makeAsyncIterator()
+    _ = await iterator.next()
+    try Task.checkCancellation()
+  }
+  func lastDelay() -> Int? { delays.last }
+  func advance() { gate.continuation.yield(()) }
+}
+
+private actor GatedVoiceCheckpoint: VoiceAdmissionCheckpoint {
+  private var value: [VoiceAdmissionAssociation] = []
+  private var gate: CheckedContinuation<Void, Never>?
+  private var waiter: CheckedContinuation<Void, Never>?
+  private var first = true
+  func load() throws -> [VoiceAdmissionAssociation] { value }
+  func save(_ admissions: [VoiceAdmissionAssociation]) async throws {
+    if first {
+      first = false
+      await withCheckedContinuation {
+        gate = $0
+        waiter?.resume()
+        waiter = nil
+      }
+    }
+    value = admissions
+  }
+  func isSaving() -> Bool { gate != nil }
+  func waitForSave() async { if gate == nil { await withCheckedContinuation { waiter = $0 } } }
+  func release() {
+    gate?.resume()
+    gate = nil
+  }
 }

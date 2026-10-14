@@ -1,3 +1,4 @@
+import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { createServer } from "node:http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Effect, Layer, Schema } from "effect"
@@ -31,7 +32,7 @@ it("authorizes exact output readiness and canonical uppercase interruption ident
                 body: JSON.stringify(body)
               })
             )
-          const started = yield* request("/voice/sessions", "", {})
+          const started = yield* request("/voice/sessions", "", startVoiceRequest())
           const join = yield* Effect.promise(() => started.json()).pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(VoiceJoin))
           )

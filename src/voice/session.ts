@@ -7,6 +7,7 @@ import { RecognitionEvent } from "../speech-recognition/index.ts"
 import { VoiceFrame, VoiceEvent, failed } from "./contracts.ts"
 import type { VoiceSnapshot, MediaConnection, PendingVoiceInput } from "./contracts.ts"
 import type { ReplyAudio } from "./output.ts"
+import type { VoiceAdmissions } from "./admissions.ts"
 import { Segmenter } from "./segmentation.ts"
 const datagramPublishMillis = 250
 const capabilityBytes = 32
@@ -28,7 +29,10 @@ export class Session {
   readonly events: VoiceEvent[] = []
   sequence = 0
   status: "active" | "ended" = "active"
-  muted = false
+  muted: boolean
+  joined = false
+  joinDeadlineAt = 0
+  controlDeadlineAt = 0
   track: string | undefined
   generation = 0
   pending = 0
@@ -44,8 +48,16 @@ export class Session {
   constructor(
     readonly conversation: Conversation["Service"],
     readonly provider: SpeechRecognition["Service"],
-    readonly scope: Scope.Scope
-  ) {}
+    readonly scope: Scope.Scope,
+    readonly admissionStore: VoiceAdmissions["Service"],
+    readonly startRequestId: string,
+    readonly initialMuted: boolean
+  ) {
+    this.muted = initialMuted
+  }
+  get backendIncarnationId() {
+    return this.admissionStore.backendIncarnationId
+  }
   emit(input: EventInput) {
     return Effect.gen({ self: this }, function* () {
       const event = yield* Schema.decodeUnknownEffect(VoiceEvent)({
@@ -64,42 +76,80 @@ export class Session {
     })
   }
   admit(utteranceId: string, text: string) {
-    const deliveryId = utteranceId
-    this.admissions += 1
-    this.unresolved.set(utteranceId, text)
-    this.finals.set(utteranceId, { utteranceId, deliveryId, text, receipt: null, error: null })
-    if (this.finals.size > maximumPending) {
-      const accepted = [...this.finals.values()].find((input) => input.receipt !== null)
-      if (accepted !== undefined) this.finals.delete(accepted.utteranceId)
-    }
-    const send = this.conversation.send({ deliveryId, text }).pipe(
-      Effect.flatMap((receipt) => this.accept(utteranceId, receipt)),
-      Effect.catch((error) => {
-        this.finals.set(utteranceId, {
-          utteranceId,
-          deliveryId,
-          text,
-          receipt: null,
-          error: { code: error._tag, message: error.message }
-        })
-        return this.emit({ kind: "Error", utteranceId, code: error._tag, message: error.message })
-      }),
-      Effect.ensuring(
-        Effect.sync(() => {
-          this.admissions -= 1
-        })
-      ),
-      Effect.forkIn(this.scope),
-      Effect.asVoid
-    )
-    return this.emit({ kind: "Final", utteranceId, deliveryId, text }).pipe(
-      Effect.andThen(send),
-      Effect.uninterruptible
-    )
+    return Effect.gen({ self: this }, function* () {
+      const association = {
+        backendIncarnationId: this.backendIncarnationId,
+        sessionId: this.id,
+        deliveryId: utteranceId
+      }
+      yield* this.admissionStore.begin({ ...association, text })
+      const deliveryId = utteranceId
+      this.admissions += 1
+      this.unresolved.set(utteranceId, text)
+      this.finals.set(utteranceId, {
+        backendIncarnationId: this.backendIncarnationId,
+        utteranceId,
+        deliveryId,
+        text,
+        receipt: null,
+        error: null
+      })
+      if (this.finals.size > maximumPending) {
+        const accepted = [...this.finals.values()].find((input) => input.receipt !== null)
+        if (accepted !== undefined) this.finals.delete(accepted.utteranceId)
+      }
+      const send = this.conversation.send({ deliveryId, text }).pipe(
+        Effect.flatMap((receipt) => this.accept(utteranceId, receipt)),
+        Effect.catch((error) => {
+          if (this.finals.get(utteranceId)?.receipt != null) return Effect.void
+          this.finals.set(utteranceId, {
+            backendIncarnationId: this.backendIncarnationId,
+            utteranceId,
+            deliveryId,
+            text,
+            receipt: null,
+            error: { code: error._tag, message: error.message }
+          })
+          return this.emit({ kind: "Error", utteranceId, code: error._tag, message: error.message })
+        }),
+        Effect.ensuring(
+          this.admissionStore.seal(association).pipe(
+            Effect.ignore,
+            Effect.andThen(
+              Effect.sync(() => {
+                this.admissions -= 1
+              })
+            )
+          )
+        ),
+        Effect.forkIn(this.scope),
+        Effect.asVoid
+      )
+      yield* this.emit({
+        kind: "Final",
+        backendIncarnationId: this.backendIncarnationId,
+        utteranceId,
+        deliveryId,
+        text
+      }).pipe(Effect.andThen(send))
+    }).pipe(Effect.uninterruptible)
   }
   accept(utteranceId: string, receipt: Message) {
-    if (!this.unresolved.delete(utteranceId)) return Effect.void
-    this.finals.set(utteranceId, { utteranceId, deliveryId: utteranceId, text: receipt.text, receipt, error: null })
+    if (
+      receipt.role !== "user" ||
+      receipt.deliveryId !== utteranceId ||
+      receipt.text !== this.unresolved.get(utteranceId)
+    )
+      return Effect.void
+    this.unresolved.delete(utteranceId)
+    this.finals.set(utteranceId, {
+      backendIncarnationId: this.backendIncarnationId,
+      utteranceId,
+      deliveryId: utteranceId,
+      text: receipt.text,
+      receipt,
+      error: null
+    })
     return this.emit({ kind: "Accepted", utteranceId, receipt })
   }
   recognize(bytes: Uint8Array) {
@@ -206,6 +256,8 @@ export class Session {
   snapshot(after: number): VoiceSnapshot {
     const events = this.events.filter((event) => event.sequence > after)
     return {
+      backendIncarnationId: this.backendIncarnationId,
+      controlDeadlineAt: this.controlDeadlineAt,
       sessionId: this.id,
       status: this.status,
       muted: this.muted,

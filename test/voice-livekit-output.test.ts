@@ -23,6 +23,7 @@ describe.skipIf(liveKitFixturePath === undefined)(
             const opened = yield* transport.open(
               { sessionId: randomUUID(), roomName: randomUUID(), participantIdentity: randomUUID() },
               () => undefined,
+              () => undefined,
               () => undefined
             )
             const client = new Room()
@@ -110,6 +111,7 @@ describe.skipIf(liveKitFixturePath === undefined)("actual pending publication re
           const transport = yield* VoiceTransport
           const room = yield* transport.open(
             { sessionId: randomUUID(), roomName: randomUUID(), participantIdentity: randomUUID() },
+            () => undefined,
             () => undefined,
             () => undefined
           )

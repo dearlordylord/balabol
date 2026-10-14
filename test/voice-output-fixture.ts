@@ -1,7 +1,8 @@
+import { voiceAdmissionsFixture } from "./voice-admission-fixture.ts"
 import { Effect, Layer } from "effect"
 import type { AnswerGeneration, AnswerFailed } from "../src/answer-generation/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
-import { Voice } from "../src/voice/index.ts"
+import { Voice, type VoiceAdmissions } from "../src/voice/index.ts"
 import type { Conversation } from "../src/conversation/index.ts"
 import type { SpeechRecognition, RecognitionFailed } from "../src/speech-recognition/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
@@ -18,11 +19,16 @@ export const voiceOutputLayer = (
   recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer()
 ) => {
   const conversation = replyLayer(path, answer, { attachmentMillis: 10 })
-  const voice = Voice.layer.pipe(Layer.provide(Layer.mergeAll(conversation, transport.layer, synthesis, recognition)))
-  return Layer.merge(voice, conversation)
+  const admissions = voiceAdmissionsFixture().pipe(Layer.provide(conversation))
+  const voice = Voice.layer.pipe(
+    Layer.provide(Layer.mergeAll(conversation, transport.layer, synthesis, recognition, admissions))
+  )
+  return Layer.mergeAll(voice, conversation, admissions)
 }
 export const withVoiceOutput = async (
-  program: (transport: ReturnType<typeof voiceTransportFixture>) => Effect.Effect<void, unknown, Voice | Conversation>,
+  program: (
+    transport: ReturnType<typeof voiceTransportFixture>
+  ) => Effect.Effect<void, unknown, Voice | Conversation | VoiceAdmissions>,
   synthesis: Layer.Layer<SpeechSynthesis, SpeechSynthesisFailed> = fakeSynthesisLayer(),
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
   recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer()

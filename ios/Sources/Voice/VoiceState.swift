@@ -6,7 +6,8 @@ import Foundation
 
 public struct VoiceState: Equatable, Sendable {
   public enum Capture: Equatable, Sendable {
-    case idle, requestingMicrophone, connecting, listening, muted, ending, ended
+    case idle, requestingMicrophone, connecting, reconnecting, hostUnavailable,
+      checkingPreviousSpeech, listening, muted, ending, ended
     case failed(VoiceFailure)
   }
   public enum Admission: Equatable, Sendable {
@@ -15,7 +16,35 @@ public struct VoiceState: Equatable, Sendable {
     case saved(ConversationMessage)
     case failed(text: String, VoiceFailure)
   }
+  public enum Intent: Equatable, Sendable {
+    case off
+    case listening(muted: Bool)
+  }
+  public internal(set) var intent: Intent = .off
   public internal(set) var capture: Capture = .idle
+  internal var startRequestId = UUID()
+  internal var startMuted = false
+  internal var bootstrapKnown = false
+  internal var retryStep = 0
+  internal var backendIncarnationId: UUID?
+  internal var associations: [UUID: VoiceAdmissionAssociation] = [:]
+  internal var stagedFinals: [UUID: String] = [:]
+  internal var checkpointRevision = 0
+  internal var checkpointLoaded = false
+  internal var isRetired = false
+  public internal(set) var admissionFailure: VoiceFailure?
+  public var wantsListening: Bool {
+    if case .listening = intent { return true }
+    return false
+  }
+  public var wantsMuted: Bool {
+    if case .listening(let muted) = intent { return muted }
+    return false
+  }
+  public var canSwitchServer: Bool {
+    checkpointLoaded && !isRetired && !wantsListening && !hasPendingAdmission
+      && associations.isEmpty
+  }
   public internal(set) var tentative = ""
   public internal(set) var admissions: [UUID: Admission] = [:]
   public internal(set) var utterances: [UUID] = []
@@ -29,33 +58,41 @@ public struct VoiceState: Equatable, Sendable {
   public var isChangingMute: Bool { muteInFlight }
   public var canStart: Bool {
     switch capture {
-    case .idle, .ended, .failed: return !hasPendingAdmission
+    case .idle, .ended, .failed: return !wantsListening
     default: return false
     }
   }
   public var hasPendingAdmission: Bool {
-    admissions.values.contains { value in
-      switch value {
-      case .saving, .checking: true
-      default: false
+    !associations.isEmpty
+      || admissions.values.contains { value in
+        switch value {
+        case .saving, .checking: true
+        default: false
+        }
       }
-    }
   }
 }
 
 enum VoiceEvent {
   case snapshot(Int, VoiceSnapshot)
   case start
+  case shutdown
   case permission(Int, Bool)
-  case bootstrapped(Int, UUID)
-  case connected(Int, UUID)
+  case bootstrapped(Int, UUID, UUID)
+  case connected(Int, UUID, Bool)
   case failed(Int, VoiceFailure)
   case end
   case ended(Int)
   case mute
   case muted(Int, Bool)
   case wire(Int, VoiceWireEvent)
-  case observationFailed(Int)
+  case observationFailed(Int, VoiceFailure)
+  case retryReady(Int)
+  case restored([VoiceAdmissionAssociation])
+  case checkpointSaved(Int)
+  case checkpointFailed(Int)
+  case resolved([VoiceAdmissionAssociation], VoiceAdmissionResolution)
+  case resolutionFailed(VoiceFailure)
 }
 enum VoiceCommand {
   case begin(Int)
@@ -64,10 +101,16 @@ enum VoiceCommand {
   case setMuted(Int, UUID, Bool)
   case observe(Int, UUID)
   case accepted(ConversationMessage)
+  case retry(Int, Int)
+  case cancelRetry
+  case cancelProducers
+  case checkpoint(Int, [VoiceAdmissionAssociation])
+  case resolve([VoiceAdmissionAssociation])
+  case refreshConversation
 }
 
 extension VoiceState {
-  private mutating func markChecking() {
+  internal mutating func markChecking() {
     for (id, value) in admissions {
       if case .saving(let delivery, let text) = value {
         admissions[id] = .checking(deliveryId: delivery, text: text)
@@ -75,44 +118,36 @@ extension VoiceState {
     }
   }
   mutating func transition(_ event: VoiceEvent) -> [VoiceCommand] {
-    switch event {
-    case .snapshot(let id, let page):
-      guard id == generation, page.sessionId == sessionId else { return [] }
-      let current = Set(page.pending.map(\.utteranceId))
-      utterances.removeAll { id in
-        guard !current.contains(id) else { return false }
-        switch admissions[id] {
-        case .saved, .failed:
-          admissions.removeValue(forKey: id)
-          return true
-        default: return false
-        }
+    if isRetired {
+      switch event {
+      case .ended: break
+      default: return []
       }
+    }
+    switch event {
+    case .shutdown:
+      let commands = transition(.end)
+      isRetired = true
+      return commands + [.cancelProducers]
+    case .retryReady, .restored, .checkpointSaved, .checkpointFailed, .resolved, .resolutionFailed:
+      return recoveryTransition(event)
+    case .snapshot(let id, let page):
+      guard id == generation, page.sessionId == sessionId,
+        page.backendIncarnationId == backendIncarnationId
+      else { return [] }
       var commands: [VoiceCommand] = []
       if sequence < page.firstSequence - 1 { sequence = page.firstSequence - 1 }
       for pending in page.pending where pending.isValid {
-        if tentativeUtterance == pending.utteranceId {
-          tentative = ""
-          tentativeUtterance = nil
-        }
-        if !utterances.contains(pending.utteranceId) { utterances.append(pending.utteranceId) }
+        let association = VoiceAdmissionAssociation(
+          backendIncarnationId: pending.backendIncarnationId,
+          sessionId: page.sessionId, deliveryId: pending.deliveryId)
         if let receipt = pending.receipt {
-          if admissions[pending.utteranceId] != .saved(receipt) {
-            admissions[pending.utteranceId] = .saved(receipt)
-            commands.append(.accepted(receipt))
-          }
-        } else if let error = pending.error {
-          admissions[pending.utteranceId] =
-            error.code == "StorageUnavailable"
-            ? .checking(deliveryId: pending.deliveryId, text: pending.text)
-            : .failed(text: pending.text, .backend(code: error.code, message: error.message))
+          commands += acceptedAdmission(association, receipt: receipt, expectedText: pending.text)
         } else {
-          admissions[pending.utteranceId] =
-            capture == .listening || capture == .muted
-            ? .saving(deliveryId: pending.deliveryId, text: pending.text)
-            : .checking(deliveryId: pending.deliveryId, text: pending.text)
+          commands += stageFinal(association, text: pending.text)
         }
       }
+      if page.status == "ended", wantsListening { commands += transportFailed(.connection) }
       return commands
     case .start:
       guard canStart else { return [] }
@@ -120,69 +155,86 @@ extension VoiceState {
       sessionId = nil
       sequence = 0
       tentative = ""
-      admissions = [:]
-      utterances = []
+      intent = .listening(muted: false)
+      startRequestId = UUID()
+      startMuted = hasPendingAdmission
+      bootstrapKnown = false
+      retryStep = 0
       muteInFlight = false
       tentativeUtterance = nil
       capture = .requestingMicrophone
       return [.begin(generation)]
     case .permission(let id, let allowed):
-      guard id == generation, capture == .requestingMicrophone else { return [] }
+      guard id == generation, capture == .requestingMicrophone || capture == .reconnecting else {
+        return []
+      }
       capture = allowed ? .connecting : .failed(.permissionDenied)
+      if !allowed { intent = .off }
       return []
-    case .bootstrapped(let id, let session):
+    case .bootstrapped(let id, let session, let incarnation):
       guard id == generation, capture == .connecting else { return [] }
       sessionId = session
+      backendIncarnationId = incarnation
+      bootstrapKnown = true
       return []
-    case .connected(let id, let session):
-      guard id == generation, capture == .connecting, sessionId == session else { return [] }
-      capture = .listening
-      return [.observe(id, session)]
+    case .connected(let id, let session, let actuallyMuted):
+      guard id == generation, capture == .connecting, sessionId == session, wantsListening else {
+        return []
+      }
+      retryStep = 0
+      capture =
+        hasPendingAdmission ? .checkingPreviousSpeech : (actuallyMuted ? .muted : .listening)
+      var commands: [VoiceCommand] = [.observe(id, session), .refreshConversation]
+      let desiredMute = wantsMuted || hasPendingAdmission
+      if actuallyMuted != desiredMute || startMuted != desiredMute {
+        muteInFlight = true
+        commands.append(.setMuted(id, session, desiredMute))
+      }
+      return commands
     case .failed(let id, let error):
       guard id == generation, capture != .ending, capture != .ended else { return [] }
-      capture = .failed(error)
-      muteInFlight = false
-      tentativeUtterance = nil
-      markChecking()
-      tentative = ""
-      return [.cancelStart, .disconnect(id, sessionId)]
+      return transportFailed(error)
     case .end:
       guard capture != .idle, capture != .ending, capture != .ended else { return [] }
+      intent = .off
       capture = .ending
       muteInFlight = false
       tentativeUtterance = nil
       tentative = ""
       markChecking()
-      return [.cancelStart, .disconnect(generation, sessionId)]
+      var commands: [VoiceCommand] = [
+        .cancelRetry, .cancelStart, .disconnect(generation, sessionId),
+      ]
+      if !associations.isEmpty, stagedFinals.isEmpty {
+        commands.append(.resolve(pendingAssociations))
+      }
+      return commands
     case .ended(let id):
       guard id == generation, capture == .ending else { return [] }
       capture = .ended
       return []
     case .mute:
-      guard !muteInFlight, let sessionId, capture == .listening || capture == .muted else {
-        return []
-      }
+      guard wantsListening, !muteInFlight else { return [] }
+      intent = .listening(muted: !wantsMuted)
+      if capture == .connecting, bootstrapKnown { return transportFailed(.connection) }
+      guard let sessionId, capture == .listening || capture == .muted else { return [] }
       muteInFlight = true
-      return [.setMuted(generation, sessionId, capture == .listening)]
+      return [.setMuted(generation, sessionId, wantsMuted)]
     case .muted(let id, let value):
-      guard id == generation, capture == .listening || capture == .muted else { return [] }
+      guard id == generation, wantsListening,
+        capture == .listening || capture == .muted || capture == .checkingPreviousSpeech
+      else { return [] }
       muteInFlight = false
-      capture = value ? .muted : .listening
+      capture = hasPendingAdmission ? .checkingPreviousSpeech : (value ? .muted : .listening)
       if value {
         tentative = ""
         tentativeUtterance = nil
       }
       return []
-    case .observationFailed(let id):
+    case .observationFailed(let id, let error):
       guard id == generation else { return [] }
+      if wantsListening { return transportFailed(error) }
       markChecking()
-      if capture == .listening || capture == .muted {
-        capture = .failed(.connection)
-        muteInFlight = false
-        tentativeUtterance = nil
-        tentative = ""
-        return [.disconnect(id, sessionId)]
-      }
       return []
     case .wire(let id, let wire):
       guard id == generation, wire.sessionId == sessionId, wire.sequence > sequence, wire.isValid
@@ -195,69 +247,44 @@ extension VoiceState {
           tentativeUtterance = wire.utteranceId
         }
       case "Final":
-        guard capture == .listening || capture == .muted || capture == .ending || capture == .ended,
-          let delivery = wire.deliveryId, let text = wire.text
+        guard let delivery = wire.deliveryId, let text = wire.text,
+          let incarnation = wire.backendIncarnationId,
+          incarnation == backendIncarnationId
         else { return [] }
         if tentativeUtterance == wire.utteranceId {
           tentative = ""
           tentativeUtterance = nil
         }
-        guard let utterance = wire.utteranceId, admissions[utterance] == nil else { return [] }
-        utterances.removeAll { id in
-          switch admissions[id] {
-          case .saved, .failed:
-            admissions.removeValue(forKey: id)
-            return true
-          default: return false
-          }
-        }
-        utterances.append(utterance)
-        admissions[utterance] =
-          capture == .ending || capture == .ended
-          ? .checking(deliveryId: delivery, text: text)
-          : .saving(deliveryId: delivery, text: text)
+        return stageFinal(
+          VoiceAdmissionAssociation(
+            backendIncarnationId: incarnation,
+            sessionId: wire.sessionId, deliveryId: delivery), text: text)
       case "Discarded":
         if wire.utteranceId == tentativeUtterance {
           tentative = ""
           tentativeUtterance = nil
         }
       case "Accepted":
-        guard let utterance = wire.utteranceId, let receipt = wire.receipt else { return [] }
-        let expected: UUID?
-        switch admissions[utterance] {
-        case .saving(let id, let text), .checking(let id, let text):
-          expected = receipt.text == text ? id : nil
-        default: expected = nil
+        guard let receipt = wire.receipt, let association = associations[receipt.deliveryId] else {
+          return []
         }
-        guard receipt.deliveryId == expected else { return [] }
-        admissions[utterance] = .saved(receipt)
-        return [.accepted(receipt)]
+        let expectedText = stagedFinals[receipt.deliveryId] ?? admissionText(receipt.deliveryId)
+        return acceptedAdmission(association, receipt: receipt, expectedText: expectedText)
       case "Error":
         let failure = VoiceFailure.backend(code: wire.code ?? "", message: wire.message ?? "")
-        if let utterance = wire.utteranceId, let admission = admissions[utterance] {
-          switch admission {
-          case .saving(let delivery, let text), .checking(let delivery, let text):
-            admissions[utterance] =
-              wire.code == "StorageUnavailable"
-              ? .checking(deliveryId: delivery, text: text) : .failed(text: text, failure)
-          default: break
+        if let utterance = wire.utteranceId, let association = associations[utterance] {
+          if let text = admissionText(utterance) {
+            admissions[utterance] = .checking(deliveryId: association.deliveryId, text: text)
           }
+          return [.resolve(pendingAssociations)]
         } else if capture == .listening || capture == .muted {
-          capture = .failed(failure)
-          muteInFlight = false
-          tentative = ""
-          tentativeUtterance = nil
-          markChecking()
-          return [.disconnect(id, sessionId)]
+          return transportFailed(failure)
         }
       case "Ended":
         tentative = ""
         tentativeUtterance = nil
         muteInFlight = false
-        if capture == .listening || capture == .muted {
-          capture = .ending
-          return [.disconnect(id, sessionId)]
-        }
+        if wantsListening { return transportFailed(.connection) }
       default: break
       }
       return []

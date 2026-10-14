@@ -19,6 +19,7 @@
     private var microphone: LocalAudioTrack?
     private var renderer: VoiceSpeechRenderer?
     private var speechTask: Task<Void, Never>?
+    private var speechStartedCallback: (@Sendable () -> Void)?
     #if DEBUG
       private var captureEvidenceTask: Task<Void, Never>?
     #endif
@@ -45,7 +46,7 @@
       }
     }
     public func connect(
-      _ join: VoiceJoin, failure: @escaping @Sendable () -> Void,
+      _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,
       speechStarted: @escaping @Sendable () -> Void,
       outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
     ) async throws {
@@ -53,6 +54,7 @@
       let expected = generation
       publisher = join.backendParticipantIdentity
       self.outputReceived = outputReceived
+      speechStartedCallback = speechStarted
       let callback = VoiceRoomDelegate(
         failure: { [weak self] in
           Task { @MainActor in
@@ -76,49 +78,12 @@
           throw CancellationError()
         }
         do {
-          guard let publication = try await candidate.localParticipant.setMicrophone(enabled: true),
-            publication.track != nil, !publication.isMuted
-          else { throw VoiceFailure.capture }
-          if let track = publication.track as? LocalAudioTrack {
-            microphone = track
-            let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-            let renderer: VoiceSpeechRenderer
-            #if DEBUG
-              if evidenceEnabled {
-                let evidence = AsyncStream<VoiceCaptureEvidence>.makeStream(
-                  bufferingPolicy: .bufferingNewest(1))
-                captureEvidenceTask?.cancel()
-                captureEvidenceTask = Task { [weak self] in
-                  let logger = os.Logger(
-                    subsystem: "app.balabol.voice.evidence", category: "capture")
-                  logger.notice("capture renderer attached")
-                  for await value in evidence.stream {
-                    guard !Task.isCancelled, self?.generation == expected else { return }
-                    logger.notice(
-                      "capture callbacks=\(value.callbacks, privacy: .public) frames=\(value.frames, privacy: .public) sampleRate=\(value.sampleRate, privacy: .public) format=\(value.format, privacy: .public) channels=\(value.channels, privacy: .public) interleaved=\(value.interleaved, privacy: .public) readable=\(value.readable, privacy: .public) peak=\(value.peak, privacy: .public) voiced=\(value.voiced, privacy: .public) onset=\(value.onset, privacy: .public)"
-                    )
-                  }
-                }
-                renderer = VoiceSpeechRenderer(
-                  started: { stream.continuation.yield(()) },
-                  diagnostic: { evidence.continuation.yield($0) })
-              } else {
-                renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
-              }
-            #else
-              renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
-            #endif
-            self.renderer = renderer
-            track.add(audioRenderer: renderer)
-            speechTask = Task { [weak self] in
-              for await _ in stream.stream {
-                guard !Task.isCancelled, self?.generation == expected else { return }
-                speechStarted()
-              }
-            }
-          }
-          if evidenceEnabled, let track = publication.track {
-            startEvidence(track, generation: expected)
+          if !initiallyMuted {
+            guard
+              let publication = try await candidate.localParticipant.setMicrophone(enabled: true),
+              let track = publication.track as? LocalAudioTrack, !publication.isMuted
+            else { throw VoiceFailure.capture }
+            installMicrophone(track, generation: expected, speechStarted: speechStarted)
           }
         } catch {
           throw VoiceFailure.capture
@@ -138,15 +103,65 @@
         throw error
       }
     }
+    private func installMicrophone(
+      _ track: LocalAudioTrack, generation expected: Int,
+      speechStarted: @escaping @Sendable () -> Void
+    ) {
+      guard microphone !== track else { return }
+      speechTask?.cancel()
+      if let microphone, let renderer { microphone.remove(audioRenderer: renderer) }
+      microphone = track
+      let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+      let renderer: VoiceSpeechRenderer
+      #if DEBUG
+        if evidenceEnabled {
+          let evidence = AsyncStream<VoiceCaptureEvidence>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
+          captureEvidenceTask?.cancel()
+          captureEvidenceTask = Task { [weak self] in
+            let logger = os.Logger(
+              subsystem: "app.balabol.voice.evidence", category: "capture")
+            logger.notice("capture renderer attached")
+            for await value in evidence.stream {
+              guard !Task.isCancelled, self?.generation == expected else { return }
+              logger.notice(
+                "capture callbacks=\(value.callbacks, privacy: .public) frames=\(value.frames, privacy: .public) sampleRate=\(value.sampleRate, privacy: .public) format=\(value.format, privacy: .public) channels=\(value.channels, privacy: .public) interleaved=\(value.interleaved, privacy: .public) readable=\(value.readable, privacy: .public) peak=\(value.peak, privacy: .public) voiced=\(value.voiced, privacy: .public) onset=\(value.onset, privacy: .public)"
+              )
+            }
+          }
+          renderer = VoiceSpeechRenderer(
+            started: { stream.continuation.yield(()) },
+            diagnostic: { evidence.continuation.yield($0) })
+        } else {
+          renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
+        }
+      #else
+        renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
+      #endif
+      self.renderer = renderer
+      track.add(audioRenderer: renderer)
+      speechTask = Task { [weak self] in
+        for await _ in stream.stream {
+          guard !Task.isCancelled, self?.generation == expected else { return }
+          speechStarted()
+        }
+      }
+
+      if evidenceEnabled { startEvidence(track, generation: expected) }
+    }
     public func mute(_ muted: Bool) async throws {
       guard let room else { throw VoiceFailure.capture }
+      let expected = generation
+      if muted, microphone == nil { return }
       do {
         guard let publication = try await room.localParticipant.setMicrophone(enabled: !muted),
-          publication.track != nil, publication.isMuted == muted
+          let track = publication.track as? LocalAudioTrack, publication.isMuted == muted,
+          expected == generation, !Task.isCancelled
         else { throw VoiceFailure.capture }
-      } catch {
-        throw VoiceFailure.capture
-      }
+        if !muted, let speechStartedCallback {
+          installMicrophone(track, generation: expected, speechStarted: speechStartedCallback)
+        }
+      } catch { throw VoiceFailure.capture }
     }
     public func disconnect() async {
       let stopped = stopOutput()
@@ -160,6 +175,7 @@
       if let microphone, let renderer { microphone.remove(audioRenderer: renderer) }
       microphone = nil
       renderer = nil
+      speechStartedCallback = nil
       generation += 1
       let task = evidenceTask
       evidenceTask?.cancel()

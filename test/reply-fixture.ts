@@ -2,23 +2,30 @@ import { Effect, Layer } from "effect"
 import type { AnswerFailed, AnswerGeneration } from "../src/answer-generation/index.ts"
 import { fakeSummaryLayer, type SummaryGeneration } from "../src/summary-generation/index.ts"
 import { Conversation, ReplyConfiguration, defaultReplySettings } from "../src/conversation/index.ts"
-import { configuredUniiLayer, sqliteLayer } from "../src/memory/index.ts"
+import { configuredUniiLayer, sqliteStorageLayer, durableMemoryLayer } from "../src/memory/index.ts"
 
 export const replyLayer = (
   path: string,
   answer: Layer.Layer<AnswerGeneration, AnswerFailed>,
   overrides: Partial<typeof defaultReplySettings> = {},
   summary: Layer.Layer<SummaryGeneration> = fakeSummaryLayer
-) =>
-  Conversation.configuredLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        answer,
-        Layer.succeed(ReplyConfiguration, { ...defaultReplySettings, deltaMillis: 0, ...overrides }),
-        configuredUniiLayer().pipe(Layer.provide(summary), Layer.provide(sqliteLayer(path)))
+) => {
+  const resource = sqliteStorageLayer(path)
+  return Conversation.configuredLayer
+    .pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          answer,
+          Layer.succeed(ReplyConfiguration, { ...defaultReplySettings, deltaMillis: 0, ...overrides }),
+          configuredUniiLayer().pipe(
+            Layer.provide(summary),
+            Layer.provide(durableMemoryLayer.pipe(Layer.provide(resource)))
+          )
+        )
       )
     )
-  )
+    .pipe(Layer.provideMerge(resource))
+}
 const maximumPolls = 300
 const pollMillis = 5
 export const waitForReply = (conversation: Conversation["Service"], inputDeliveryId: string) =>

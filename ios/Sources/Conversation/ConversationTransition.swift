@@ -5,6 +5,10 @@ import Foundation
 enum ConversationEvent {
   case start
   case voiceAccepted(ConversationMessage)
+  case refreshReconnectDisplay
+  case reconnectDisplayLoaded(
+    ConversationState.Request, Result<HistoryPage, ConversationFailure>,
+    Result<CurrentTurn?, ConversationFailure>)
   case refreshCurrent
   case retryReply
   case currentLoaded(ConversationState.Request, Result<CurrentTurn?, ConversationFailure>)
@@ -33,6 +37,8 @@ enum ConversationCommand {
   case loadDraft(ConversationState.Request)
   case saveDraft(ConversationState.Request, SavedDraft)
   case send(ConversationState.Request, PendingDelivery)
+  case reconnectDisplay(ConversationState.Request, Int?)
+  case cancelReconnectDisplay
   case history(ConversationState.Request, Int?)
   case observeReply(ConversationState.Request, UUID)
   case recoverInterruptedReply(ConversationState.Request, UUID)
@@ -53,6 +59,70 @@ extension ConversationState {
       let request = request()
       draft = .loading(request, previous: nil)
       return [.loadDraft(request)]
+    case .refreshReconnectDisplay:
+      guard isActive, reconnectDisplayRequest == nil else { return [] }
+      let request = request()
+      reconnectDisplayRequest = request
+      reconnectDisplayAfter = messages.last?.position
+      return [.reconnectDisplay(request, reconnectDisplayAfter)]
+    case .reconnectDisplayLoaded(let request, let result, let current):
+      guard isActive, reconnectDisplayRequest == request else { return [] }
+      reconnectDisplayRequest = nil
+      let after = reconnectDisplayAfter
+      reconnectDisplayAfter = nil
+      switch result {
+      case .failure(let failure): reconnectDisplayFailure = failure
+      case .success(let page):
+        guard page.messages.count <= HistoryPage.maximumMessages,
+          page.messages.allSatisfy(\.isValid),
+          zip(page.messages, page.messages.dropFirst()).allSatisfy({ $0.position < $1.position }),
+          page.nextAfter == nil || page.nextAfter == page.messages.last?.position,
+          page.messages.first.map({ $0.position > (after ?? -1) }) ?? true,
+          merge(page.messages)
+        else {
+          reconnectDisplayFailure = .invalidResponse
+          return []
+        }
+        reconnectDisplayFailure = nil
+      }
+      switch current {
+      case .failure(let failure): reconnectDisplayFailure = failure
+      case .success(nil): break
+      case .success(.some(let turn)):
+        guard turn.isValid, merge([turn.input] + (turn.reply.receipt.map { [$0] } ?? [])) else {
+          reconnectDisplayFailure = .invalidResponse
+          return []
+        }
+        // This is a display probe. It never owns a new SSE reader, draft checkpoint
+        // or response generation, and cannot displace a newer accepted input.
+        guard !isSending, draft.content?.pending == nil,
+          messages.last(where: { $0.role == .user })?.deliveryId == turn.input.deliveryId
+        else { return [] }
+        if case .observing(let observer, let input, _) = reply, input == turn.input.deliveryId {
+          return receiveReply(observer, turn.reply)
+        }
+        if case .completed(let receipt) = reply,
+          receipt.inputDeliveryId == turn.input.deliveryId
+        {
+          return []
+        }
+        if case .observationFailed(let input, let latest, _) = reply,
+          input == turn.input.deliveryId, let latest,
+          latest.responseId != turn.reply.responseId || latest.sequence > turn.reply.sequence
+        {
+          return []
+        }
+        if let receipt = turn.reply.receipt {
+          reply = .completed(receipt)
+        } else if let failure = turn.reply.error {
+          reply = .providerFailed(
+            inputDeliveryId: turn.input.deliveryId, text: turn.reply.text, failure)
+        } else {
+          reply = .observationFailed(
+            inputDeliveryId: turn.input.deliveryId, latest: turn.reply, .unavailable)
+        }
+      }
+      return []
     case .refreshCurrent:
       guard isActive, !isSending, replyRetryRequest == nil, currentRequest == nil else { return [] }
       let request = request()
@@ -138,6 +208,8 @@ extension ConversationState {
       // until POST decides interruption, so disconnect cannot race acceptance.
       if case .observing(_, let input, _) = reply { interruptedInput = input }
       currentRequest = nil
+      reconnectDisplayRequest = nil
+      reconnectDisplayAfter = nil
       replyRetryRequest = nil
       reply = .idle
       delivery = .waitingCheckpoint(pending)
@@ -257,6 +329,7 @@ extension ConversationState {
       interruptionRecoveries.removeAll()
       return [
         .cancelCurrent, .cancelSend, .cancelHistory, .cancelReply, .cancelInterruptionRecoveries,
+        .cancelReconnectDisplay,
       ]
     case .drained:
       guard case .stopping = connection else { return [] }

@@ -14,7 +14,7 @@ import { CoreHost } from "./core-host.ts"
 import { DurableMemory, sqliteLayer } from "./adapter.ts"
 
 export * from "./contracts.ts"
-export { DurableMemory, sqliteLayer } from "./adapter.ts"
+export { DurableMemory, SqliteMemoryStorage, durableMemoryLayer, sqliteLayer, sqliteStorageLayer } from "./adapter.ts"
 
 export class Memory extends Context.Service<
   Memory,

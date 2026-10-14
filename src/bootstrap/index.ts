@@ -13,16 +13,23 @@ import {
 } from "../conversation/index.ts"
 
 import { welcomeRoutes } from "./welcome.ts"
-import { configuredUniiLayer, sqliteLayer, MemorySettings, defaultMemorySettings } from "../memory/index.ts"
+import {
+  configuredUniiLayer,
+  sqliteLayer,
+  sqliteStorageLayer,
+  durableMemoryLayer,
+  SqliteMemoryStorage,
+  MemorySettings,
+  defaultMemorySettings
+} from "../memory/index.ts"
 
 import { fakeAnswerLayer } from "../answer-generation/index.ts"
 import { FakeSummarySettings, configurableFakeSummaryLayer } from "../summary-generation/index.ts"
 import { fakeRecognitionLayer } from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
-import { LiveKitSettings, liveKitLayer, Voice, voiceRoutes } from "../voice/index.ts"
+import { LiveKitSettings, liveKitLayer, Voice, voiceRoutes, sqliteVoiceAdmissions } from "../voice/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
-export const conversationLayer = (
-  path: string,
+const configuredConversationLayer = (
   settings: ReplySettings = defaultReplySettings,
   memorySettings: MemorySettings = defaultMemorySettings,
   summarySettings?: FakeSummarySettings
@@ -32,13 +39,16 @@ export const conversationLayer = (
       Layer.mergeAll(
         fakeAnswerLayer(settings.deltaMillis),
         Layer.succeed(ReplyConfiguration, settings),
-        configuredUniiLayer(memorySettings).pipe(
-          Layer.provide(configurableFakeSummaryLayer(summarySettings)),
-          Layer.provide(sqliteLayer(path))
-        )
+        configuredUniiLayer(memorySettings).pipe(Layer.provide(configurableFakeSummaryLayer(summarySettings)))
       )
     )
   )
+export const conversationLayer = (
+  path: string,
+  settings: ReplySettings = defaultReplySettings,
+  memorySettings: MemorySettings = defaultMemorySettings,
+  summarySettings?: FakeSummarySettings
+) => configuredConversationLayer(settings, memorySettings, summarySettings).pipe(Layer.provide(sqliteLayer(path)))
 const maximumPort = 65_535
 const maximumOwnerIdentityLength = 254
 // Four seconds of fixture audio makes interruption observable without inference.
@@ -113,11 +123,24 @@ export const serverLayer = (config: ServerConfig) => {
       trustedControlRoutes(Layer.merge(conversationRoutes, welcomeRoutes), config.tailnetOwner)
     ).pipe(Layer.provide(conversation), Layer.provideMerge(http))
   const routes = Layer.mergeAll(conversationRoutes, welcomeRoutes, voiceRoutes)
+  // One scoped writer lease protects both memory and speech-admission facts.
+  const storage = sqliteStorageLayer(config.database)
+  const sharedConversation = configuredConversationLayer(config.reply, config.memory, config.fakeSummary).pipe(
+    Layer.provide(durableMemoryLayer)
+  )
+  const admissions = Layer.unwrap(
+    Effect.gen(function* () {
+      const resource = yield* SqliteMemoryStorage
+      return sqliteVoiceAdmissions(resource.storage.database)
+    })
+  )
   const application = Voice.layer.pipe(
     Layer.provide(fakeRecognitionLayer()),
     Layer.provide(fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })),
     Layer.provide(liveKitLayer(config.voice)),
-    Layer.provideMerge(conversation)
+    Layer.provide(admissions),
+    Layer.provideMerge(sharedConversation),
+    Layer.provide(storage)
   )
   return HttpRouter.serve(trustedControlRoutes(routes, config.tailnetOwner)).pipe(
     Layer.provide(application),

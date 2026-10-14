@@ -119,6 +119,9 @@ public struct ConversationState: Equatable, Sendable {
   public internal(set) var messages: [ConversationMessage] = []
   // This cursor advances only when a server history page is accepted. A direct
   // receipt can jump ahead of missing rows and therefore must never advance it.
+  internal var reconnectDisplayRequest: Request?
+  internal var reconnectDisplayAfter: Int?
+  public internal(set) var reconnectDisplayFailure: ConversationFailure?
   public internal(set) var historyCursor: Int?
   public internal(set) var hasLoadedHistory = false
   public internal(set) var hasMoreHistory = false

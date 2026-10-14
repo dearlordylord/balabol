@@ -19,9 +19,14 @@ export class DurableMemory extends Context.Service<
   }
 >()("balabol/memory/durable") {}
 
-export const sqliteLayer = (path: string) =>
+/** Composition-only resource: its lease outlives all adapters sharing this database. */
+export class SqliteMemoryStorage extends Context.Service<SqliteMemoryStorage, { readonly storage: SqliteStorage }>()(
+  "balabol/memory/sqlite-resource"
+) {}
+
+export const sqliteStorageLayer = (path: string) =>
   Layer.effect(
-    DurableMemory,
+    SqliteMemoryStorage,
     Effect.gen(function* () {
       const storage = yield* Effect.acquireRelease(
         Effect.try({
@@ -30,30 +35,41 @@ export const sqliteLayer = (path: string) =>
         }),
         (instance) => Effect.promise(() => instance.close())
       )
-      return DurableMemory.of({
-        storage,
-        latestInput: () => storage.latestInput(),
-        pendingReply: () => storage.pendingReply(),
-        findReply: (id) => storage.findReply(id),
-        find: (id) => {
-          const row = storage.find(id)
-          if (row === undefined) return undefined
-          const payload = {
-            deliveryId: row.deliveryId,
-            text: row.text,
-            role: row.role,
-            ...(row.inputDeliveryId === null ? {} : { inputDeliveryId: row.inputDeliveryId }),
-            ...(row.responseId === null ? {} : { responseId: row.responseId }),
-            ...(row.outcome === null ? {} : { outcome: row.outcome })
-          }
-          return Schema.decodeUnknownSync(DeliveryEvidence)(
-            row.firstId === null
-              ? { state: "Intent", payload }
-              : { state: "Accepted", receipt: { ...payload, recordId: row.firstId, position: row.position } }
-          )
-        },
-        page: (after, limit) => storage.page(after, limit),
-        prepare: (payload) => storage.prepare(payload)
-      })
+      return SqliteMemoryStorage.of({ storage })
     })
   )
+
+export const durableMemoryLayer = Layer.effect(
+  DurableMemory,
+  Effect.gen(function* () {
+    const { storage } = yield* SqliteMemoryStorage
+    return DurableMemory.of({
+      storage,
+      latestInput: () => storage.latestInput(),
+      pendingReply: () => storage.pendingReply(),
+      findReply: (id) => storage.findReply(id),
+      find: (id) => {
+        const row = storage.find(id)
+        if (row === undefined) return undefined
+        const payload = {
+          deliveryId: row.deliveryId,
+          text: row.text,
+          role: row.role,
+          ...(row.inputDeliveryId === null ? {} : { inputDeliveryId: row.inputDeliveryId }),
+          ...(row.responseId === null ? {} : { responseId: row.responseId }),
+          ...(row.outcome === null ? {} : { outcome: row.outcome })
+        }
+        return Schema.decodeUnknownSync(DeliveryEvidence)(
+          row.firstId === null
+            ? { state: "Intent", payload }
+            : { state: "Accepted", receipt: { ...payload, recordId: row.firstId, position: row.position } }
+        )
+      },
+      page: (after, limit) => storage.page(after, limit),
+      prepare: (payload) => storage.prepare(payload)
+    })
+  })
+)
+
+/** Standalone memory keeps the same acquisition path as shared application composition. */
+export const sqliteLayer = (path: string) => durableMemoryLayer.pipe(Layer.provide(sqliteStorageLayer(path)))

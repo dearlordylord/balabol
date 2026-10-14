@@ -5,13 +5,17 @@ import Foundation
 #endif
 
 public enum VoiceFailure: Error, Equatable, Sendable {
-  case permissionDenied, capture, connection, invalidResponse
+  case permissionDenied, capture, connection, invalidResponse, checkpointUnavailable
   case backend(code: String, message: String)
 }
 
 /// Credentials belong to the adapter bootstrap, never the presentation state.
 public struct VoiceJoin: Codable, Sendable {
   public let sessionId: UUID
+  public let startRequestId: UUID
+  public let backendIncarnationId: UUID
+  public let joinDeadlineAt: Double
+  public let controlDeadlineAt: Double
   public let roomName: String
   public let participantIdentity: String
   public let backendParticipantIdentity: UUID
@@ -25,6 +29,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
   public let sequence: Int
   public let sessionId: UUID
   public let kind: String
+  public let backendIncarnationId: UUID?
   public let utteranceId: UUID?
   public let deliveryId: UUID?
   public let text: String?
@@ -38,7 +43,9 @@ public struct VoiceWireEvent: Decodable, Sendable {
     guard sequence > 0 else { return false }
     switch kind {
     case "Interim": return utteranceId != nil && validText
-    case "Final": return utteranceId != nil && deliveryId == utteranceId && validText
+    case "Final":
+      return backendIncarnationId != nil && utteranceId != nil && deliveryId == utteranceId
+        && validText
     case "Accepted":
       return utteranceId != nil && receipt?.isValid == true && receipt?.role == .user
         && receipt?.deliveryId == utteranceId
@@ -59,6 +66,7 @@ public struct VoicePending: Decodable, Sendable {
     public let message: String
   }
   public let utteranceId: UUID
+  public let backendIncarnationId: UUID
   public let deliveryId: UUID
   public let text: String
   public let receipt: ConversationMessage?
@@ -78,6 +86,8 @@ public struct VoicePending: Decodable, Sendable {
 
 public struct VoiceSnapshot: Decodable, Sendable {
   public let sessionId: UUID
+  public let backendIncarnationId: UUID
+  public let controlDeadlineAt: Double
   public let status: String
   public let muted: Bool
   public let sequence: Int
@@ -90,11 +100,14 @@ public struct VoiceSnapshot: Decodable, Sendable {
   public let output: VoiceOutput?
   internal init(
     sessionId: UUID, status: String, muted: Bool, sequence: Int,
+    backendIncarnationId: UUID = UUID(), controlDeadlineAt: Double = 9_999_999_999_999,
     events: [VoiceWireEvent], nextAfter: Int?, firstSequence: Int? = nil,
     audioFramesReceived: Int = 0, sampleFramesReceived: Int = 0, pending: [VoicePending] = [],
     output: VoiceOutput? = nil
   ) {
     self.sessionId = sessionId
+    self.backendIncarnationId = backendIncarnationId
+    self.controlDeadlineAt = controlDeadlineAt
     self.status = status
     self.muted = muted
     self.sequence = sequence
@@ -109,7 +122,9 @@ public struct VoiceSnapshot: Decodable, Sendable {
 }
 
 public protocol VoiceControl: Sendable {
-  func start() async throws -> VoiceJoin
+  func start(requestId: UUID, muted: Bool) async throws -> VoiceJoin
+  func resolve(admissions: [VoiceAdmissionAssociation]) async throws -> VoiceAdmissionResolution
+  func retain(admissions: [VoiceAdmissionAssociation]) async
   func snapshot(sessionId: UUID, after: Int) async throws -> VoiceSnapshot
   func mute(sessionId: UUID, muted: Bool) async throws
   func end(sessionId: UUID) async throws
@@ -120,11 +135,16 @@ public protocol VoiceControl: Sendable {
 @MainActor public protocol VoiceMedia: AnyObject {
   func requestPermission() async -> Bool
   func connect(
-    _ join: VoiceJoin, failure: @escaping @Sendable () -> Void,
+    _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,
     speechStarted: @escaping @Sendable () -> Void,
     outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void) async throws
   func mute(_ muted: Bool) async throws
   func disconnect() async
   func prepareOutput(_ manifest: VoiceAudioManifest) async throws
   func stopOutput() -> Task<Void, Never>
+}
+
+extension VoiceControl {
+  public func start() async throws -> VoiceJoin { try await start(requestId: UUID(), muted: false) }
+  public func retain(admissions: [VoiceAdmissionAssociation]) async {}
 }

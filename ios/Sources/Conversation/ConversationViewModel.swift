@@ -18,6 +18,7 @@ public final class ConversationViewModel {
   @ObservationIgnored private var replyRequest: ConversationState.Request?
   @ObservationIgnored private var currentTask: Task<Void, Never>?
   @ObservationIgnored private var currentRequest: ConversationState.Request?
+  @ObservationIgnored private var reconnectDisplayTask: Task<Void, Never>?
   @ObservationIgnored private var historyTask: Task<Void, Never>?
   @ObservationIgnored private var draftRequest: ConversationState.Request?
   @ObservationIgnored private var deliveryRequest: ConversationState.Request?
@@ -63,6 +64,11 @@ public final class ConversationViewModel {
   public func acceptVoiceReceipt(_ receipt: ConversationMessage) {
     receive(.voiceAccepted(receipt))
     receive(.refreshCurrent)
+  }
+
+  /// Refresh a bounded display page and current reply without moving pagination or draft.
+  public func refreshReconnectDisplay() {
+    receive(.refreshReconnectDisplay)
   }
 
   public func start() async {
@@ -189,6 +195,24 @@ public final class ConversationViewModel {
         self.deliveryRequest = nil
         self.receive(.delivered(request, result))
       }
+    case .reconnectDisplay(let request, let after):
+      let transport = transport
+      reconnectDisplayTask = Task { [weak self] in
+        let result: Result<HistoryPage, ConversationFailure>
+        do { result = .success(try await transport.history(after: after)) } catch {
+          result = .failure(error as? ConversationFailure ?? .unavailable)
+        }
+        let current: Result<CurrentTurn?, ConversationFailure>
+        do { current = .success(try await transport.currentTurn()) } catch {
+          current = .failure(error as? ConversationFailure ?? .unavailable)
+        }
+        guard !Task.isCancelled, let self else { return }
+        self.receive(.reconnectDisplayLoaded(request, result, current))
+        self.reconnectDisplayTask = nil
+      }
+    case .cancelReconnectDisplay:
+      reconnectDisplayTask?.cancel()
+      reconnectDisplayTask = nil
     case .history(let request, let after):
       let transport = transport
       historyRequest = request

@@ -78,9 +78,13 @@ export const VoiceEvent = Schema.Union([
     Schema.makeFilter((event) => event.output.manifest === null || event.output.manifest.sessionId === event.sessionId)
   ),
   Schema.Struct({ ...utterance, kind: Schema.Literal("Interim"), text: Schema.String }),
-  Schema.Struct({ ...utterance, kind: Schema.Literal("Final"), deliveryId: Id, text: Schema.String }).check(
-    Schema.makeFilter((event) => event.deliveryId === event.utteranceId)
-  ),
+  Schema.Struct({
+    ...utterance,
+    kind: Schema.Literal("Final"),
+    backendIncarnationId: Id,
+    deliveryId: Id,
+    text: Schema.String
+  }).check(Schema.makeFilter((event) => event.deliveryId === event.utteranceId)),
   Schema.Struct({ ...utterance, kind: Schema.Literal("Accepted"), receipt: Message }).check(
     Schema.makeFilter((event) => event.receipt.deliveryId === event.utteranceId && event.receipt.role === "user")
   ),
@@ -97,6 +101,7 @@ export const VoiceEvent = Schema.Union([
 ])
 export type VoiceEvent = typeof VoiceEvent.Type
 export const PendingVoiceInput = Schema.Struct({
+  backendIncarnationId: Id,
   utteranceId: Id,
   deliveryId: Id,
   text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumText)),
@@ -114,6 +119,8 @@ export const PendingVoiceInput = Schema.Struct({
 )
 export type PendingVoiceInput = typeof PendingVoiceInput.Type
 export const VoiceSnapshot = Schema.Struct({
+  backendIncarnationId: Id,
+  controlDeadlineAt: Schema.Number,
   sessionId: Id,
   status: Schema.Literals(["active", "ended"]),
   muted: Schema.Boolean,
@@ -126,12 +133,27 @@ export const VoiceSnapshot = Schema.Struct({
   pending: Schema.Array(PendingVoiceInput).check(Schema.isMaxLength(maximumPending)),
   nextAfter: Sequence
 }).check(
-  Schema.makeFilter(
-    (snapshot) => snapshot.output?.manifest == null || snapshot.output.manifest.sessionId === snapshot.sessionId
-  )
+  Schema.makeFilter(function validSnapshot(snapshot) {
+    return (
+      (snapshot.output?.manifest == null || snapshot.output.manifest.sessionId === snapshot.sessionId) &&
+      snapshot.pending.every(function sameIncarnation(input) {
+        return input.backendIncarnationId === snapshot.backendIncarnationId
+      }) &&
+      snapshot.events.every(function sameSession(event) {
+        return (
+          event.sessionId === snapshot.sessionId &&
+          (event.kind !== "Final" || event.backendIncarnationId === snapshot.backendIncarnationId)
+        )
+      })
+    )
+  })
 )
 export type VoiceSnapshot = typeof VoiceSnapshot.Type
 export const VoiceJoin = Schema.Struct({
+  backendIncarnationId: Id,
+  startRequestId: Id,
+  joinDeadlineAt: Schema.Number,
+  controlDeadlineAt: Schema.Number,
   sessionId: Id,
   roomName: Id,
   participantIdentity: Id,
@@ -179,8 +201,18 @@ export class VoiceTransport extends Context.Service<
     open: (
       identity: { sessionId: string; roomName: string; participantIdentity: string },
       frame: (track: string, frame: unknown) => void,
-      disconnected: () => void
-    ) => Effect.Effect<{ join: Omit<VoiceJoin, "controlToken">; connection: MediaConnection }, VoiceFailed>
+      disconnected: () => void,
+      connected: () => void
+    ) => Effect.Effect<
+      {
+        join: Omit<
+          VoiceJoin,
+          "controlToken" | "backendIncarnationId" | "startRequestId" | "joinDeadlineAt" | "controlDeadlineAt"
+        >
+        connection: MediaConnection
+      },
+      VoiceFailed
+    >
   }
 >()("balabol/voice-transport") {}
 export const SessionId = Id

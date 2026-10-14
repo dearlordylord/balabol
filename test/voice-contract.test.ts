@@ -2,10 +2,13 @@ import { Schema } from "effect"
 import { expect, it } from "vitest"
 import { VoiceFrame, VoiceEvent, VoiceSnapshot } from "../src/voice/index.ts"
 const sessionId = "11111111-1111-4111-8111-111111111111"
+const backendIncarnationId = "33333333-3333-4333-8333-333333333333"
 const utteranceId = "22222222-2222-4222-8222-222222222222"
 const receipt = { deliveryId: utteranceId, text: "Final", recordId: 0, position: 0, role: "user" }
-const pending = { utteranceId, deliveryId: utteranceId, text: "Final", receipt, error: null }
+const pending = { backendIncarnationId, utteranceId, deliveryId: utteranceId, text: "Final", receipt, error: null }
 const snapshot = {
+  backendIncarnationId,
+  controlDeadlineAt: 30000,
   sessionId,
   status: "ended",
   muted: false,
@@ -20,6 +23,9 @@ const snapshot = {
 }
 it("validates canonical pending input identity and receipt payload at the snapshot edge", () => {
   expect(Schema.decodeUnknownSync(VoiceSnapshot)(snapshot)).toEqual(snapshot)
+  expect(Schema.is(VoiceSnapshot)({ ...snapshot, pending: [{ ...pending, backendIncarnationId: sessionId }] })).toBe(
+    false
+  )
   expect(Schema.is(VoiceSnapshot)({ ...snapshot, pending: [{ ...pending, receipt: null }] })).toBe(true)
   expect(Schema.is(VoiceSnapshot)({ ...snapshot, pending: [{ ...pending, deliveryId: sessionId }] })).toBe(false)
   expect(

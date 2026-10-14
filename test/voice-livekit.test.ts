@@ -34,12 +34,16 @@ describe.skipIf(liveKitFixturePath === undefined)(
             const transport = yield* VoiceTransport
             const frames: unknown[] = []
             let disconnected = false
+            let joined = false
             const identity = { sessionId: randomUUID(), roomName: randomUUID(), participantIdentity: randomUUID() }
             const opened = yield* transport.open(
               identity,
               (_track, frame) => frames.push(frame),
               () => {
                 disconnected = true
+              },
+              () => {
+                joined = true
               }
             )
             const payload = Schema.decodeUnknownSync(
@@ -94,6 +98,7 @@ describe.skipIf(liveKitFixturePath === undefined)(
               yield* io(() => source.waitForPlayout())
             }
             expect(frames.length).toBeGreaterThan(0)
+            expect(joined).toBe(true)
             expect(frames.every((frame) => Schema.is(VoiceFrame)(frame))).toBe(true)
             const interim = {
               kind: "Interim",
@@ -154,6 +159,7 @@ describe.skipIf(liveKitFixturePath === undefined)(
               const opening = transport
                 .open(
                   identity,
+                  () => undefined,
                   () => undefined,
                   () => undefined
                 )

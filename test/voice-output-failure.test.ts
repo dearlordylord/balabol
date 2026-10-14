@@ -1,3 +1,4 @@
+import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
 import { TestClock } from "effect/testing"
@@ -68,7 +69,7 @@ for (const scenario of scenarios)
         Effect.gen(function* () {
           const voice = yield* Voice
           const conversation = yield* Conversation
-          const join = yield* voice.start()
+          const join = yield* voice.start(startVoiceRequest())
           yield* conversation.send(outputInput)
           const waiting = yield* waitForOutput(voice, join.sessionId, "AwaitingReady")
           const output = waiting.output
@@ -95,7 +96,7 @@ effectIt.effect("a missing readiness acknowledgement expires without losing gene
     yield* Effect.gen(function* () {
       const voice = yield* Voice
       const conversation = yield* Conversation
-      const join = yield* voice.start()
+      const join = yield* voice.start(startVoiceRequest())
       yield* conversation.send(outputInput)
       yield* TestClock.adjust(1)
       expect((yield* voice.snapshot(join.sessionId, 0)).output?.status).toBe("AwaitingReady")
@@ -113,9 +114,9 @@ it("rejects incompatible language capability before starting a session and relea
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
-        expect((yield* Effect.flip(voice.start())).code).toBe("AudioUnavailable")
+        expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("AudioUnavailable")
         expect(transport.closed()).toBe(true)
-        expect((yield* Effect.flip(voice.start())).code).toBe("AudioUnavailable")
+        expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("AudioUnavailable")
       }),
     Layer.succeed(SpeechSynthesis, {
       capabilities: {
@@ -139,7 +140,7 @@ effectIt.effect("the Conversation delivery deadline fences late synthesis and ow
     yield* Effect.gen(function* () {
       const voice = yield* Voice
       const conversation = yield* Conversation
-      const join = yield* voice.start()
+      const join = yield* voice.start(startVoiceRequest())
       yield* conversation.send(outputInput)
       yield* TestClock.adjust(1)
       const output = (yield* voice.snapshot(join.sessionId, 0)).output
