@@ -19,7 +19,7 @@ it("streams a fake response then durably exposes it as assistant history", async
             response = yield* conversation.reply(input.deliveryId)
           }
           expect(response.state).toBe("Completed")
-          expect(response.text).toBe("[Fake sol] bonjour\nPrior memory: (empty)")
+          expect(response.text).toBe("This is a fixture reply.")
           expect((yield* conversation.page({ limit: 100 })).messages.map((message) => message.role)).toEqual([
             "user",
             "assistant"

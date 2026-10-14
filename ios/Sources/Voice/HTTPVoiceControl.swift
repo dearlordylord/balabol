@@ -28,6 +28,12 @@ public actor HTTPVoiceControl: VoiceControl {
     guard let origin = parts.url else { throw VoiceFailure.invalidResponse }
     return origin
   }
+  public func languages() async throws -> VoiceLanguages {
+    let value = try decode(VoiceLanguages.self, await request("voice/languages"))
+    guard value.isValid else { throw VoiceFailure.invalidResponse }
+    return value
+  }
+
   public func start(requestId: UUID, muted: Bool) async throws -> VoiceJoin {
     struct Body: Encodable {
       let startRequestId: UUID

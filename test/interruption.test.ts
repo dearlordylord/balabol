@@ -18,7 +18,7 @@ it.effect(
       const fixture = yield* Effect.promise(temporaryDatabase)
       yield* Effect.gen(function* () {
         const conversation = yield* Conversation
-        yield* conversation.send(first)
+        yield* conversation.send({ ...first, languageSpans: [{ language: "fr", start: 0, end: first.text.length }] })
         yield* conversation.observeReply(first.deliveryId)
         yield* TestClock.adjust(100)
         const streaming = yield* conversation.reply(first.deliveryId)
@@ -30,7 +30,9 @@ it.effect(
         expect(interrupted.sequence).toBeGreaterThan(streaming.sequence)
         expect(interrupted.text).toBe(streaming.text)
         expect(interrupted.receipt?.outcome).toBe("interrupted")
-        yield* conversation.send(first)
+        expect(interrupted.languageSpans).toEqual(streaming.languageSpans)
+        expect(interrupted.receipt?.languageSpans).toEqual(streaming.languageSpans)
+        yield* conversation.send({ ...first, languageSpans: [{ language: "fr", start: 0, end: first.text.length }] })
         expect((yield* conversation.reply(second.deliveryId)).state).not.toBe("Interrupted")
         yield* TestClock.adjust(2000)
         const messages = (yield* conversation.page({ limit: 100 })).messages
@@ -74,10 +76,14 @@ it.effect("passes interrupted generated text and its honest semantic marker into
   Effect.gen(function* () {
     const fixture = yield* Effect.promise(temporaryDatabase)
     const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: (request) =>
         request.input === "first"
-          ? Stream.concat(Stream.succeed({ kind: "Delta", text: "Generated proposal" }), Stream.never)
-          : Stream.make({ kind: "Delta", text: request.prior }, { kind: "Completed" })
+          ? Stream.concat(
+              Stream.succeed({ kind: "Delta", text: "Generated proposal", languageSpans: [] }),
+              Stream.never
+            )
+          : Stream.make({ kind: "Delta", text: request.prior, languageSpans: [] }, { kind: "Completed" })
     })
     yield* Effect.gen(function* () {
       const conversation = yield* Conversation
@@ -152,12 +158,13 @@ it.effect("freezes before cancellation acknowledgement and rejects delayed provi
   Effect.gen(function* () {
     const fixture = yield* Effect.promise(temporaryDatabase)
     const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: () =>
         Stream.concat(
-          Stream.succeed({ kind: "Delta", text: "collected" } satisfies AnswerEvent),
+          Stream.succeed({ kind: "Delta", text: "collected", languageSpans: [] } satisfies AnswerEvent),
           Stream.fromEffect(
             Effect.sleep(100).pipe(
-              Effect.as({ kind: "Delta", text: "late" } satisfies AnswerEvent),
+              Effect.as({ kind: "Delta", text: "late", languageSpans: [] } satisfies AnswerEvent),
               Effect.uninterruptible
             )
           )
@@ -261,10 +268,11 @@ it.effect("keeps independent compaction running while interrupting the answer", 
       })
     ).pipe(Layer.provide(fakeSummaryLayer))
     const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: (request) =>
         request.input === "second"
-          ? Stream.make({ kind: "Delta", text: request.prior }, { kind: "Completed" })
-          : Stream.concat(Stream.succeed({ kind: "Delta", text: "generated" }), Stream.never)
+          ? Stream.make({ kind: "Delta", text: request.prior, languageSpans: [] }, { kind: "Completed" })
+          : Stream.concat(Stream.succeed({ kind: "Delta", text: "generated", languageSpans: [] }), Stream.never)
     })
     yield* Effect.gen(function* () {
       const conversation = yield* Conversation

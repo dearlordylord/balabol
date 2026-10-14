@@ -27,6 +27,12 @@ public struct VoiceState: Equatable, Sendable {
   internal var bootstrapKnown = false
   internal var retryStep = 0
   internal var backendIncarnationId: UUID?
+  internal struct AcceptedAdmission: Equatable, Sendable {
+    let association: VoiceAdmissionAssociation
+    let receipt: ConversationMessage
+  }
+  internal var recentAcceptedAdmissions: [AcceptedAdmission] = []
+  internal var snapshotSequence = -1
   internal var associations: [UUID: VoiceAdmissionAssociation] = [:]
   internal var stagedFinals: [UUID: String] = [:]
   internal var checkpointRevision = 0
@@ -45,6 +51,10 @@ public struct VoiceState: Equatable, Sendable {
     checkpointLoaded && !isRetired && !wantsListening && !hasPendingAdmission
       && associations.isEmpty
   }
+  public internal(set) var languages: VoiceLanguages?
+  public internal(set) var languageFailure: VoiceFailure?
+  internal var languageRequest: UUID?
+  public internal(set) var admissionLanguageSpans: [UUID: [LanguageSpan]] = [:]
   public internal(set) var tentative = ""
   public internal(set) var admissions: [UUID: Admission] = [:]
   public internal(set) var utterances: [UUID] = []
@@ -74,6 +84,8 @@ public struct VoiceState: Equatable, Sendable {
 }
 
 enum VoiceEvent {
+  case loadLanguages
+  case languagesLoaded(UUID, Result<VoiceLanguages, VoiceFailure>)
   case snapshot(Int, VoiceSnapshot)
   case start
   case shutdown
@@ -95,6 +107,8 @@ enum VoiceEvent {
   case resolutionFailed(VoiceFailure)
 }
 enum VoiceCommand {
+  case loadLanguages(UUID)
+  case refreshLanguages
   case begin(Int)
   case cancelStart
   case disconnect(Int, UUID?)
@@ -125,6 +139,28 @@ extension VoiceState {
       }
     }
     switch event {
+    case .loadLanguages:
+      guard languageRequest == nil else { return [] }
+      let request = UUID()
+      languageRequest = request
+      return [.loadLanguages(request)]
+    case .languagesLoaded(let request, let result):
+      guard languageRequest == request else { return [] }
+      languageRequest = nil
+      switch result {
+      case .success(let value):
+        guard value.isValid else {
+          languages = nil
+          languageFailure = .invalidResponse
+          return []
+        }
+        languages = value
+        languageFailure = nil
+      case .failure(let failure):
+        languages = nil
+        languageFailure = failure
+      }
+      return []
     case .shutdown:
       let commands = transition(.end)
       isRetired = true
@@ -133,8 +169,9 @@ extension VoiceState {
       return recoveryTransition(event)
     case .snapshot(let id, let page):
       guard id == generation, page.sessionId == sessionId,
-        page.backendIncarnationId == backendIncarnationId
+        page.backendIncarnationId == backendIncarnationId, page.sequence >= snapshotSequence
       else { return [] }
+      snapshotSequence = page.sequence
       var commands: [VoiceCommand] = []
       if sequence < page.firstSequence - 1 { sequence = page.firstSequence - 1 }
       for pending in page.pending where pending.isValid {
@@ -144,7 +181,8 @@ extension VoiceState {
         if let receipt = pending.receipt {
           commands += acceptedAdmission(association, receipt: receipt, expectedText: pending.text)
         } else {
-          commands += stageFinal(association, text: pending.text)
+          commands += stageFinal(
+            association, text: pending.text, languageSpans: pending.languageSpans)
         }
       }
       if page.status == "ended", wantsListening { commands += transportFailed(.connection) }
@@ -154,6 +192,7 @@ extension VoiceState {
       generation += 1
       sessionId = nil
       sequence = 0
+      snapshotSequence = -1
       tentative = ""
       intent = .listening(muted: false)
       startRequestId = UUID()
@@ -184,7 +223,9 @@ extension VoiceState {
       retryStep = 0
       capture =
         hasPendingAdmission ? .checkingPreviousSpeech : (actuallyMuted ? .muted : .listening)
-      var commands: [VoiceCommand] = [.observe(id, session), .refreshConversation]
+      var commands: [VoiceCommand] = [
+        .observe(id, session), .refreshConversation, .refreshLanguages,
+      ]
       let desiredMute = wantsMuted || hasPendingAdmission
       if actuallyMuted != desiredMute || startMuted != desiredMute {
         muteInFlight = true
@@ -258,7 +299,8 @@ extension VoiceState {
         return stageFinal(
           VoiceAdmissionAssociation(
             backendIncarnationId: incarnation,
-            sessionId: wire.sessionId, deliveryId: delivery), text: text)
+            sessionId: wire.sessionId, deliveryId: delivery), text: text,
+          languageSpans: wire.languageSpans ?? [])
       case "Discarded":
         if wire.utteranceId == tentativeUtterance {
           tentative = ""

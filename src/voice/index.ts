@@ -14,3 +14,10 @@ export {
   SpeechResolutions
 } from "./recovery-contracts.ts"
 export { VoiceAdmissions, sqliteVoiceAdmissions } from "./admissions.ts"
+
+export {
+  VoiceLanguageConfiguration,
+  VoiceLanguageSettings,
+  VoiceLanguageCapabilities,
+  defaultVoiceLanguageConfiguration
+} from "./languages.ts"

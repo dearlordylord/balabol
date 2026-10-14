@@ -19,7 +19,7 @@
     private var microphone: LocalAudioTrack?
     private var renderer: VoiceSpeechRenderer?
     private var speechTask: Task<Void, Never>?
-    private var speechStartedCallback: (@Sendable () -> Void)?
+    private var speechStartedCallback: (@MainActor @Sendable () -> Void)?
     #if DEBUG
       private var captureEvidenceTask: Task<Void, Never>?
     #endif
@@ -47,7 +47,7 @@
     }
     public func connect(
       _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,
-      speechStarted: @escaping @Sendable () -> Void,
+      speechStarted: @escaping @MainActor @Sendable () -> Void,
       outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
     ) async throws {
       generation += 1
@@ -105,13 +105,13 @@
     }
     private func installMicrophone(
       _ track: LocalAudioTrack, generation expected: Int,
-      speechStarted: @escaping @Sendable () -> Void
+      speechStarted: @escaping @MainActor @Sendable () -> Void
     ) {
       guard microphone !== track else { return }
       speechTask?.cancel()
       if let microphone, let renderer { microphone.remove(audioRenderer: renderer) }
       microphone = track
-      let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+      let stream = AsyncStream<VoiceOnsetNotice>.makeStream(bufferingPolicy: .bufferingNewest(1))
       let renderer: VoiceSpeechRenderer
       #if DEBUG
         if evidenceEnabled {
@@ -130,19 +130,22 @@
             }
           }
           renderer = VoiceSpeechRenderer(
-            started: { stream.continuation.yield(()) },
+            started: { stream.continuation.yield($0) },
             diagnostic: { evidence.continuation.yield($0) })
         } else {
-          renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
+          renderer = VoiceSpeechRenderer { stream.continuation.yield($0) }
         }
       #else
-        renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
+        renderer = VoiceSpeechRenderer { stream.continuation.yield($0) }
       #endif
       self.renderer = renderer
       track.add(audioRenderer: renderer)
       speechTask = Task { [weak self] in
-        for await _ in stream.stream {
+        for await notice in stream.stream {
           guard !Task.isCancelled, self?.generation == expected else { return }
+          guard renderer.acceptsOnset(notice) else { continue }
+          // The callback is MainActor-isolated: no second queue can deliver an
+          // old notice after mute/unmute advances the capture epoch.
           speechStarted()
         }
       }
@@ -153,11 +156,13 @@
       guard let room else { throw VoiceFailure.capture }
       let expected = generation
       if muted, microphone == nil { return }
+      renderer?.resetOnset()
       do {
         guard let publication = try await room.localParticipant.setMicrophone(enabled: !muted),
           let track = publication.track as? LocalAudioTrack, publication.isMuted == muted,
           expected == generation, !Task.isCancelled
         else { throw VoiceFailure.capture }
+        renderer?.resetOnset()
         if !muted, let speechStartedCallback {
           installMicrophone(track, generation: expected, speechStarted: speechStartedCallback)
         }
@@ -367,8 +372,7 @@
   /// performs network work, or changes track volume on the realtime callback.
   private final class VoiceSpeechRenderer: AudioRenderer {
     private struct State {
-      var speaking = false
-      var quiet = 0
+      var onsetTracker = VoiceOnsetTracker()
       #if DEBUG
         var callbacks = 0
         var frames = 0
@@ -379,22 +383,33 @@
       #endif
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
-    private let started: @Sendable () -> Void
+    private let started: @Sendable (VoiceOnsetNotice) -> Void
     #if DEBUG
+      // One initial report plus 31 two-second windows covers the 60-second
+      // qualification baseline. Only explicit debug UI-test namespaces attach
+      // this scalar diagnostic; no PCM leaves the realtime callback.
+      private static let maxCaptureEvidenceReports = 32
       private let diagnostic: (@Sendable (VoiceCaptureEvidence) -> Void)?
       init(
-        started: @escaping @Sendable () -> Void,
+        started: @escaping @Sendable (VoiceOnsetNotice) -> Void,
         diagnostic: @escaping @Sendable (VoiceCaptureEvidence) -> Void
       ) {
         self.started = started
         self.diagnostic = diagnostic
       }
     #endif
-    init(started: @escaping @Sendable () -> Void) {
+    init(started: @escaping @Sendable (VoiceOnsetNotice) -> Void) {
       self.started = started
       #if DEBUG
         diagnostic = nil
       #endif
+    }
+    func resetOnset() {
+      let epoch = UUID()
+      state.withLock { $0.onsetTracker.reset(epoch: epoch) }
+    }
+    func acceptsOnset(_ notice: VoiceOnsetNotice) -> Bool {
+      state.withLock { $0.onsetTracker.isCurrent(notice) }
     }
     func render(pcmBuffer: AVAudioPCMBuffer) {
       let count = min(Int(pcmBuffer.frameLength), 2048)
@@ -407,19 +422,11 @@
       }
       let energy = peak
       let onset = state.withLock { value in
-        if energy >= 0.025 {
-          value.quiet = 0
-          if !value.speaking {
-            value.speaking = true
-            return true
-          }
-        } else {
-          value.quiet += 1
-          if value.quiet >= 20 { value.speaking = false }
-        }
-        return false
+        value.onsetTracker.process(
+          peak: energy, frameCount: Int(pcmBuffer.frameLength),
+          sampleRate: pcmBuffer.format.sampleRate)
       }
-      if onset { started() }
+      if let onset { started(onset) }
       #if DEBUG
         if let diagnostic {
           let frames = Int(pcmBuffer.frameLength)
@@ -429,12 +436,12 @@
           let interleaved = pcmBuffer.format.isInterleaved
           let readable = pcmBuffer.floatChannelData != nil || pcmBuffer.int16ChannelData != nil
           let report = state.withLock { value -> VoiceCaptureEvidence? in
-            guard value.reports < 8 else { return nil }
+            guard value.reports < Self.maxCaptureEvidenceReports else { return nil }
             value.callbacks += 1
             value.frames += frames
             value.peak = max(value.peak, energy)
             value.voiced = value.voiced || energy >= 0.025
-            value.onset = value.onset || onset
+            value.onset = value.onset || onset != nil
             guard value.callbacks == 1 || Double(value.frames) >= sampleRate * 2 else { return nil }
             value.reports += 1
             let report = VoiceCaptureEvidence(

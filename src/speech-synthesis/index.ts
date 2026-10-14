@@ -1,21 +1,18 @@
 import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { LanguageTag, LanguageTags } from "../language/index.ts"
 
 const SAMPLE_RATE = 24000
 const MAX_PHRASE_CHARS = 800
 const MAX_AUDIO_FRAMES = 240000
 const MAX_CHUNK_FRAMES = 1200
-const MAX_LANGUAGES = 4
 const MAX_DELAY = 60000
 const MAX_AMPLITUDE = 32767
 const BYTES_PER_FRAME = 2
 const TONE_HALF_PERIOD = 24
 const MAX_CHUNKS = 200
-const Language = Schema.Literals(["ru", "fr", "en", "ja"])
-const Languages = Schema.Array(Language).check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_LANGUAGES),
-  Schema.isUnique()
-)
+const Language = LanguageTag
+const Languages = LanguageTags
+const fixtureLanguages = ["ru", "fr", "en", "ja"]
 const Identity = Schema.String.check(Schema.isUUID())
 const Sequence = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(MAX_CHUNKS))
 export const SynthesisRequest = Schema.Struct({
@@ -72,13 +69,14 @@ const Configuration = Schema.Struct({
 }).check(
   Schema.makeFilter(
     (config) =>
-      config.failureAfterChunks === null ||
-      config.failureAfterChunks <= Math.ceil(config.sampleFrames / MAX_CHUNK_FRAMES)
+      config.languages.every((language) => fixtureLanguages.includes(language)) &&
+      (config.failureAfterChunks === null ||
+        config.failureAfterChunks <= Math.ceil(config.sampleFrames / MAX_CHUNK_FRAMES))
   )
 )
 export type FakeSynthesisConfiguration = Partial<typeof Configuration.Type>
 const defaults: typeof Configuration.Type = {
-  languages: ["ru", "fr", "en"],
+  languages: ["ru", "fr", "en", "ja"],
   sampleFrames: 4800,
   amplitude: 1000,
   delayMillis: 20,

@@ -1,40 +1,65 @@
+import { isScalarBoundary, validLanguageSpans } from "../language/index.ts"
+import type { LanguageSpan } from "../language/index.ts"
 const maximumPhrase = 800
 const maximumQueued = 2
 const maximumBuffered = maximumPhrase * maximumQueued
-const highStart = 0xd800
-const highEnd = 0xdbff
-const lowStart = 0xdc00
-const lowEnd = 0xdfff
+export interface Phrase {
+  text: string
+  language: string
+}
 const prefix = (text: string) => {
   let length = Math.min(text.length, maximumPhrase)
-  const end = text.charCodeAt(length - 1)
-  const next = text.charCodeAt(length)
-  if (end >= highStart && end <= highEnd && next >= lowStart && next <= lowEnd) length -= 1
+  if (!isScalarBoundary(text, length)) length -= 1
   return text.slice(0, length)
 }
 const phraseLength = (buffer: string, flush: boolean) => {
   const candidate = prefix(buffer)
-  const end = candidate.search(/[.!?\n]/u)
+  const end = candidate.search(/[.!?\n。！？]/u)
   if (end >= 0) return end + 1
   if (buffer.length >= maximumPhrase) return candidate.lastIndexOf(" ") + 1 || candidate.length
   return flush ? buffer.length : 0
 }
+const languageRun = (spans: readonly LanguageSpan[], start: number, end: number, fallback: string) => {
+  const index = spans.findIndex((span) => span.end > start)
+  const first = spans[index]
+  if (first === undefined) return { language: fallback, boundary: end }
+  if (first.start > start) return { language: fallback, boundary: Math.min(end, first.start) }
+  let boundary = first.end
+  for (const span of spans.slice(index + 1)) {
+    if (span.start !== boundary || span.language !== first.language) break
+    boundary = span.end
+  }
+  return { language: first.language, boundary }
+}
 export class Phrases {
   #cursor = 0
+  #offset = 0
   #buffer = ""
-  append(text: string) {
+  #spans: readonly LanguageSpan[] = []
+  #fallback = "en"
+  append(text: string, spans: readonly LanguageSpan[] = [], fallback = "en") {
     const tail = text.slice(this.#cursor)
-    if (text.length < this.#cursor || this.#buffer.length + tail.length > maximumBuffered) return false
+    if (
+      text.length < this.#cursor ||
+      this.#buffer.length + tail.length > maximumBuffered ||
+      !validLanguageSpans(text, spans)
+    )
+      return false
     this.#buffer += tail
     this.#cursor = text.length
+    this.#spans = spans
+    this.#fallback = fallback
     return true
   }
-  next(flush: boolean): string | undefined {
-    const length = phraseLength(this.#buffer, flush)
+  next(flush: boolean): Phrase | undefined {
+    const run = languageRun(this.#spans, this.#offset, this.#cursor, this.#fallback)
+    const available = this.#buffer.slice(0, run.boundary - this.#offset)
+    const length = phraseLength(available, flush || available.length < this.#buffer.length)
     if (length === 0) return undefined
-    const phrase = this.#buffer.slice(0, length).trim()
+    const text = this.#buffer.slice(0, length).trim()
     this.#buffer = this.#buffer.slice(length)
-    return phrase.length === 0 ? this.next(flush) : phrase
+    this.#offset += length
+    return text.length === 0 ? this.next(flush) : { text, language: run.language }
   }
   get empty() {
     return this.#buffer.length === 0

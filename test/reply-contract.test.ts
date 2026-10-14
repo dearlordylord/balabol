@@ -19,10 +19,11 @@ it("passes exclusive prior memory and the current input exactly once and reconst
   const fixture = await temporaryDatabase()
   const requests: AnswerRequest[] = []
   const answer = Layer.succeed(AnswerGeneration, {
+    capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
     generate: (request) => {
       requests.push(request)
       return Stream.fromIterable([
-        { kind: "Delta", text: "a short reply" },
+        { kind: "Delta", text: "a short reply", languageSpans: [] },
         { kind: "Completed" }
       ] satisfies AnswerEvent[])
     }
@@ -69,10 +70,14 @@ it("passes exclusive prior memory and the current input exactly once and reconst
 })
 
 const invalidStreams = [
-  { name: "missing terminal", events: [{ kind: "Delta", text: "partial" }] },
+  { name: "missing terminal", events: [{ kind: "Delta", text: "partial", languageSpans: [] }] },
   {
     name: "events after terminal",
-    events: [{ kind: "Delta", text: "partial" }, { kind: "Completed" }, { kind: "Delta", text: "late" }]
+    events: [
+      { kind: "Delta", text: "partial", languageSpans: [] },
+      { kind: "Completed" },
+      { kind: "Delta", text: "late", languageSpans: [] }
+    ]
   },
   { name: "empty completed", events: [{ kind: "Completed" }] }
 ] satisfies { name: string; events: AnswerEvent[] }[]
@@ -80,7 +85,10 @@ for (const example of invalidStreams)
   it(`rejects ${example.name} without persisting successful history`, async () => {
     const fixture = await temporaryDatabase()
     try {
-      const answer = Layer.succeed(AnswerGeneration, { generate: () => Stream.fromIterable(example.events) })
+      const answer = Layer.succeed(AnswerGeneration, {
+        capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
+        generate: () => Stream.fromIterable(example.events)
+      })
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
@@ -99,9 +107,10 @@ it("cancels a suspended provider without masking interruption and ignores stale 
   const fixture = await temporaryDatabase()
   try {
     const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: () =>
         Stream.concat(
-          Stream.succeed({ kind: "Delta", text: "partial" } satisfies AnswerEvent),
+          Stream.succeed({ kind: "Delta", text: "partial", languageSpans: [] } satisfies AnswerEvent),
           Stream.fromEffect(Effect.never)
         )
     })
@@ -133,9 +142,10 @@ it("surfaces provider failure after partial text and bounds unattached responses
   const fixture = await temporaryDatabase()
   try {
     const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: () =>
         Stream.concat(
-          Stream.succeed({ kind: "Delta", text: "partial" } satisfies AnswerEvent),
+          Stream.succeed({ kind: "Delta", text: "partial", languageSpans: [] } satisfies AnswerEvent),
           Stream.fail(new AnswerFailed({ message: "provider offline" }))
         )
     })
@@ -160,10 +170,12 @@ it("validates unsupported capabilities, dependent reply data and startup policy"
       model: "sol",
       prior: "",
       input: "hello",
+      inputLanguageSpans: [],
+      responseLanguage: "en",
       capabilities: ["filesystem.read"]
     })
   ).toThrow()
-  expect(() => Schema.decodeUnknownSync(AnswerEvent)({ kind: "Delta", text: "" })).toThrow()
+  expect(() => Schema.decodeUnknownSync(AnswerEvent)({ kind: "Delta", text: "", languageSpans: [] })).toThrow()
   expect(() =>
     Schema.decodeUnknownSync(Reply)({
       responseId: input.deliveryId,
@@ -187,6 +199,8 @@ it("validates unsupported capabilities, dependent reply data and startup policy"
             model: defaultReplySettings.answerModel,
             prior: "",
             input: "hello",
+            inputLanguageSpans: [],
+            responseLanguage: "en",
             capabilities: ["memory.context", "memory.context"]
           })
         )
@@ -199,7 +213,10 @@ it("validates unsupported capabilities, dependent reply data and startup policy"
 it("cancels generation when no observer attaches within the configured deadline", async () => {
   const fixture = await temporaryDatabase()
   try {
-    const answer = Layer.succeed(AnswerGeneration, { generate: () => Stream.fromEffect(Effect.never) })
+    const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
+      generate: () => Stream.fromEffect(Effect.never)
+    })
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -248,5 +265,53 @@ it("rejects incomplete or contradictory assistant identities at memory boundarie
       inputDeliveryId: input.deliveryId,
       responseId: input.deliveryId
     })
+  ).toThrow()
+})
+
+it("rejects an otherwise valid reply envelope that aliases its accepted input identity", () => {
+  const snapshot = {
+    responseId: input.deliveryId,
+    inputDeliveryId: input.deliveryId,
+    sequence: 0,
+    state: "Waiting",
+    text: "",
+    languageSpans: [],
+    error: null,
+    receipt: null
+  }
+  expect(() => Schema.decodeUnknownSync(Reply)(snapshot)).toThrow()
+  expect(Schema.decodeUnknownSync(Reply)({ ...snapshot, responseId: later.deliveryId })).toMatchObject({
+    state: "Waiting"
+  })
+})
+
+it("rejects contradictory terminal language metadata while each span set is independently valid", () => {
+  const receipt = {
+    deliveryId: later.deliveryId,
+    recordId: 1,
+    position: 1,
+    text: "hello",
+    role: "assistant",
+    inputDeliveryId: input.deliveryId,
+    responseId: later.deliveryId,
+    outcome: "completed",
+    languageSpans: [{ language: "en", start: 0, end: 5 }]
+  }
+  const snapshot = {
+    responseId: later.deliveryId,
+    inputDeliveryId: input.deliveryId,
+    sequence: 2,
+    state: "Completed",
+    text: receipt.text,
+    languageSpans: receipt.languageSpans,
+    error: null,
+    receipt
+  }
+  expect(Schema.decodeUnknownSync(Reply)(snapshot)).toMatchObject({ state: "Completed" })
+  expect(() =>
+    Schema.decodeUnknownSync(Reply)({ ...snapshot, languageSpans: [{ language: "fr", start: 0, end: 5 }] })
+  ).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(Reply)({ ...snapshot, languageSpans: [{ language: "en", start: 1, end: 5 }] })
   ).toThrow()
 })

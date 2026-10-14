@@ -2,7 +2,13 @@ import { voiceAdmissionsFixture } from "./voice-admission-fixture.ts"
 import { Effect, Layer } from "effect"
 import type { AnswerGeneration, AnswerFailed } from "../src/answer-generation/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
-import { Voice, type VoiceAdmissions } from "../src/voice/index.ts"
+import {
+  Voice,
+  VoiceLanguageConfiguration,
+  defaultVoiceLanguageConfiguration,
+  type VoiceLanguageSettings,
+  type VoiceAdmissions
+} from "../src/voice/index.ts"
 import type { Conversation } from "../src/conversation/index.ts"
 import type { SpeechRecognition, RecognitionFailed } from "../src/speech-recognition/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
@@ -16,11 +22,13 @@ export const voiceOutputLayer = (
   transport: ReturnType<typeof voiceTransportFixture>,
   synthesis: Layer.Layer<SpeechSynthesis, SpeechSynthesisFailed> = fakeSynthesisLayer(),
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
-  recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer()
+  recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer(),
+  settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration
 ) => {
   const conversation = replyLayer(path, answer, { attachmentMillis: 10 })
   const admissions = voiceAdmissionsFixture().pipe(Layer.provide(conversation))
-  const voice = Voice.layer.pipe(
+  const voice = Voice.configuredLayer.pipe(
+    Layer.provide(Layer.succeed(VoiceLanguageConfiguration, settings)),
     Layer.provide(Layer.mergeAll(conversation, transport.layer, synthesis, recognition, admissions))
   )
   return Layer.mergeAll(voice, conversation, admissions)
@@ -31,11 +39,12 @@ export const withVoiceOutput = async (
   ) => Effect.Effect<void, unknown, Voice | Conversation | VoiceAdmissions>,
   synthesis: Layer.Layer<SpeechSynthesis, SpeechSynthesisFailed> = fakeSynthesisLayer(),
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
-  recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer()
+  recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer(),
+  settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration
 ) => {
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
-  const application = voiceOutputLayer(database.path, transport, synthesis, answer, recognition)
+  const application = voiceOutputLayer(database.path, transport, synthesis, answer, recognition, settings)
   try {
     await Effect.runPromise(Effect.scoped(program(transport)).pipe(Effect.provide(application)))
   } finally {

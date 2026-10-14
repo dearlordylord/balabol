@@ -83,7 +83,7 @@ for (const scenario of scenarios)
           expect(failed.output?.error?.code).toBe("AudioUnavailable")
           const reply = yield* waitForReply(conversation, outputInput.deliveryId)
           expect(reply.state).toBe("Interrupted")
-          expect(reply.text).toContain("Hello")
+          expect(reply.text).toBe("This is a fixture reply.")
           expect(reply.receipt?.outcome).toBe("interrupted")
         }),
       badProvider(scenario.events)
@@ -104,34 +104,33 @@ effectIt.effect("a missing readiness acknowledgement expires without losing gene
       expect((yield* voice.snapshot(join.sessionId, 0)).output?.status).toBe("Failed")
       const reply = yield* waitForReply(conversation, outputInput.deliveryId)
       expect(reply.receipt?.outcome).toBe("interrupted")
-      expect(reply.text).toContain("Hello")
+      expect(reply.text).toBe("This is a fixture reply.")
       expect(transport.captured).toEqual([])
     }).pipe(Effect.provide(voiceOutputLayer(database.path, transport)))
   })
 )
-it("rejects incompatible language capability before starting a session and releases acquired media", () =>
-  withVoiceOutput(
-    (transport) =>
-      Effect.gen(function* () {
-        const voice = yield* Voice
-        expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("AudioUnavailable")
-        expect(transport.closed()).toBe(true)
-        expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("AudioUnavailable")
-      }),
-    Layer.succeed(SpeechSynthesis, {
-      capabilities: {
-        input: "supplied-text",
-        output: "streaming-pcm",
-        languages: ["ja"],
-        encoding: "pcm-s16le",
-        sampleRateHz: 24000,
-        channels: 1,
-        maxPhraseChars: 800,
-        maxAudioFrames: 240000
-      },
-      synthesize: (request) => Stream.fromIterable([completed(request, 0)])
-    })
-  ))
+it("rejects incompatible language capability before acquiring any media", async () => {
+  const database = await temporaryDatabase()
+  const transport = voiceTransportFixture()
+  try {
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Voice
+        })
+      ).pipe(
+        Effect.provide(voiceOutputLayer(database.path, transport, fakeSynthesisLayer({ languages: ["ja"] }))),
+        Effect.result
+      )
+    )
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure" && result.failure._tag === "VoiceFailed")
+      expect(result.failure.code).toBe("InvalidLanguageConfiguration")
+    expect(transport.opens()).toBe(0)
+  } finally {
+    await database.close()
+  }
+})
 effectIt.effect("the Conversation delivery deadline fences late synthesis and owns one interrupted receipt", () =>
   Effect.gen(function* () {
     const database = yield* Effect.promise(temporaryDatabase)
@@ -156,7 +155,7 @@ effectIt.effect("the Conversation delivery deadline fences late synthesis and ow
       expect(snapshot.output?.error?.code).toBe("AudioUnavailable")
       const turn = yield* conversation.currentTurn()
       expect(turn?.reply.state).toBe("Interrupted")
-      expect(turn?.reply.text).toContain("Hello")
+      expect(turn?.reply.text).toBe("This is a fixture reply.")
       expect(turn?.reply.receipt?.outcome).toBe("interrupted")
       yield* TestClock.adjust(60000)
       expect(transport.captured).toEqual([])

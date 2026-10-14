@@ -1,4 +1,8 @@
-import { Schema, SchemaGetter } from "effect"
+import { Effect, Schema, SchemaGetter } from "effect"
+
+import { LanguageSpans, validLanguageSpans } from "../language/index.ts"
+
+export const StoredLanguageSpans = LanguageSpans.pipe(Schema.withDecodingDefaultKey(Effect.succeed([])))
 
 // UUID letter case is spelling, never a separate delivery or response identity.
 export const DeliveryId = Schema.String.check(Schema.isUUID()).pipe(
@@ -34,22 +38,30 @@ const userIdentity = (value: {
 export const DeliveryPayload = Schema.Struct({
   deliveryId: DeliveryId,
   text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
+  languageSpans: StoredLanguageSpans,
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
   responseId: Schema.optionalKey(DeliveryId),
   outcome: Schema.optionalKey(Schema.Literals(["completed", "interrupted"]))
-}).check(Schema.makeFilter(validMessageIdentity))
-export type DeliveryPayload = typeof DeliveryPayload.Type
+}).check(
+  Schema.makeFilter(validMessageIdentity),
+  Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans))
+)
+export type DeliveryPayload = typeof DeliveryPayload.Encoded
 export const Receipt = Schema.Struct({
   deliveryId: DeliveryId,
   recordId: Position,
   position: Position,
   text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
+  languageSpans: StoredLanguageSpans,
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
   responseId: Schema.optionalKey(DeliveryId),
   outcome: Schema.optionalKey(Schema.Literals(["completed", "interrupted"]))
-}).check(Schema.makeFilter(validMessageIdentity))
+}).check(
+  Schema.makeFilter(validMessageIdentity),
+  Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans))
+)
 export type Receipt = typeof Receipt.Type
 export class StorageUnavailable extends Schema.TaggedError<StorageUnavailable>()("StorageUnavailable", {
   message: Schema.String
@@ -92,6 +104,7 @@ const payloadDefaults = (value: DeliveryPayload) => ({
 export const samePayload = (left: DeliveryPayload, right: DeliveryPayload): boolean => {
   const first = payloadDefaults(left)
   const second = payloadDefaults(right)
+  if (JSON.stringify(first.languageSpans ?? []) !== JSON.stringify(second.languageSpans ?? [])) return false
   return (["deliveryId", "text", "role", "inputDeliveryId", "responseId", "outcome"] as const).every(
     (key) => first[key] === second[key]
   )

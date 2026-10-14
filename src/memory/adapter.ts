@@ -54,6 +54,7 @@ export const durableMemoryLayer = Layer.effect(
         const payload = {
           deliveryId: row.deliveryId,
           text: row.text,
+          languageSpans: row.languageSpans,
           role: row.role,
           ...(row.inputDeliveryId === null ? {} : { inputDeliveryId: row.inputDeliveryId }),
           ...(row.responseId === null ? {} : { responseId: row.responseId }),

@@ -116,7 +116,8 @@ extension ConversationState {
           reply = .completed(receipt)
         } else if let failure = turn.reply.error {
           reply = .providerFailed(
-            inputDeliveryId: turn.input.deliveryId, text: turn.reply.text, failure)
+            inputDeliveryId: turn.input.deliveryId, text: turn.reply.text, failure,
+            languageSpans: turn.reply.languageSpans)
         } else {
           reply = .observationFailed(
             inputDeliveryId: turn.input.deliveryId, latest: turn.reply, .unavailable)
@@ -160,7 +161,7 @@ extension ConversationState {
           + (turn.reply.isTerminal ? [] : [.observeReply(observation, turn.input.deliveryId)])
       }
     case .retryReply:
-      guard canRetryReply, case .providerFailed(let input, _, _) = reply else { return [] }
+      guard canRetryReply, case .providerFailed(let input, _, _, _) = reply else { return [] }
       currentRequest = nil
       let request = request()
       replyRetryRequest = request
@@ -474,7 +475,9 @@ extension ConversationState {
       reply = .observing(request, inputDeliveryId: input, latest: snapshot)
     case .failed:
       guard let error = snapshot.error else { return failObservation(input, latest) }
-      reply = .providerFailed(inputDeliveryId: input, text: snapshot.text, error)
+      reply = .providerFailed(
+        inputDeliveryId: input, text: snapshot.text, error,
+        languageSpans: snapshot.languageSpans)
       return [.cancelReply]
     case .completed, .interrupted:
       guard let receipt = snapshot.receipt, merge([receipt]) else {

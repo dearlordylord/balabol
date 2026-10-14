@@ -1,20 +1,34 @@
 #if canImport(SwiftUI)
   import SwiftUI
 
-  public struct ConversationView: View {
+  public struct ConversationView<Details: View>: View {
     @Environment(\.scenePhase) private var scenePhase
     @Bindable private var model: ConversationViewModel
-    public init(model: ConversationViewModel) { self.model = model }
+    private let details: Details
+    /// Composition supplies feature-owned details inside this single flexible
+    /// list. Conversation does not acquire another feature's model or imports.
+    public init(model: ConversationViewModel, @ViewBuilder details: () -> Details) {
+      self.model = model
+      self.details = details()
+    }
     public var body: some View {
       VStack {
-        Text("Demo provider · scripted replies").font(.caption).foregroundStyle(.secondary)
-          .accessibilityIdentifier("demo-provider")
         ScrollViewReader { proxy in
           List {
+            details
+            Text("Demo provider · scripted replies").font(.caption).foregroundStyle(.secondary)
+              .accessibilityIdentifier("demo-provider")
             ForEach(model.messages) { message in
               VStack(alignment: .leading) {
-                Text(message.role == .user ? "You" : "Assistant").font(.caption).foregroundStyle(
-                  .secondary)
+                HStack(alignment: .firstTextBaseline) {
+                  Text(message.role == .user ? "You" : "Assistant").font(.caption)
+                    .foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false)
+                  if !message.languageSpans.isEmpty {
+                    Text(LanguageSpan.displayNames(message.languageSpans)).font(.caption)
+                      .foregroundStyle(.secondary)
+                      .accessibilityIdentifier("message-languages-\(message.position)")
+                  }
+                }
                 if message.outcome == .interrupted {
                   Text("Interrupted").font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("interrupted-message-\(message.position)")
@@ -38,6 +52,10 @@
                         ? "Preparing conversation context…" : "Waiting for reply…"
                   ).accessibilityIdentifier("reply-waiting")
                 }
+                if !model.state.replyLanguageSpans.isEmpty {
+                  Text(LanguageSpan.displayNames(model.state.replyLanguageSpans)).font(.caption)
+                    .foregroundStyle(.secondary).accessibilityIdentifier("reply-languages")
+                }
                 if !model.replyText.isEmpty {
                   Text(model.replyText).accessibilityIdentifier("reply-progress")
                 }
@@ -48,6 +66,9 @@
                 .disabled(model.isLoading)
             }
           }
+          .accessibilityIdentifier("conversation-transcript")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .layoutPriority(1)
           .onChange(of: model.messages.count) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyText) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyIsWaiting) { _, _ in scrollToLatest(proxy) }
@@ -96,28 +117,36 @@
         if !model.draftStorageReady {
           Button("Retry saved draft") { Task { await model.reloadDraft() } }
         }
-        Button("Refresh conversation") { Task { await model.refreshHistory() } }
-          .disabled(model.isLoading)
-        TextField(
-          "Message", text: Binding(get: { model.draft }, set: model.editDraft), axis: .vertical
-        )
-        .lineLimit(2...6)
-        .textFieldStyle(.roundedBorder)
-        .disabled(!model.canEditDraft)
-        .accessibilityIdentifier("message-draft")
-        Button(
-          model.isSending
-            ? "Sending…" : model.pendingDelivery == nil ? "Send" : "Retry same message"
-        ) {
-          Task { await model.send() }
+        HStack(alignment: .bottom) {
+          TextField(
+            "Message", text: Binding(get: { model.draft }, set: model.editDraft), axis: .vertical
+          )
+          .lineLimit(1...4)
+          .textFieldStyle(.roundedBorder)
+          .disabled(!model.canEditDraft)
+          .accessibilityIdentifier("message-draft")
+          Button(
+            model.isSending
+              ? "Sending…" : model.pendingDelivery == nil ? "Send" : "Retry same message"
+          ) {
+            Task { await model.send() }
+          }
+          .disabled(
+            !model.canSendDraft
+              || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          )
+          .accessibilityIdentifier("send-message")
         }
-        .disabled(
-          !model.canSendDraft || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        )
-        .accessibilityIdentifier("send-message")
       }
       .padding()
       .navigationTitle("Conversation")
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
+      .toolbar {
+        Button("Refresh conversation") { Task { await model.refreshHistory() } }
+          .disabled(model.isLoading)
+      }
       .task {
         await model.start()
         await model.refreshHistory()
@@ -145,5 +174,9 @@
       case .draftStorageUnavailable: "Saved draft is unavailable. Reload it before sending."
       }
     }
+  }
+
+  extension ConversationView where Details == EmptyView {
+    public init(model: ConversationViewModel) { self.init(model: model) { EmptyView() } }
   }
 #endif

@@ -37,9 +37,14 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
   public let text: String
   public let error: ReplyFailure?
   public let receipt: ConversationMessage?
+  public let languageSpans: [LanguageSpan]
+  public let responseLanguage: String?
   public var isTerminal: Bool { state == .completed || state == .interrupted || state == .failed }
   public var isValid: Bool {
-    guard sequence >= 0, responseId != inputDeliveryId, text.utf16.count <= 100_000 else {
+    guard sequence >= 0, responseId != inputDeliveryId, text.utf16.count <= 100_000,
+      LanguageSpan.areValid(languageSpans, for: text),
+      responseLanguage.map(LanguageSpan.isValidLanguageTag) ?? true
+    else {
       return false
     }
     switch state {
@@ -51,13 +56,15 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
         && receipt.map {
           $0.isValid && $0.role == .assistant && $0.deliveryId == responseId
             && $0.responseId == responseId && $0.inputDeliveryId == inputDeliveryId
-            && $0.text == text && $0.outcome == (state == .interrupted ? .interrupted : .completed)
+            && $0.text == text && $0.languageSpans == languageSpans
+            && $0.outcome == (state == .interrupted ? .interrupted : .completed)
         } == true
     }
   }
   public init(
     responseId: UUID, inputDeliveryId: UUID, sequence: Int, state: Phase, text: String,
-    error: ReplyFailure? = nil, receipt: ConversationMessage? = nil
+    error: ReplyFailure? = nil, receipt: ConversationMessage? = nil,
+    languageSpans: [LanguageSpan] = [], responseLanguage: String? = nil
   ) {
     self.responseId = responseId
     self.inputDeliveryId = inputDeliveryId
@@ -66,9 +73,12 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     self.text = text
     self.error = error
     self.receipt = receipt
+    self.languageSpans = languageSpans
+    self.responseLanguage = responseLanguage
   }
   private enum CodingKeys: String, CodingKey {
-    case responseId, inputDeliveryId, sequence, state, text, error, receipt
+    case responseId, inputDeliveryId, sequence, state, text, error, receipt, languageSpans,
+      responseLanguage
   }
   public func encode(to encoder: any Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
@@ -79,6 +89,8 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     try c.encode(text, forKey: .text)
     try c.encode(error, forKey: .error)
     try c.encode(receipt, forKey: .receipt)
+    try c.encode(languageSpans, forKey: .languageSpans)
+    try c.encodeIfPresent(responseLanguage, forKey: .responseLanguage)
   }
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -89,6 +101,10 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     text = try c.decode(String.self, forKey: .text)
     error = try c.decode(ReplyFailure?.self, forKey: .error)
     receipt = try c.decode(ConversationMessage?.self, forKey: .receipt)
+    languageSpans =
+      c.contains(.languageSpans)
+      ? try c.decode([LanguageSpan].self, forKey: .languageSpans) : []
+    responseLanguage = try c.decodeIfPresent(String.self, forKey: .responseLanguage)
     guard isValid else { throw ConversationFailure.invalidResponse }
   }
 }

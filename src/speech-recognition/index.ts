@@ -1,24 +1,19 @@
 import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { LanguageTag, LanguageTags, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 
-const MAX_LANGUAGES = 4
 const SAMPLE_RATE_HZ = 16000
 const MAX_SAMPLE_FRAMES = 240000
 const BYTES_PER_SAMPLE = 2
 const MAX_TEXT_LENGTH = 100000
-const MAX_SPANS = 1000
 const MAX_SCRIPT_EVENTS = 100
 const MAX_DELAY_MILLIS = 60000
 const MAX_FAILURE_LENGTH = 1000
 const MAX_SCRIPTS = 100
 const LAST_INDEX = -1
 
-export const RecognitionLanguage = Schema.Literals(["ru", "fr", "en", "ja"])
+export const RecognitionLanguage = LanguageTag
 export type RecognitionLanguage = typeof RecognitionLanguage.Type
-const Languages = Schema.Array(RecognitionLanguage).check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_LANGUAGES),
-  Schema.isUnique()
-)
+const Languages = LanguageTags
 const Offset = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 export const RecognitionAudio = Schema.Struct({
   encoding: Schema.Literal("pcm-s16le"),
@@ -35,19 +30,9 @@ export const RecognitionRequest = Schema.Struct({
 })
 export type RecognitionRequest = typeof RecognitionRequest.Type
 const Text = Schema.String.check(Schema.isMaxLength(MAX_TEXT_LENGTH))
-const Span = Schema.Struct({ language: RecognitionLanguage, start: Offset, end: Offset })
 const Hypothesis = Schema.Struct({ kind: Schema.Literal("Interim"), text: Text })
-const Final = Schema.Struct({
-  kind: Schema.Literal("Final"),
-  text: Text,
-  spans: Schema.Array(Span).check(Schema.isMaxLength(MAX_SPANS))
-}).check(
-  Schema.makeFilter((event) =>
-    event.spans.every(
-      (span, index) =>
-        span.start < span.end && span.end <= event.text.length && span.start >= (event.spans[index - 1]?.end ?? 0)
-    )
-  )
+const Final = Schema.Struct({ kind: Schema.Literal("Final"), text: Text, spans: LanguageSpans }).check(
+  Schema.makeFilter((event) => validLanguageSpans(event.text, event.spans))
 )
 const ScriptEvent = Schema.Union([Hypothesis, Final])
 export type RecognitionScriptEvent = typeof ScriptEvent.Type
@@ -95,19 +80,39 @@ const Script = Schema.Struct({
       : finals.length === 0
   })
 )
+const fixtureLanguages = ["ru", "fr", "en", "ja"]
 const Configuration = Schema.Struct({
   languages: Languages,
   scripts: Schema.Array(Script).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SCRIPTS))
-})
+}).check(Schema.makeFilter((config) => config.languages.every((language) => fixtureLanguages.includes(language))))
 export type FakeRecognitionConfiguration = typeof Configuration.Type
-const defaultConfiguration: FakeRecognitionConfiguration = {
-  languages: ["ru", "fr", "en"],
-  scripts: [
+const localizedInputs: Readonly<Record<string, string>> = { ru: "Привет", fr: "Bonjour", en: "Hello", ja: "こんにちは" }
+const mixedScript: typeof Script.Type = {
+  events: [
     {
-      events: [{ kind: "Final", text: "[Fake recognition] Bonjour", spans: [{ language: "fr", start: 19, end: 26 }] }],
-      delayMillis: 80,
-      failure: null
+      kind: "Final",
+      text: "Bonjour Hello",
+      spans: [
+        { language: "fr", start: 0, end: 7 },
+        { language: "en", start: 8, end: 13 }
+      ]
     }
+  ],
+  delayMillis: 80,
+  failure: null
+}
+const defaultConfiguration: FakeRecognitionConfiguration = {
+  languages: fixtureLanguages,
+  scripts: [
+    ...fixtureLanguages.map((language): typeof Script.Type => {
+      const text = localizedInputs[language] ?? ""
+      return {
+        events: [{ kind: "Final", text, spans: [{ language, start: 0, end: text.length }] }],
+        delayMillis: 80,
+        failure: null
+      }
+    }),
+    mixedScript
   ]
 }
 const failed = (message: string) => new RecognitionFailed({ message })
@@ -159,7 +164,17 @@ export const fakeRecognitionLayer = (configuration: FakeRecognitionConfiguration
             Stream.unwrap(
               validateRequest(raw, config.languages).pipe(
                 Effect.map((request) => {
-                  const script = config.scripts[next % config.scripts.length]
+                  const scripts =
+                    configuration === defaultConfiguration
+                      ? config.scripts.filter((script) =>
+                          script.events.every(
+                            (event) =>
+                              event.kind !== "Final" ||
+                              event.spans.every((span) => request.allowedLanguages.includes(span.language))
+                          )
+                        )
+                      : config.scripts
+                  const script = scripts[next % scripts.length]
                   next += 1
                   return script === undefined
                     ? Stream.fail(failed("Missing recognition fixture"))

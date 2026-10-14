@@ -29,6 +29,7 @@ extension VoiceState {
       sessionId = nil
       backendIncarnationId = nil
       sequence = 0
+      snapshotSequence = -1
       let delay = retryDelays[min(retryStep, retryDelays.count - 1)]
       retryStep = min(retryStep + 1, retryDelays.count - 1)
       var commands: [VoiceCommand] = [
@@ -139,6 +140,7 @@ extension VoiceState {
     let settled = utterances.filter { associations[$0] == nil && stagedFinals[$0] == nil }
     for id in settled.dropLast(1) {
       admissions.removeValue(forKey: id)
+      admissionLanguageSpans.removeValue(forKey: id)
       utterances.removeAll { $0 == id }
     }
   }
@@ -151,9 +153,16 @@ extension VoiceState {
     default: return nil
     }
   }
-  internal mutating func stageFinal(_ association: VoiceAdmissionAssociation, text: String)
+  internal mutating func stageFinal(
+    _ association: VoiceAdmissionAssociation, text: String,
+    languageSpans: [LanguageSpan] = []
+  )
     -> [VoiceCommand]
   {
+    if let accepted = recentAcceptedAdmissions.first(where: { $0.association == association }) {
+      return accepted.receipt.text == text && accepted.receipt.languageSpans == languageSpans
+        ? [] : transportFailed(.invalidResponse)
+    }
     if let known = associations[association.deliveryId] {
       guard known == association else { return transportFailed(.invalidResponse) }
       return []
@@ -169,6 +178,7 @@ extension VoiceState {
     trimSettledAdmissions()
     associations[association.deliveryId] = association
     stagedFinals[association.deliveryId] = text
+    admissionLanguageSpans[association.deliveryId] = languageSpans
     checkpointRevision += 1
     var commands: [VoiceCommand] = [.checkpoint(checkpointRevision, pendingAssociations)]
     if associations.count == 2, wantsListening, let sessionId, capture == .listening, !muteInFlight
@@ -187,11 +197,24 @@ extension VoiceState {
       expectedText == nil || expectedText?.isEmpty == true || expectedText == receipt.text
     else { return [] }
     if let known = associations[association.deliveryId], known != association { return [] }
+    if let accepted = recentAcceptedAdmissions.first(where: { $0.association == association }) {
+      return accepted.receipt == receipt ? [] : transportFailed(.invalidResponse)
+    }
+    if let spans = admissionLanguageSpans[association.deliveryId], spans != receipt.languageSpans {
+      return []
+    }
     if admissions[association.deliveryId] == .saved(receipt) { return [] }
     associations.removeValue(forKey: association.deliveryId)
     stagedFinals.removeValue(forKey: association.deliveryId)
     if !utterances.contains(association.deliveryId) { utterances.append(association.deliveryId) }
     admissions[association.deliveryId] = .saved(receipt)
+    admissionLanguageSpans[association.deliveryId] = receipt.languageSpans
+    // The canonical server page retains at most two finals. Keep their identity
+    // fence separate from the single visible settled row; stale pages are also
+    // rejected by the session's monotonic snapshot sequence.
+    recentAcceptedAdmissions.append(AcceptedAdmission(association: association, receipt: receipt))
+    recentAcceptedAdmissions = Array(recentAcceptedAdmissions.suffix(2))
+    trimSettledAdmissions()
     checkpointRevision += 1
     return [.accepted(receipt), .checkpoint(checkpointRevision, pendingAssociations)]
       + restoreCaptureAfterAdmission()

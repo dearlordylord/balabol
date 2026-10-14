@@ -1,22 +1,28 @@
 {
   "owners": [
     {
+      "name": "language",
+      "root": "src/language",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
       "name": "conversation",
       "root": "src/conversation",
       "entry": "index.ts",
-      "dependencies": ["memory", "answer-generation"]
+      "dependencies": ["memory", "answer-generation", "language"]
     },
     {
       "name": "memory",
       "root": "src/memory",
       "entry": "index.ts",
-      "dependencies": ["summary-generation"]
+      "dependencies": ["summary-generation", "language"]
     },
     {
       "name": "answer-generation",
       "root": "src/answer-generation",
       "entry": "index.ts",
-      "dependencies": []
+      "dependencies": ["language"]
     },
     {
       "name": "summary-generation",
@@ -28,19 +34,19 @@
       "name": "speech-recognition",
       "root": "src/speech-recognition",
       "entry": "index.ts",
-      "dependencies": []
+      "dependencies": ["language"]
     },
     {
       "name": "speech-synthesis",
       "root": "src/speech-synthesis",
       "entry": "index.ts",
-      "dependencies": []
+      "dependencies": ["language"]
     },
     {
       "name": "voice",
       "root": "src/voice",
       "entry": "index.ts",
-      "dependencies": ["conversation", "speech-recognition", "speech-synthesis"]
+      "dependencies": ["conversation", "speech-recognition", "speech-synthesis", "language"]
     },
     {
       "name": "bootstrap",
@@ -53,7 +59,8 @@
         "summary-generation",
         "speech-recognition",
         "speech-synthesis",
-        "voice"
+        "voice",
+        "language"
       ]
     }
   ]

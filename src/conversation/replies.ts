@@ -1,7 +1,8 @@
-import { createHash, randomUUID } from "node:crypto"
-import { Context, Effect, Fiber, Schema, Stream, Clock } from "effect"
+import { randomUUID } from "node:crypto"
+import { Effect, Fiber, Schema, Stream, Clock } from "effect"
 import type { Scope } from "effect"
-import { AnswerEvent, AnswerFailed, type AnswerGeneration } from "../answer-generation/index.ts"
+import { LanguageSpans, validLanguageSpans, type LanguageSpan } from "../language/index.ts"
+import { AnswerFailed, type AnswerGeneration } from "../answer-generation/index.ts"
 import {
   samePayload,
   type DeliveryPayload,
@@ -10,54 +11,15 @@ import {
   type StorageUnavailable
 } from "../memory/index.ts"
 import type { ReplyDelivery, ResponseTarget, ResponseInvalidation, DeliverySettlement } from "./delivery.ts"
+import { parseAnswerEvent, validateAnswerLanguages } from "./answer-languages.ts"
+import { selectResponseLanguage } from "./response-language.ts"
+import { responseIdentity } from "./response-identity.ts"
+import type { ReplySettings } from "./reply-configuration.ts"
 import { Reply, ReplyNotFound } from "./contracts.ts"
 
-const maximumModelNameLength = 200
 const maximumReplyLength = 100_000
+const replySpans = (reply: Reply) => reply.languageSpans ?? []
 const completeAnswer = (completed: boolean, text: string) => completed && text.length > 0
-export const ReplySettings = Schema.Struct({
-  answerProvider: Schema.Literal("fake"),
-  answerModel: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumModelNameLength)),
-  deltaMillis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 })),
-  contextWaitAttempts: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 })),
-  contextWaitMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 })),
-  attachmentMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 }))
-})
-export type ReplySettings = typeof ReplySettings.Type
-export const defaultReplySettings: ReplySettings = {
-  answerProvider: "fake",
-  answerModel: "sol",
-  deltaMillis: 80,
-  contextWaitAttempts: 100,
-  contextWaitMillis: 20,
-  attachmentMillis: 5000
-}
-export class ReplyConfiguration extends Context.Service<ReplyConfiguration, ReplySettings>()(
-  "balabol/conversation/reply-configuration"
-) {}
-
-// UUIDv5 gives an accepted input one stable response identity across backend restart.
-const responseIdentity = (inputDeliveryId: string) => {
-  const namespace = Buffer.from("6ba7b8109dad11d180b400c04fd430c8", "hex")
-  const bytes = createHash("sha1").update(namespace).update(`balabol.response:${inputDeliveryId}`).digest()
-  const hex = bytes.toString("hex")
-  const versionNibble = "5"
-  const variantPosition = 16
-  const hexRadix = 16
-  const variantMask = 3
-  const variantPrefix = 8
-  const variantNibble = (
-    (Number.parseInt(hex.charAt(variantPosition), hexRadix) & variantMask) |
-    variantPrefix
-  ).toString(hexRadix)
-  const groupOneEnd = 8
-  const groupTwoEnd = 12
-  const groupThreeStart = 13
-  const groupFourStart = 17
-  const groupFourEnd = 20
-  const uuidHexLength = 32
-  return `${hex.slice(0, groupOneEnd)}-${hex.slice(groupOneEnd, groupTwoEnd)}-${versionNibble}${hex.slice(groupThreeStart, variantPosition)}-${variantNibble}${hex.slice(groupFourStart, groupFourEnd)}-${hex.slice(groupFourEnd, uuidHexLength)}`
-}
 /** Conversation owns responses; observers never launch generation or own Memory. */
 export class Replies {
   #state: Reply | undefined
@@ -88,6 +50,7 @@ export class Replies {
           inputDeliveryId: state.inputDeliveryId,
           role: "assistant",
           outcome: "interrupted",
+          languageSpans: replySpans(state),
           text: state.text
         }
         this.#task = undefined
@@ -163,6 +126,7 @@ export class Replies {
         inputDeliveryId,
         sequence: 0,
         state: "Failed",
+        languageSpans: [],
         text: "",
         error: { code: "Restarted", message: "Reply state was lost at backend restart; retry the accepted input" },
         receipt: null
@@ -179,6 +143,7 @@ export class Replies {
       sequence: maximumReplyLength + 1,
       state: receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
       text: receipt.text,
+      languageSpans: receipt.languageSpans,
       error: null,
       receipt
     })
@@ -210,10 +175,14 @@ export class Replies {
     return Effect.gen({ self: this }, function* () {
       if (!retry && this.#state?.inputDeliveryId === input.deliveryId) return
       const responseId = retry ? randomUUID() : responseIdentity(input.deliveryId)
-      const base = { responseId, inputDeliveryId: input.deliveryId }
+      const base = {
+        responseId,
+        inputDeliveryId: input.deliveryId,
+        responseLanguage: selectResponseLanguage(input.languageSpans)
+      }
       this.#phase = "Generating"
       this.#observer = undefined
-      this.#state = { ...base, sequence: 0, state: "Waiting", text: "", error: null, receipt: null }
+      this.#state = { ...base, sequence: 0, state: "Waiting", languageSpans: [], text: "", error: null, receipt: null }
       if (this.#deliveryDeadline !== undefined) yield* Fiber.interrupt(this.#deliveryDeadline)
       this.#deliveryDeadline = undefined
       const ticket = yield* this.delivery.begin(base)
@@ -235,6 +204,7 @@ export class Replies {
               ...base,
               state: "Failed",
               text,
+              languageSpans: this.#state?.languageSpans ?? [],
               error: {
                 code: error._tag === "StorageUnavailable" ? "StorageUnavailable" : "ProviderFailed",
                 message: error.message
@@ -272,13 +242,14 @@ export class Replies {
   #canCommit(responseId: string): boolean {
     return this.#phase === "Generating" && this.#state?.responseId === responseId
   }
-  #generate(input: Receipt, base: { responseId: string; inputDeliveryId: string }) {
+  #generate(input: Receipt, base: { responseId: string; inputDeliveryId: string; responseLanguage: string }) {
     return Effect.gen({ self: this }, function* () {
       const snapshot = yield* this.#snapshot(input)
       if (snapshot.state !== "ready") {
         this.#update({
           ...base,
           state: "Failed",
+          languageSpans: [],
           text: "",
           error: {
             code: snapshot.state === "failed" ? "MemoryFailed" : "MemoryPending",
@@ -288,7 +259,9 @@ export class Replies {
         })
         return
       }
+      yield* validateAnswerLanguages(this.answer.capabilities, base.responseLanguage, input.languageSpans)
       let text = ""
+      let languageSpans: readonly LanguageSpan[] = []
       let completed = false
       yield* this.answer
         .generate({
@@ -297,23 +270,36 @@ export class Replies {
             ? `[Interrupted assistant output: generated text may not have been heard; no user agreement implied]\n${snapshot.text}`
             : snapshot.text,
           input: input.text,
+          inputLanguageSpans: input.languageSpans,
+          responseLanguage: base.responseLanguage,
           capabilities: ["memory.context"]
         })
         .pipe(
           Stream.runForEach((raw) =>
             Effect.gen({ self: this }, function* () {
-              const event = yield* Schema.decodeUnknownEffect(AnswerEvent)(raw).pipe(
-                Effect.mapError(() => new AnswerFailed({ message: "Invalid provider event" }))
-              )
+              const event = yield* parseAnswerEvent(raw, this.answer.capabilities)
               if (completed) return yield* new AnswerFailed({ message: "Provider emitted after terminal" })
               if (event.kind === "Completed") {
                 completed = true
                 return
               }
+              languageSpans = [
+                ...languageSpans,
+                ...event.languageSpans.map((span) => ({
+                  ...span,
+                  start: span.start + text.length,
+                  end: span.end + text.length
+                }))
+              ]
               text += event.text
               if (text.length > maximumReplyLength)
                 return yield* new AnswerFailed({ message: "Provider output exceeds bounded text" })
-              this.#update({ ...base, state: "Streaming", text, error: null, receipt: null })
+              languageSpans = yield* Schema.decodeUnknownEffect(LanguageSpans)(languageSpans).pipe(
+                Effect.mapError(() => new AnswerFailed({ message: "Provider annotations exceed bounded spans" }))
+              )
+              if (!validLanguageSpans(text, languageSpans))
+                return yield* new AnswerFailed({ message: "Provider annotations split a Unicode scalar" })
+              this.#update({ ...base, state: "Streaming", text, languageSpans, error: null, receipt: null })
             })
           )
         )
@@ -322,7 +308,7 @@ export class Replies {
       if (!this.#canCommit(base.responseId)) return
       if (this.delivery.matches(base)) {
         this.#phase = "Delivering"
-        this.#update({ ...base, state: "Delivering", text, error: null, receipt: null })
+        this.#update({ ...base, state: "Delivering", text, languageSpans, error: null, receipt: null })
         return
       }
       this.#phase = "Committing"
@@ -332,7 +318,8 @@ export class Replies {
         inputDeliveryId: input.deliveryId,
         role: "assistant",
         outcome: "completed",
-        text
+        text,
+        languageSpans
       }
       yield* Effect.gen({ self: this }, function* () {
         const receipt = yield* this.#appendReply({
@@ -341,10 +328,11 @@ export class Replies {
           outcome: "completed",
           inputDeliveryId: input.deliveryId,
           responseId: base.responseId,
-          text
+          text,
+          languageSpans
         })
         this.#pendingCompletion = undefined
-        this.#update({ ...base, state: "Completed", text, error: null, receipt })
+        this.#update({ ...base, state: "Completed", text, languageSpans, error: null, receipt })
       }).pipe(Effect.uninterruptible)
     })
   }
@@ -376,6 +364,7 @@ export class Replies {
         inputDeliveryId: state.inputDeliveryId,
         role: "assistant",
         outcome: "completed",
+        languageSpans: replySpans(state),
         text: state.text
       }
       yield* this.#settleCompletion()
@@ -411,6 +400,7 @@ export class Replies {
       if (task !== undefined) yield* Fiber.interrupt(task)
       this.#update({
         ...state,
+        languageSpans: replySpans(state),
         text: state.text,
         state: "Failed",
         error: { code: "Cancelled", message: "Reply observer disconnected" },

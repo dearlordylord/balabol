@@ -69,7 +69,7 @@ final class VoiceCaptureUITests: XCTestCase {
     app.buttons["send-message"].tap()
     // The local label is provisional and may already be replaced by the next
     // response. Assert the exact prior response's durable interruption instead.
-    let interrupted = try await interruptedVoiceFixtureReply(input: prior.input.deliveryId)
+    let interrupted = try await terminalVoiceFixtureReply(input: prior.input.deliveryId)
     XCTAssertEqual(interrupted.responseId, prior.reply?.responseId)
     XCTAssertEqual(interrupted.state, "Interrupted")
     let position = try XCTUnwrap(interrupted.receipt?.position)
@@ -122,7 +122,7 @@ final class VoiceCaptureUITests: XCTestCase {
     logger.notice("acoustic ready response=\(response.uuidString, privacy: .public)")
     // The runner starts a bounded external speaker stimulus upon the marker.
     // This test never supplies PCM to LiveKit, recognition, or the application.
-    let interrupted = try await interruptedVoiceFixtureReply(input: prior.input.deliveryId)
+    let interrupted = try await terminalVoiceFixtureReply(input: prior.input.deliveryId)
     XCTAssertEqual(interrupted.responseId, response)
     guard interrupted.state == "Interrupted" else {
       XCTFail("Acoustic onset did not interrupt the exact Playing response")
@@ -130,6 +130,7 @@ final class VoiceCaptureUITests: XCTestCase {
     }
     let beforeFinal = try await currentVoiceFixtureTurn()
     XCTAssertEqual(beforeFinal.input.deliveryId, prior.input.deliveryId)
+    XCTAssertFalse(app.staticTexts["voice-output-playing"].exists)
     XCTAssertFalse(app.staticTexts["voice-saving"].exists)
     XCTAssertFalse(app.staticTexts["voice-saved"].exists)
     logger.notice(
@@ -225,7 +226,7 @@ final class VoiceCaptureUITests: XCTestCase {
     XCTAssertFalse(playing.exists)
     // Existing INFO control-route evidence identifies distinct old/new room
     // sessions; the UI exposes intent and actual connection, never capabilities.
-    let interrupted = try await interruptedVoiceFixtureReply(input: prior.input.deliveryId)
+    let interrupted = try await terminalVoiceFixtureReply(input: prior.input.deliveryId)
     XCTAssertEqual(interrupted.responseId, response)
     XCTAssertEqual(interrupted.state, "Interrupted")
     let receipt = try XCTUnwrap(interrupted.receipt)
@@ -267,6 +268,265 @@ final class VoiceCaptureUITests: XCTestCase {
     let relaunched = try await currentVoiceFixtureTurn()
     XCTAssertEqual(relaunched.input.deliveryId, prior.input.deliveryId)
     logger.notice("backend restart durable proof response=\(response.uuidString, privacy: .public)")
+  }
+
+  func testRealSDKSilentMicrophoneBaselineCreatesNoAcceptedInputFor60Seconds() async throws {
+    let app = try await launchVoiceFixture(test: self)
+    defer {
+      if app.buttons["end-voice"].exists {
+        app.buttons["end-voice"].tap()
+        _ = app.buttons["start-voice"].waitForExistence(timeout: 3)
+      }
+      app.terminate()
+    }
+    guard try await currentVoiceFixtureTurnIfAny() == nil else {
+      XCTFail("Silent baseline requires an empty isolated fixture database")
+      return
+    }
+    app.buttons["start-voice"].tap()
+    guard await handleMicrophonePermission(app, test: self) else { return }
+    let status = app.staticTexts["voice-status"]
+    let listening = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Listening"), object: status)
+    guard await XCTWaiter.fulfillment(of: [listening], timeout: 30) == .completed else {
+      XCTFail("Actual SDK microphone publication failed")
+      return
+    }
+    let logger = os.Logger(subsystem: "app.balabol.voice.evidence", category: "language-sync")
+    logger.notice(
+      "silent baseline microphone connected utc=\(Date.now.formatted(.iso8601), privacy: .public)")
+    let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+    while ContinuousClock.now < deadline {
+      if let current = try await currentVoiceFixtureTurnIfAny() {
+        logger.notice(
+          "silent baseline unexpected input=\(current.input.deliveryId.uuidString, privacy: .public) utc=\(Date.now.formatted(.iso8601), privacy: .public)"
+        )
+        XCTFail("Microphone admitted an input without any controlled external stimulus")
+        return
+      }
+      try await Task.sleep(for: .milliseconds(200))
+    }
+    XCTAssertEqual(status.label, "Listening")
+    logger.notice("silent baseline no accepted input seconds=60")
+  }
+
+  func testRealSDKSingleAcousticWaveDoesNotCreateInputsFromFixturePlayback() async throws {
+    try await singleAcousticWave(restoreDraftFocus: false)
+  }
+
+  func testRealSDKSingleAcousticWaveWithIndependentDraftFocus() async throws {
+    try await singleAcousticWave(restoreDraftFocus: true)
+  }
+
+  private func singleAcousticWave(restoreDraftFocus: Bool) async throws {
+    let app = try await launchVoiceFixture(test: self)
+    defer {
+      if app.buttons["end-voice"].exists {
+        app.buttons["end-voice"].tap()
+        _ = app.buttons["start-voice"].waitForExistence(timeout: 3)
+      }
+      app.terminate()
+    }
+    if restoreDraftFocus {
+      let draft = app.textFields["message-draft"]
+      draft.tap()
+      draft.typeText("Language draft " + String(UUID().uuidString.prefix(8)))
+    }
+    app.buttons["start-voice"].tap()
+    guard await handleMicrophonePermission(app, test: self) else { return }
+    let status = app.staticTexts["voice-status"]
+    let listening = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Listening"), object: status)
+    guard await XCTWaiter.fulfillment(of: [listening], timeout: 30) == .completed else {
+      XCTFail("Actual SDK microphone publication failed")
+      return
+    }
+    let previous = try await currentVoiceFixtureTurnIfAny()?.input.deliveryId
+    let logger = os.Logger(subsystem: "app.balabol.voice.evidence", category: "language-sync")
+    logger.notice("multilingual acoustic ready ordinal=1")
+    let first = try await nextVoiceFixtureTurn(after: previous)
+    let input = first.input
+    logger.notice(
+      "single wave accepted input=\(input.deliveryId.uuidString, privacy: .public) position=\(input.position, privacy: .public)"
+    )
+    // Bind the reply to the first accepted input, never to a later current turn.
+    // Stop immediately on a second accepted user input: scrolling and later
+    // fixture ordinals are unrelated to this minimal feedback-loop symptom.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+    var sawPlaying = false
+    var completedAt: ContinuousClock.Instant?
+    while ContinuousClock.now < deadline {
+      let tail = try await voiceFixtureHistory(after: input.position)
+      let reply = try await voiceFixtureReply(input: input.deliveryId)
+      if let extra = tail.messages.first(where: { $0.role == "user" }) {
+        logger.notice(
+          "single wave extra input=\(extra.deliveryId.uuidString, privacy: .public) prior=\(input.deliveryId.uuidString, privacy: .public) replyState=\(reply.state, privacy: .public)"
+        )
+        XCTFail(
+          "One external acoustic wave produced another accepted user input during its fixture reply"
+        )
+        return
+      }
+      if ["Interrupted", "Failed"].contains(reply.state) {
+        logger.notice(
+          "single wave premature terminal input=\(input.deliveryId.uuidString, privacy: .public) replyState=\(reply.state, privacy: .public)"
+        )
+        XCTFail("The exact first acoustic input's reply did not finish without interruption")
+        return
+      }
+      sawPlaying = sawPlaying || app.staticTexts["voice-output-playing"].exists
+      if reply.state == "Completed" {
+        completedAt = completedAt ?? ContinuousClock.now
+        if let completedAt, completedAt.duration(to: .now) >= .milliseconds(750) {
+          XCTAssertTrue(sawPlaying, "Real subscribed SDK PCM must play during the minimal loop")
+          XCTAssertEqual(status.label, "Listening")
+          logger.notice(
+            "single wave no extra input proof input=\(input.deliveryId.uuidString, privacy: .public)"
+          )
+          return
+        }
+      }
+      try await Task.sleep(for: .milliseconds(200))
+    }
+    XCTFail("Exact first-input fixture playback did not complete within the bounded loop")
+  }
+
+  func testRealSDKScriptedLanguagesSwitchWithinOneVoiceSession() async throws {
+    let app = try await launchVoiceFixture(test: self)
+    defer {
+      if app.buttons["end-voice"].exists {
+        app.buttons["end-voice"].tap()
+        _ = app.buttons["start-voice"].waitForExistence(timeout: 3)
+      }
+      app.terminate()
+    }
+    let capabilities = app.staticTexts["voice-languages"]
+    XCTAssertTrue(capabilities.waitForExistence(timeout: 10))
+    XCTAssertEqual(
+      capabilities.label, "Scripted languages: " + fixtureLanguageNames(["ru", "fr", "en"]))
+    let draft = app.textFields["message-draft"]
+    let unsent = "Language draft " + String(UUID().uuidString.prefix(8))
+    draft.tap()
+    draft.typeText(unsent)
+    app.buttons["start-voice"].tap()
+    guard await handleMicrophonePermission(app, test: self) else { return }
+    let status = app.staticTexts["voice-status"]
+    let listening = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Listening"), object: status)
+    guard await XCTWaiter.fulfillment(of: [listening], timeout: 30) == .completed else {
+      XCTFail("Actual SDK microphone publication failed")
+      return
+    }
+    let texts = ["Привет", "Bonjour", "Hello", "Bonjour Hello"]
+    let expectedSpans = [
+      [VoiceFixtureLanguageSpan(language: "ru", start: 0, end: 6)],
+      [VoiceFixtureLanguageSpan(language: "fr", start: 0, end: 7)],
+      [VoiceFixtureLanguageSpan(language: "en", start: 0, end: 5)],
+      [
+        VoiceFixtureLanguageSpan(language: "fr", start: 0, end: 7),
+        VoiceFixtureLanguageSpan(language: "en", start: 8, end: 13),
+      ],
+    ]
+    var previousInput = try await currentVoiceFixtureTurnIfAny()?.input.deliveryId
+    var acceptedIds: Set<UUID> = []
+    var finalReceipt: VoiceFixtureReply.Receipt?
+    let logger = os.Logger(subsystem: "app.balabol.voice.evidence", category: "language-sync")
+    for ordinal in 1...4 {
+      XCTAssertEqual(status.label, "Listening")
+      XCTAssertFalse(app.staticTexts["voice-output-playing"].exists)
+      logger.notice("multilingual acoustic ready ordinal=\(ordinal, privacy: .public)")
+      // The external runner plays one bounded acoustic WAV on each marker.
+      // The platform microphone and real SDK carry every utterance; the text
+      // and annotations below are deterministic fake-recognition declarations.
+      let accepted = try await nextVoiceFixtureTurn(after: previousInput)
+      let input = accepted.input
+      guard input.text == texts[ordinal - 1], input.languageSpans == expectedSpans[ordinal - 1],
+        acceptedIds.insert(input.deliveryId).inserted
+      else {
+        logger.notice(
+          "multilingual unexpected first input ordinal=\(ordinal, privacy: .public) input=\(input.deliveryId.uuidString, privacy: .public)"
+        )
+        XCTFail("Unexpected scripted input identity or language metadata")
+        return
+      }
+      previousInput = input.deliveryId
+      XCTAssertEqual(draft.value as? String, unsent)
+      let playing = app.staticTexts["voice-output-playing"]
+      guard
+        let terminal = try await uninterruptedVoiceFixtureReply(
+          input: input.deliveryId,
+          playing: playing, ordinal: ordinal, logger: logger)
+      else { return }
+      let response = terminal.responseId
+      let receipt = try XCTUnwrap(terminal.receipt)
+      XCTAssertEqual(receipt.deliveryId, response)
+      XCTAssertEqual(receipt.inputDeliveryId, input.deliveryId)
+      XCTAssertEqual(receipt.outcome, "completed")
+      let replySpans = try XCTUnwrap(terminal.languageSpans)
+      XCTAssertFalse(replySpans.isEmpty)
+      XCTAssertEqual(receipt.languageSpans, replySpans)
+      XCTAssertEqual(draft.value as? String, unsent)
+      let stopped = XCTNSPredicateExpectation(
+        predicate: NSPredicate(format: "exists == false"), object: playing)
+      let stopResult = await XCTWaiter.fulfillment(of: [stopped], timeout: 10)
+      XCTAssertEqual(stopResult, .completed)
+      let inputVisible = await revealLanguageReceipt(
+        app, position: input.position, assistant: false)
+      guard inputVisible else {
+        XCTFail("Annotated input row is not visible")
+        return
+      }
+      XCTAssertEqual(app.staticTexts["message-\(input.position)"].label, input.text)
+      XCTAssertEqual(
+        app.staticTexts["message-languages-\(input.position)"].label,
+        fixtureLanguageNames(expectedSpans[ordinal - 1].map(\.language)))
+      let outputVisible = await revealLanguageReceipt(
+        app, position: receipt.position, assistant: true)
+      guard outputVisible else {
+        XCTFail("Annotated reply row is not visible")
+        return
+      }
+      XCTAssertEqual(app.staticTexts["assistant-message-\(receipt.position)"].label, receipt.text)
+      XCTAssertEqual(
+        app.staticTexts["message-languages-\(receipt.position)"].label,
+        fixtureLanguageNames(replySpans.map(\.language)))
+      finalReceipt = receipt
+      logger.notice(
+        "multilingual durable audio observed ordinal=\(ordinal, privacy: .public) input=\(input.deliveryId.uuidString, privacy: .public) response=\(response.uuidString, privacy: .public)"
+      )
+      try await Task.sleep(for: .milliseconds(800))
+      let quietTail = try await voiceFixtureHistory(after: input.position)
+      if let extra = quietTail.messages.first(where: { $0.role == "user" }) {
+        logger.notice(
+          "multilingual extra input after completed ordinal=\(ordinal, privacy: .public) input=\(extra.deliveryId.uuidString, privacy: .public) prior=\(input.deliveryId.uuidString, privacy: .public)"
+        )
+        XCTFail("Unexpected accepted input between controlled acoustic waves")
+        return
+      }
+    }
+    XCTAssertEqual(acceptedIds.count, 4)
+    XCTAssertEqual(status.label, "Listening")
+    XCTAssertEqual(draft.value as? String, unsent)
+    app.buttons["end-voice"].tap()
+    let ended = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == %@", "Voice ended"), object: status)
+    let endResult = await XCTWaiter.fulfillment(of: [ended], timeout: 10)
+    XCTAssertEqual(endResult, .completed)
+    app.terminate()
+    app.launch()
+    let restoredDraft = app.textFields["message-draft"]
+    let restored = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", unsent), object: restoredDraft)
+    let draftResult = await XCTWaiter.fulfillment(of: [restored], timeout: 10)
+    XCTAssertEqual(draftResult, .completed)
+    XCTAssertEqual(app.staticTexts["voice-status"].label, "Voice is off")
+    let receipt = try XCTUnwrap(finalReceipt)
+    let persisted = await revealLanguageReceipt(app, position: receipt.position, assistant: true)
+    XCTAssertTrue(persisted)
+    XCTAssertEqual(
+      app.staticTexts["message-languages-\(receipt.position)"].label,
+      fixtureLanguageNames(try XCTUnwrap(receipt.languageSpans).map(\.language)))
+    logger.notice("multilingual relaunch proof inputs=4")
   }
 
   func testActualMicrophoneUtteranceIsSavedWithoutChangingDraftAndSurvivesRelaunch() async throws {
@@ -444,6 +704,7 @@ private struct VoiceFixtureCurrent: Decodable {
     let deliveryId: UUID
     let text: String
     let position: Int
+    let languageSpans: [VoiceFixtureLanguageSpan]?
   }
   let input: Receipt
 }
@@ -457,9 +718,11 @@ private struct VoiceFixtureReply: Decodable {
     let text: String
     let role: String
     let outcome: String
+    let languageSpans: [VoiceFixtureLanguageSpan]?
   }
   let responseId: UUID
   let state: String
+  let languageSpans: [VoiceFixtureLanguageSpan]?
   let receipt: Receipt?
 }
 
@@ -477,7 +740,7 @@ private func currentVoiceFixtureTurn() async throws -> VoiceFixtureCurrent {
   return try JSONDecoder().decode(VoiceFixtureCurrent.self, from: data)
 }
 
-private func interruptedVoiceFixtureReply(input: UUID) async throws -> VoiceFixtureReply {
+private func terminalVoiceFixtureReply(input: UUID) async throws -> VoiceFixtureReply {
   let configuration = URLSessionConfiguration.ephemeral
   configuration.timeoutIntervalForRequest = 3
   configuration.timeoutIntervalForResource = 3
@@ -541,4 +804,126 @@ private func voiceFixtureHistory(after: Int) async throws -> VoiceFixtureHistory
     throw URLError(.badServerResponse)
   }
   return try JSONDecoder().decode(VoiceFixtureHistory.self, from: data)
+}
+
+private struct VoiceFixtureLanguageSpan: Decodable, Equatable {
+  let language: String
+  let start: Int
+  let end: Int
+}
+
+private func currentVoiceFixtureTurnIfAny() async throws -> VoiceFixtureCurrent? {
+  let configuration = URLSessionConfiguration.ephemeral
+  configuration.timeoutIntervalForRequest = 3
+  configuration.timeoutIntervalForResource = 3
+  let session = URLSession(configuration: configuration)
+  defer { session.invalidateAndCancel() }
+  let (data, response) = try await session.data(
+    from: try voiceFixtureControlURL().appendingPathComponent("conversation/current"))
+  guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+    throw URLError(.badServerResponse)
+  }
+  return try JSONDecoder().decode(VoiceFixtureCurrent?.self, from: data)
+}
+
+private func nextVoiceFixtureTurn(after previous: UUID?) async throws -> VoiceFixtureCurrent {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+  while ContinuousClock.now < deadline {
+    if let current = try await currentVoiceFixtureTurnIfAny(), current.input.deliveryId != previous
+    {
+      return current
+    }
+    try await Task.sleep(for: .milliseconds(200))
+  }
+  throw URLError(.timedOut)
+}
+
+private func fixtureLanguageNames(_ languages: [String]) -> String {
+  var seen: Set<String> = []
+  return languages.compactMap { tag in
+    guard seen.insert(tag).inserted else { return nil }
+    return Locale.current.localizedString(forIdentifier: tag) ?? tag
+  }.joined(separator: " · ")
+}
+
+@MainActor private func revealLanguageReceipt(
+  _ app: XCUIApplication, position: Int, assistant: Bool
+) async -> Bool {
+  let body = app.staticTexts[(assistant ? "assistant-message-" : "message-") + String(position)]
+  let caption = app.staticTexts["message-languages-\(position)"]
+  let transcript = app.collectionViews.firstMatch
+  guard transcript.exists else { return false }
+  for _ in 0..<24 {
+    if body.exists, caption.exists, body.isHittable, caption.isHittable { return true }
+    let visible = app.staticTexts.allElementsBoundByIndex.compactMap { element -> Int? in
+      let identifier = element.identifier
+      for prefix in ["assistant-message-", "message-"] where identifier.hasPrefix(prefix) {
+        guard let value = Int(identifier.dropFirst(prefix.count)) else { continue }
+        return element.isHittable ? value : nil
+      }
+      return nil
+    }
+    let towardLater = visible.max().map { $0 < position } ?? false
+    let start = transcript.coordinate(
+      withNormalizedOffset: CGVector(dx: 0.5, dy: towardLater ? 0.7 : 0.3))
+    let end = transcript.coordinate(
+      withNormalizedOffset: CGVector(dx: 0.5, dy: towardLater ? 0.3 : 0.7))
+    start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+    try? await Task.sleep(for: .milliseconds(200))
+  }
+  return false
+}
+
+private func voiceFixtureReply(input: UUID) async throws -> VoiceFixtureReply {
+  let configuration = URLSessionConfiguration.ephemeral
+  configuration.timeoutIntervalForRequest = 3
+  configuration.timeoutIntervalForResource = 3
+  let session = URLSession(configuration: configuration)
+  defer { session.invalidateAndCancel() }
+  let (data, response) = try await session.data(
+    from: try voiceFixtureControlURL().appendingPathComponent(
+      "conversation/replies/" + input.uuidString))
+  guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+    throw URLError(.badServerResponse)
+  }
+  return try JSONDecoder().decode(VoiceFixtureReply.self, from: data)
+}
+
+@MainActor private func uninterruptedVoiceFixtureReply(
+  input: UUID, playing: XCUIElement,
+  ordinal: Int, logger: os.Logger
+) async throws -> VoiceFixtureReply? {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+  var sawPlaying = false
+  while ContinuousClock.now < deadline {
+    let first = try await voiceFixtureReply(input: input)
+    let current = try await currentVoiceFixtureTurn()
+    // The exact reply endpoint remains tied to this input. Current is only an
+    // extra-input detector, never authority to replace the response identity.
+    if current.input.deliveryId != input {
+      logger.notice(
+        "multilingual extra input ordinal=\(ordinal, privacy: .public) input=\(current.input.deliveryId.uuidString, privacy: .public) prior=\(input.uuidString, privacy: .public) replyState=\(first.state, privacy: .public)"
+      )
+      XCTFail("Unexpected accepted input during this wave's exact fixture reply")
+      return nil
+    }
+    if ["Interrupted", "Failed"].contains(first.state) {
+      logger.notice(
+        "multilingual premature terminal ordinal=\(ordinal, privacy: .public) input=\(input.uuidString, privacy: .public) response=\(first.responseId.uuidString, privacy: .public) replyState=\(first.state, privacy: .public)"
+      )
+      XCTFail("Exact controlled-wave reply was interrupted or failed")
+      return nil
+    }
+    sawPlaying = sawPlaying || playing.exists
+    if first.state == "Completed" {
+      guard sawPlaying else {
+        XCTFail("Actual subscribed SDK fixture PCM was not observed")
+        return nil
+      }
+      return first
+    }
+    try await Task.sleep(for: .milliseconds(200))
+  }
+  XCTFail("Exact controlled-wave SDK fixture reply did not complete within its bounded wait")
+  return nil
 }

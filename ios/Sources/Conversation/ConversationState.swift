@@ -58,7 +58,8 @@ public struct ConversationState: Equatable, Sendable {
     case idle
     case observing(Request, inputDeliveryId: UUID, latest: ReplySnapshot?)
     case completed(ConversationMessage)
-    case providerFailed(inputDeliveryId: UUID, text: String, ReplyFailure)
+    case providerFailed(
+      inputDeliveryId: UUID, text: String, ReplyFailure, languageSpans: [LanguageSpan] = [])
     case observationFailed(inputDeliveryId: UUID, latest: ReplySnapshot?, ConversationFailure)
   }
   public var replyHasSnapshot: Bool {
@@ -71,15 +72,24 @@ public struct ConversationState: Equatable, Sendable {
   public internal(set) var currentFailure: ConversationFailure?
   public var canRetryReply: Bool {
     guard isActive, !isSending, case .available(.editable, _) = draft,
-      case .providerFailed(let input, _, _) = reply
+      case .providerFailed(let input, _, _, _) = reply
     else { return false }
     return messages.last(where: { $0.role == .user })?.deliveryId == input
   }
   public internal(set) var reply: Reply = .idle
+  public var replyLanguageSpans: [LanguageSpan] {
+    switch reply {
+    case .observing(_, _, let latest), .observationFailed(_, let latest, _):
+      latest?.languageSpans ?? []
+    case .providerFailed(_, _, _, let spans): spans
+    case .completed(let receipt): receipt.languageSpans
+    case .idle: []
+    }
+  }
   public var replyText: String {
     switch reply {
     case .observing(_, _, let latest), .observationFailed(_, let latest, _): latest?.text ?? ""
-    case .providerFailed(_, let text, _): text
+    case .providerFailed(_, let text, _, _): text
     default: ""
     }
   }
@@ -94,7 +104,7 @@ public struct ConversationState: Equatable, Sendable {
     return false
   }
   public var replyProviderFailure: ReplyFailure? {
-    if case .providerFailed(_, _, let error) = reply { return error }
+    if case .providerFailed(_, _, let error, _) = reply { return error }
     return nil
   }
   public var replyObservationFailure: ConversationFailure? {

@@ -68,7 +68,8 @@ import XCTest
           "utteranceId": utterance.uuidString, "deliveryId": delivery.uuidString,
           "text": "final input",
         ]))
-    await settle { model.state.hasPendingAdmission }
+    await settle { model.state.admission == .saving(deliveryId: delivery, text: "final input") }
+    XCTAssertTrue(model.state.hasPendingAdmission)
     XCTAssertEqual(model.state.admission, .saving(deliveryId: delivery, text: "final input"))
     XCTAssertTrue(receipts.isEmpty)
     model.end()
@@ -495,7 +496,8 @@ import XCTest
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)
     media.holdOutput = false
-    let model = VoiceViewModel(control: control, media: media) { _ in }
+    let checkpoint = GatedVoiceCheckpoint()
+    let model = VoiceViewModel(control: control, media: media, checkpoint: checkpoint) { _ in }
     model.start()
     await settle { model.state.capture == .listening }
     let session = await control.identity()
@@ -507,7 +509,9 @@ import XCTest
           "utteranceId": oldInput.uuidString, "deliveryId": oldInput.uuidString,
           "text": "Earlier input",
         ]))
-    await settle { model.state.hasPendingAdmission }
+    await checkpoint.waitForSave()
+    XCTAssertTrue(model.state.hasPendingAdmission)
+    XCTAssertNil(model.state.admission)
     model.speechStarted()
     await control.append(
       try event(
@@ -528,6 +532,7 @@ import XCTest
     await settle { model.state.sequence == 3 }
     XCTAssertEqual(media.preparedOutputs, 0)
     XCTAssertFalse(model.state.hasPendingAdmission)
+    await checkpoint.release()
     await model.shutdown()
   }
 
@@ -995,6 +1000,188 @@ import XCTest
     await model.shutdown()
   }
 
+  func testCapabilityFailureDoesNotStopCaptureOrInventConfiguredLanguages() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening && model.state.languages != nil }
+    XCTAssertEqual(model.state.languages?.allowedLanguages, ["ru", "fr", "en"])
+    await control.failLanguages()
+    await model.loadLanguages()
+    XCTAssertEqual(model.state.capture, .listening)
+    XCTAssertTrue(model.state.wantsListening)
+    XCTAssertEqual(
+      model.state.languageFailure,
+      .backend(code: "InvalidLanguageConfiguration", message: "ja is unsupported by synthesis"))
+    XCTAssertNil(model.state.languages)
+    await model.shutdown()
+  }
+
+  func testFinalAndAcceptedMixedLanguageAnnotationsRemainSeparateFromSaveStatus() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media) { receipts.append($0) }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let session = await control.identity()
+    let delivery = UUID()
+    let spans = [
+      LanguageSpan(language: "fr", start: 0, end: 7),
+      LanguageSpan(language: "en", start: 8, end: 13),
+    ]
+    await control.append(
+      try event(
+        session: session, sequence: 1, kind: "Final",
+        fields: [
+          "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString,
+          "text": "Bonjour Hello",
+          "languageSpans": try JSONSerialization.jsonObject(with: JSONEncoder().encode(spans)),
+        ]))
+    await settle { model.state.admission == .saving(deliveryId: delivery, text: "Bonjour Hello") }
+    XCTAssertEqual(model.state.admissionLanguageSpans[delivery], spans)
+    XCTAssertTrue(receipts.isEmpty)
+    let receipt = ConversationMessage(
+      deliveryId: delivery, recordId: 121, position: 121,
+      text: "Bonjour Hello", languageSpans: spans)
+    await control.append(
+      try event(
+        session: session, sequence: 2, kind: "Accepted",
+        fields: [
+          "utteranceId": delivery.uuidString,
+          "receipt": try JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)),
+        ]))
+    await settle { model.state.admission == .saved(receipt) }
+    XCTAssertEqual(receipts, [receipt])
+    XCTAssertEqual(model.state.admissionLanguageSpans[delivery], spans)
+    XCTAssertEqual(model.state.capture, .listening)
+    let rooms = await control.openedCount()
+    XCTAssertEqual(rooms, 1)
+    await model.shutdown()
+  }
+
+  func testDirectAcceptedSnapshotsBoundSettledProjectionAndPreserveUnresolvedSpeech() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media) { receipts.append($0) }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let incarnation = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+    let unresolved = UUID()
+    let pending = VoicePending(
+      utteranceId: unresolved, backendIncarnationId: incarnation,
+      deliveryId: unresolved, text: "Unresolved speech", receipt: nil, error: nil)
+    var expected: [ConversationMessage] = []
+    for position in 1...4 {
+      let spans = [LanguageSpan(language: "en", start: 0, end: 5)]
+      let receipt = ConversationMessage(
+        deliveryId: UUID(), recordId: position, position: position,
+        text: "Hello", languageSpans: spans)
+      expected.append(receipt)
+      await control.installPending([
+        pending,
+        VoicePending(
+          utteranceId: receipt.deliveryId, backendIncarnationId: incarnation,
+          deliveryId: receipt.deliveryId, text: receipt.text, receipt: receipt, error: nil,
+          languageSpans: spans),
+      ])
+      await settle { receipts.count == position && model.state.admissions[unresolved] != nil }
+      XCTAssertEqual(receipts, expected)
+      XCTAssertEqual(Set(model.state.utterances), [unresolved, receipt.deliveryId])
+      XCTAssertEqual(Set(model.state.admissions.keys), [unresolved, receipt.deliveryId])
+      XCTAssertEqual(
+        Set(model.state.admissionLanguageSpans.keys), [unresolved, receipt.deliveryId])
+      XCTAssertTrue(model.state.hasPendingAdmission)
+      XCTAssertLessThanOrEqual(model.state.recentAcceptedAdmissions.count, 2)
+    }
+    let session = await control.identity()
+    let old = expected[0]
+    await control.replaySnapshot(
+      VoiceSnapshot(
+        sessionId: session, status: "active", muted: false,
+        sequence: 1, backendIncarnationId: incarnation, events: [], nextAfter: nil,
+        pending: [
+          VoicePending(
+            utteranceId: old.deliveryId, backendIncarnationId: incarnation,
+            deliveryId: old.deliveryId, text: old.text, receipt: old, error: nil,
+            languageSpans: old.languageSpans)
+        ]))
+    try await Task.sleep(for: .milliseconds(600))
+    XCTAssertEqual(receipts, expected)
+    XCTAssertEqual(Set(model.state.utterances), [unresolved, expected[3].deliveryId])
+    XCTAssertLessThanOrEqual(model.state.recentAcceptedAdmissions.count, 2)
+    await model.shutdown()
+  }
+
+  func testRepeatedTwoAcceptedCanonicalReceiptsCallConversationOnceAndKeepOneSettledRow()
+    async throws
+  {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media) { receipts.append($0) }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let incarnation = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+    let expected = (1...2).map { position in
+      ConversationMessage(
+        deliveryId: UUID(), recordId: position, position: position, text: "Hello",
+        languageSpans: [LanguageSpan(language: "en", start: 0, end: 5)])
+    }
+    await control.installPending(
+      expected.map { receipt in
+        VoicePending(
+          utteranceId: receipt.deliveryId, backendIncarnationId: incarnation,
+          deliveryId: receipt.deliveryId, text: receipt.text, receipt: receipt, error: nil,
+          languageSpans: receipt.languageSpans)
+      })
+    await settle { receipts.count >= 2 }
+    try await Task.sleep(for: .milliseconds(800))
+    XCTAssertEqual(receipts, expected)
+    XCTAssertEqual(model.state.utterances, [expected[1].deliveryId])
+    XCTAssertEqual(Set(model.state.admissions.keys), [expected[1].deliveryId])
+    XCTAssertEqual(Set(model.state.admissionLanguageSpans.keys), [expected[1].deliveryId])
+    XCTAssertFalse(model.state.hasPendingAdmission)
+    await model.shutdown()
+  }
+
+  func testContradictoryDuplicateCanonicalReceiptCannotReplaceAcceptedLanguageFact() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    var receipts: [ConversationMessage] = []
+    let model = VoiceViewModel(control: control, media: media) { receipts.append($0) }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let incarnation = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+    let receipt = ConversationMessage(
+      deliveryId: UUID(), recordId: 31, position: 31, text: "Hello",
+      languageSpans: [LanguageSpan(language: "en", start: 0, end: 5)])
+    await control.installPending([
+      VoicePending(
+        utteranceId: receipt.deliveryId,
+        backendIncarnationId: incarnation, deliveryId: receipt.deliveryId, text: receipt.text,
+        receipt: receipt, error: nil, languageSpans: receipt.languageSpans)
+    ])
+    await settle { receipts == [receipt] }
+    let contradiction = ConversationMessage(
+      deliveryId: receipt.deliveryId, recordId: 31,
+      position: 31, text: "Hello", languageSpans: [LanguageSpan(language: "fr", start: 0, end: 5)])
+    await control.installPending([
+      VoicePending(
+        utteranceId: receipt.deliveryId,
+        backendIncarnationId: incarnation, deliveryId: receipt.deliveryId, text: contradiction.text,
+        receipt: contradiction, error: nil, languageSpans: contradiction.languageSpans)
+    ])
+    await settle { model.state.capture == .failed(.invalidResponse) }
+    XCTAssertEqual(receipts, [receipt])
+    XCTAssertEqual(model.state.admissions[receipt.deliveryId], .saved(receipt))
+    XCTAssertEqual(model.state.admissionLanguageSpans[receipt.deliveryId], receipt.languageSpans)
+    XCTAssertFalse(model.state.wantsListening)
+    await model.shutdown()
+  }
+
   private func outputValue(session: UUID, input: UUID, response: UUID, epoch: UUID) -> [String: Any]
   {
     [
@@ -1039,7 +1226,7 @@ import XCTest
   var outputWaiting = false
   var stoppedOutput = 0
   var outputContinuation: CheckedContinuation<Void, Never>?
-  var speech: (@Sendable () -> Void)?
+  var speech: (@MainActor @Sendable () -> Void)?
   var allowed: Bool
   var holdPermission = false
   var permissionWaiting = false
@@ -1071,7 +1258,7 @@ import XCTest
   }
   func connect(
     _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,
-    speechStarted: @escaping @Sendable () -> Void,
+    speechStarted: @escaping @MainActor @Sendable () -> Void,
     outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
   ) async throws {
     if let connectFailure { throw connectFailure }
@@ -1141,6 +1328,20 @@ import XCTest
 }
 
 private actor FixtureControl: VoiceControl {
+  private var languageFailure = false
+  func failLanguages() { languageFailure = true }
+  func languages() async throws -> VoiceLanguages {
+    if languageFailure {
+      throw VoiceFailure.backend(
+        code: "InvalidLanguageConfiguration",
+        message: "ja is unsupported by synthesis")
+    }
+    return try JSONDecoder().decode(
+      VoiceLanguages.self,
+      from: Data(
+        "{\"allowedLanguages\":[\"ru\",\"fr\",\"en\"],\"supportedLanguages\":[\"ru\",\"fr\",\"en\"]}"
+          .utf8))
+  }
   private var holdStart = false
   private var startGate: CheckedContinuation<Void, Never>?
   private var controlMutes: [Bool] = []
@@ -1213,6 +1414,13 @@ private actor FixtureControl: VoiceControl {
   private var ended = false
   private var events: [VoiceWireEvent] = []
   private var pending: [VoicePending] = []
+  private var canonicalSequence = 0
+  private var queuedSnapshot: VoiceSnapshot?
+  func replaySnapshot(_ snapshot: VoiceSnapshot) { queuedSnapshot = snapshot }
+  func installPending(_ values: [VoicePending]) {
+    pending = values
+    canonicalSequence += 1
+  }
   func start(requestId: UUID, muted: Bool) async throws -> VoiceJoin {
     startIdentities.append(requestId)
     requestedMute.append(muted)
@@ -1230,6 +1438,7 @@ private actor FixtureControl: VoiceControl {
     session = UUID()
     events = []
     pending = []
+    canonicalSequence = 0
     return try JSONDecoder().decode(
       VoiceJoin.self,
       from: JSONSerialization.data(withJSONObject: [
@@ -1273,10 +1482,14 @@ private actor FixtureControl: VoiceControl {
     ended = true
   }
   func snapshot(sessionId: UUID, after: Int) async throws -> VoiceSnapshot {
+    if let queuedSnapshot {
+      self.queuedSnapshot = nil
+      return queuedSnapshot
+    }
     if holdSnapshot { await withCheckedContinuation { snapshotGate = $0 } }
     if snapshotFailure { throw VoiceFailure.connection }
     let payload =
-      "{\"backendIncarnationId\":\"\(incarnation.uuidString)\",\"controlDeadlineAt\":9999999999999,\"sessionId\":\"\(session.uuidString)\",\"status\":\"\(ended ? "ended" : "active")\",\"muted\":false,\"sequence\":\(events.last?.sequence ?? 0),\"events\":[],\"nextAfter\":null,\"firstSequence\":1,\"audioFramesReceived\":0,\"sampleFramesReceived\":0,\"pending\":[]}"
+      "{\"backendIncarnationId\":\"\(incarnation.uuidString)\",\"controlDeadlineAt\":9999999999999,\"sessionId\":\"\(session.uuidString)\",\"status\":\"\(ended ? "ended" : "active")\",\"muted\":false,\"sequence\":\(max(events.last?.sequence ?? 0, canonicalSequence)),\"events\":[],\"nextAfter\":null,\"firstSequence\":1,\"audioFramesReceived\":0,\"sampleFramesReceived\":0,\"pending\":[]}"
     let empty = try JSONDecoder().decode(VoiceSnapshot.self, from: Data(payload.utf8))
     return VoiceSnapshot(
       sessionId: empty.sessionId, status: empty.status, muted: false, sequence: empty.sequence,

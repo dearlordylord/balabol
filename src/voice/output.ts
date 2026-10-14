@@ -13,6 +13,7 @@ import type {
   AudioPublication,
   MediaConnection
 } from "./contracts.ts"
+import type { Phrase } from "./phrases.ts"
 import { Phrases } from "./phrases.ts"
 const sampleRate = 24000
 const completionMillis = 30000
@@ -150,47 +151,51 @@ export class ReplyAudio {
       })
     )
   }
-  #synthesize(ticket: DeliveryTicket, phrase: string, publication: AudioPublication) {
+  #synthesize(ticket: DeliveryTicket, phrase: Phrase, publication: AudioPublication) {
+    if (!this.synthesis.capabilities.languages.includes(phrase.language))
+      return Effect.fail(failed("AudioUnavailable", "Unsupported reply phrase language"))
     const phraseId = randomUUID()
     let sequence = 0
     let frames = 0
     let completed = false
-    return this.synthesis.synthesize({ responseId: ticket.responseId, phraseId, language: "en", text: phrase }).pipe(
-      Stream.runForEach((raw) =>
-        Schema.decodeUnknownEffect(SynthesisEvent)(raw).pipe(
-          Effect.mapError(() => failed("AudioUnavailable", "Invalid synthesis event")),
-          Effect.flatMap((event) => {
-            if (!this.#active(ticket)) return Effect.interrupt
-            if (!this.#validEvent(event, ticket, phraseId, sequence, completed))
-              return Effect.fail(failed("AudioUnavailable", "Invalid synthesis identity or sequence"))
-            if (event.kind === "Completed") {
-              completed = true
-              return Effect.void
-            }
-            sequence += 1
-            frames += event.audio.sampleFrames
-            return frames > maximumPhraseAudio
-              ? Effect.fail(failed("AudioUnavailable", "Phrase audio exceeds capacity"))
-              : publication.capture(event.audio)
-          })
-        )
-      ),
-      Effect.mapError((error) => failed("AudioUnavailable", error.message)),
-      Effect.andThen(
-        Effect.suspend(() =>
-          completed && sequence > 0
-            ? Effect.void
-            : Effect.fail(failed("AudioUnavailable", "Synthesis lacks complete audio"))
+    return this.synthesis
+      .synthesize({ responseId: ticket.responseId, phraseId, language: phrase.language, text: phrase.text })
+      .pipe(
+        Stream.runForEach((raw) =>
+          Schema.decodeUnknownEffect(SynthesisEvent)(raw).pipe(
+            Effect.mapError(() => failed("AudioUnavailable", "Invalid synthesis event")),
+            Effect.flatMap((event) => {
+              if (!this.#active(ticket)) return Effect.interrupt
+              if (!this.#validEvent(event, ticket, phraseId, sequence, completed))
+                return Effect.fail(failed("AudioUnavailable", "Invalid synthesis identity or sequence"))
+              if (event.kind === "Completed") {
+                completed = true
+                return Effect.void
+              }
+              sequence += 1
+              frames += event.audio.sampleFrames
+              return frames > maximumPhraseAudio
+                ? Effect.fail(failed("AudioUnavailable", "Phrase audio exceeds capacity"))
+                : publication.capture(event.audio)
+            })
+          )
+        ),
+        Effect.mapError((error) => failed("AudioUnavailable", error.message)),
+        Effect.andThen(
+          Effect.suspend(() =>
+            completed && sequence > 0
+              ? Effect.void
+              : Effect.fail(failed("AudioUnavailable", "Synthesis lacks complete audio"))
+          )
         )
       )
-    )
   }
   #stream(ticket: DeliveryTicket, publication: AudioPublication) {
     return Effect.gen({ self: this }, function* () {
       const phrases = new Phrases()
       while (this.#active(ticket)) {
         const reply = yield* this.#reply(ticket)
-        if (!phrases.append(reply.text))
+        if (!phrases.append(reply.text, reply.languageSpans, reply.responseLanguage))
           return yield* failed("AudioUnavailable", "Reply phrase buffer exceeded capacity")
         const flush = reply.state === "Delivering"
         let phrase = phrases.next(flush)

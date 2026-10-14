@@ -12,6 +12,7 @@ import {
   defaultReplySettings
 } from "../conversation/index.ts"
 
+import { LanguageTags } from "../language/index.ts"
 import { welcomeRoutes } from "./welcome.ts"
 import {
   configuredUniiLayer,
@@ -27,7 +28,15 @@ import { fakeAnswerLayer } from "../answer-generation/index.ts"
 import { FakeSummarySettings, configurableFakeSummaryLayer } from "../summary-generation/index.ts"
 import { fakeRecognitionLayer } from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
-import { LiveKitSettings, liveKitLayer, Voice, voiceRoutes, sqliteVoiceAdmissions } from "../voice/index.ts"
+import {
+  LiveKitSettings,
+  liveKitLayer,
+  Voice,
+  voiceRoutes,
+  sqliteVoiceAdmissions,
+  VoiceLanguageConfiguration,
+  defaultVoiceLanguageConfiguration
+} from "../voice/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
 const configuredConversationLayer = (
   settings: ReplySettings = defaultReplySettings,
@@ -61,6 +70,7 @@ export const ServerConfig = Schema.Struct({
   fakeSummary: Schema.optionalKey(FakeSummarySettings),
   reply: Schema.optionalKey(ReplySettings),
   voice: Schema.optionalKey(LiveKitSettings),
+  voiceLanguages: Schema.optionalKey(LanguageTags),
   tailnetOwner: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumOwnerIdentityLength))
   )
@@ -96,6 +106,11 @@ const voiceSelection = (environment: NodeJS.ProcessEnv) =>
       }
 const tailnetSelection = (environment: NodeJS.ProcessEnv) =>
   environment.BALABOL_TAILNET_OWNER === undefined ? {} : { tailnetOwner: environment.BALABOL_TAILNET_OWNER }
+const languageSelection = (environment: NodeJS.ProcessEnv) => ({
+  voiceLanguages:
+    environment.BALABOL_VOICE_LANGUAGES?.split(",").map((tag) => tag.trim()) ??
+    defaultVoiceLanguageConfiguration.allowedLanguages
+})
 export const parseConfig = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(ServerConfig)({
     host: environment.BALABOL_HOST ?? "127.0.0.1",
@@ -112,6 +127,7 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
       invalidCompletion: environment.BALABOL_FAKE_SUMMARY_INVALID === "true"
     },
     reply: { ...providerSelection(environment), ...replyTiming(environment) },
+    ...languageSelection(environment),
     ...voiceSelection(environment),
     ...tailnetSelection(environment)
   })
@@ -134,7 +150,12 @@ export const serverLayer = (config: ServerConfig) => {
       return sqliteVoiceAdmissions(resource.storage.database)
     })
   )
-  const application = Voice.layer.pipe(
+  const application = Voice.configuredLayer.pipe(
+    Layer.provide(
+      Layer.succeed(VoiceLanguageConfiguration, {
+        allowedLanguages: config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages
+      })
+    ),
     Layer.provide(fakeRecognitionLayer()),
     Layer.provide(fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })),
     Layer.provide(liveKitLayer(config.voice)),

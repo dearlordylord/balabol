@@ -6,6 +6,7 @@ import type { VoiceFrame, VoiceEvent } from "../src/voice/index.ts"
 const frameSamples = 320
 const speechSample = 1200
 const silenceFrames = 20
+const onsetFrames = 3
 export const voiceTransportFixture = (joinImmediately = true) => {
   let receive: ((track: string, raw: unknown) => void) | undefined
   let markJoined: (() => void) | undefined
@@ -74,7 +75,7 @@ export const voiceTransportFixture = (joinImmediately = true) => {
     data: new Int16Array(frameSamples).fill(sample)
   })
   const segment = Effect.gen(function* () {
-    yield* send(audio(speechSample))
+    for (let i = 0; i < onsetFrames; i++) yield* send(audio(speechSample))
     for (let i = 0; i < silenceFrames; i++) yield* send(audio(0))
   })
   return {

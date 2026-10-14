@@ -26,7 +26,7 @@ it("upgrades the previous durable schema without losing user identities or posit
         Effect.gen(function* () {
           const conversation = yield* Conversation
           expect((yield* conversation.page({ limit: 100 })).messages).toEqual([
-            { deliveryId: id, recordId: 0, position: 0, text: "old message", role: "user" }
+            { deliveryId: id, recordId: 0, position: 0, text: "old message", role: "user", languageSpans: [] }
           ])
           const restarted = yield* conversation.reply(id)
           expect(restarted.error?.code).toBe("Restarted")
@@ -69,6 +69,7 @@ it("migrates legacy assistant deliveries to completed without changing their ide
           expect(reply.state).toBe("Completed")
           expect(reply.text).toBe("Legacy completed answer")
           expect(reply.receipt?.outcome).toBe("completed")
+          expect(reply.receipt?.languageSpans).toEqual([])
           expect(reply.responseId).toBe(responseId)
           expect((yield* conversation.page({ limit: 100 })).messages[0]?.outcome).toBe("completed")
         })

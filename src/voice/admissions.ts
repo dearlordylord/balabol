@@ -1,18 +1,24 @@
 import { randomUUID, createHash } from "node:crypto"
 import { Context, Effect, Layer, Schema } from "effect"
 import type { DatabaseSync } from "node:sqlite"
+import { LanguageSpans, validLanguageSpans } from "../language/index.ts"
+import type { LanguageSpan } from "../language/index.ts"
 import { SpeechAdmission } from "./recovery-contracts.ts"
 import { failed, VoiceFailed } from "./contracts.ts"
 const maximumCheckpoints = 8
 const maximumText = 100000
 const BeginAdmission = Schema.Struct({
   ...SpeechAdmission.fields,
-  text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumText))
+  text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumText)),
+  languageSpans: Schema.optionalKey(LanguageSpans)
 })
+export const speechAnnotationsHash = (spans: readonly LanguageSpan[]) =>
+  speechPayloadHash(JSON.stringify(Schema.decodeUnknownSync(LanguageSpans)(spans)))
 export const speechPayloadHash = (text: string) => createHash("sha256").update(text, "utf16le").digest("hex")
 const Checkpoint = Schema.Struct({
   ...SpeechAdmission.fields,
   payloadHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+  languageSpansHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
   state: Schema.Literals(["Open", "Sealed"])
 })
 const Checkpoints = Schema.Array(Checkpoint).check(Schema.isMaxLength(maximumCheckpoints))
@@ -52,7 +58,7 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
         Schema.decodeUnknownSync(Checkpoints)(
           database
             .prepare(
-              "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,state FROM voice_admissions ORDER BY rowid LIMIT ?"
+              "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,languageSpansHash,state FROM voice_admissions ORDER BY rowid LIMIT ?"
             )
             .all(maximumCheckpoints + 1)
         )
@@ -61,6 +67,11 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
           database.exec(
             "CREATE TABLE IF NOT EXISTS voice_admissions(deliveryId TEXT PRIMARY KEY,backendIncarnationId TEXT NOT NULL,sessionId TEXT NOT NULL,payloadHash TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('Open','Sealed')))"
           )
+          const columns = database.prepare("SELECT name FROM pragma_table_info('voice_admissions') LIMIT 8").all()
+          if (!columns.some((row) => row.name === "languageSpansHash"))
+            database.exec(
+              `ALTER TABLE voice_admissions ADD COLUMN languageSpansHash TEXT NOT NULL DEFAULT '${speechAnnotationsHash([])}'`
+            )
           rows()
           database
             .prepare("UPDATE voice_admissions SET state='Sealed' WHERE backendIncarnationId<>?")
@@ -71,13 +82,15 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
       const find = (admission: SpeechAdmission) => {
         const row = database
           .prepare(
-            "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,state FROM voice_admissions WHERE deliveryId=? AND backendIncarnationId=? AND sessionId=? LIMIT 1"
+            "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,languageSpansHash,state FROM voice_admissions WHERE deliveryId=? AND backendIncarnationId=? AND sessionId=? LIMIT 1"
           )
           .get(admission.deliveryId, admission.backendIncarnationId, admission.sessionId)
         return row === undefined ? null : Schema.decodeUnknownSync(Checkpoint)(row)
       }
       const begin = (admission: typeof BeginAdmission.Type) =>
         transaction(database, () => {
+          if (!validLanguageSpans(admission.text, admission.languageSpans ?? []))
+            throw failed("InvalidInput", "Invalid finalized language annotations")
           if (admission.backendIncarnationId !== backendIncarnationId)
             throw failed("InvalidInput", "Only the current backend may begin admission")
           if (find(admission) !== null) throw failed("AdmissionConflict", "Speech identity already registered")
@@ -89,13 +102,14 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
           }
           database
             .prepare(
-              "INSERT INTO voice_admissions(deliveryId,backendIncarnationId,sessionId,payloadHash,state) VALUES(?,?,?,?,'Open')"
+              "INSERT INTO voice_admissions(deliveryId,backendIncarnationId,sessionId,payloadHash,languageSpansHash,state) VALUES(?,?,?,?,?,'Open')"
             )
             .run(
               admission.deliveryId,
               admission.backendIncarnationId,
               admission.sessionId,
-              speechPayloadHash(admission.text)
+              speechPayloadHash(admission.text),
+              speechAnnotationsHash(admission.languageSpans ?? [])
             )
         })
       return VoiceAdmissions.of({

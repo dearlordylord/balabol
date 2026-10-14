@@ -13,16 +13,19 @@
 
 Each entrypoint hides sequencing, state coordination and implementation files. Cross-owner callers may import only the declared entrypoint; local implementation imports remain local. A dependency permission is an upper bound, not an instruction to create an interface or import it prematurely. Keep types with the concept they describe.
 
-| Owner              | Policy and state it owns                                                                                 | Permitted domain dependencies                      |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Conversation       | Sole conversation, input acceptance, response identity, interruption and recovery                        | Memory, answer generation                          |
-| Memory             | Hosting real unii, durable adapter, bounded reads, summary readiness and independent compaction lifetime | Summary generation                                 |
-| Answer generation  | Parsed reply requests and typed streaming/cancellation outcomes; fake reply implementation               | None                                               |
-| Summary generation | Parsed summary requests and typed completion/cancellation outcomes; fake summary implementation          | None                                               |
-| Speech recognition | Bounded audio recognition and validated partial/final outcomes; fake recognition implementation          | None                                               |
-| Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake synthesis implementation              | None                                               |
-| Voice              | Temporary voice-session delivery, transport and stale-media rejection                                    | Conversation, speech recognition, speech synthesis |
-| Bootstrap          | Configuration parsing and resource acquisition/release, assembling Layers and adapters                   | The owners above                                   |
+| Owner              | Policy and state it owns                                                                                 | Permitted domain dependencies                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Language           | Canonical BCP47 tags and validated UTF-16 text spans shared by language-aware contracts                  | None                                                         |
+| Conversation       | Sole conversation, input acceptance, response identity, interruption and recovery                        | Memory, answer generation, Language                          |
+| Memory             | Hosting real unii, durable adapter, bounded reads, summary readiness and independent compaction lifetime | Summary generation, Language                                 |
+| Answer generation  | Parsed reply requests and typed streaming/cancellation outcomes; fake reply implementation               | Language                                                     |
+| Summary generation | Parsed summary requests and typed completion/cancellation outcomes; fake summary implementation          | None                                                         |
+| Speech recognition | Bounded audio recognition and validated partial/final outcomes; fake recognition implementation          | Language                                                     |
+| Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake synthesis implementation              | Language                                                     |
+| Voice              | Temporary voice-session delivery, transport and stale-media rejection                                    | Conversation, speech recognition, speech synthesis, Language |
+| Bootstrap          | Configuration parsing and resource acquisition/release, assembling Layers and adapters                   | The owners above                                             |
+
+Language is a shared value-contract owner consumed by Conversation, Memory, answer generation, speech recognition, speech synthesis, Voice and Bootstrap. It validates canonical tags and text-span boundaries; it does not select response languages or providers. Conversation owns response-language preference from accepted annotations. Voice owns allowed-language configuration and validates it against the selected providers. Provider capabilities are explicit; canonical tags do not imply installed support.
 
 There is no separate framework memory or competing conversation state. unii stays plain TypeScript with injected storage/backend ports. Balabol's memory host owns Effect integration; interruption and phone disconnection cannot close that host. Bootstrap does not decide conversation policy.
 

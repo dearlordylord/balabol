@@ -65,7 +65,11 @@ private struct ConversationRoot: View {
         if let model {
           VStack(spacing: 0) {
             if let voice { VoiceView(model: voice) }
-            ConversationView(model: model)
+            ConversationView(model: model) {
+              if let voice {
+                Section("Voice details") { VoiceDetailsView(model: voice) }
+              }
+            }
           }
         } else {
           Form {

@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import type { VoiceFailed } from "./contracts.ts"
 import { StartVoiceRequest, ResolveSpeechAdmissions, SpeechResolutions } from "./recovery-contracts.ts"
+import { VoiceLanguageCapabilities } from "./languages.ts"
 import { Voice } from "./service.ts"
 import {
   VoiceJoin,
@@ -32,6 +33,10 @@ const snapshot = Effect.gen(function* () {
   if (!Number.isSafeInteger(after) || after < 0) return yield* failed("InvalidCursor", "Invalid event cursor")
   const voice = yield* Voice
   return yield* HttpServerResponse.schemaJson(VoiceSnapshot)(yield* voice.snapshot(yield* id, after))
+})
+const languages = Effect.gen(function* () {
+  const voice = yield* Voice
+  return yield* HttpServerResponse.schemaJson(VoiceLanguageCapabilities)(yield* voice.languages())
 })
 const start = Effect.gen(function* () {
   const voice = yield* Voice
@@ -93,6 +98,7 @@ const errors = Effect.catchTags({
 })
 export const voiceRoutes = HttpRouter.use(
   Effect.fn(function* (router) {
+    yield* router.add("GET", "/voice/languages", languages.pipe(errors))
     yield* router.add("POST", "/voice/sessions", start.pipe(errors))
     yield* router.add("POST", "/voice/admissions/resolve", resolve.pipe(errors))
     yield* router.add("GET", "/voice/sessions/:sessionId", authorize.pipe(Effect.andThen(snapshot), errors))

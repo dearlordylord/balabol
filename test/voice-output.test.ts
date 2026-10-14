@@ -61,6 +61,8 @@ it("speech onset fences audio before final recognition and empty recognition can
         yield* waitForOutput(voice, join.sessionId, "Playing")
         for (let attempt = 0; transport.captured.length === 0 && attempt < 100; attempt++) yield* Effect.sleep(5)
         expect(transport.captured.length).toBeGreaterThan(0)
+        for (let frame = 0; frame < 2; frame++) yield* transport.send(transport.audio(1200))
+        expect((yield* voice.snapshot(join.sessionId, 0)).output?.status).toBe("Playing")
         yield* transport.send(transport.audio(1200))
         const stopped = yield* waitForOutput(voice, join.sessionId, "Interrupted")
         expect(stopped.output?.status).toBe("Interrupted")
@@ -88,7 +90,12 @@ it("keeps an emoji whole at the phrase bound without dropping ordered reply text
   const text = `${"x".repeat(799)}😀fin.`
   const phrases: string[] = []
   const answer = Layer.succeed(AnswerGeneration, {
-    generate: () => Stream.fromIterable<AnswerEvent>([{ kind: "Delta", text }, { kind: "Completed" }])
+    capabilities: { languages: ["ru", "fr", "en", "ja"], output: "text-deltas" },
+    generate: () =>
+      Stream.fromIterable<AnswerEvent>([
+        { kind: "Delta", text, languageSpans: [{ language: "en", start: 0, end: text.length }] },
+        { kind: "Completed" }
+      ])
   })
   const synthesis = Layer.effect(
     SpeechSynthesis,

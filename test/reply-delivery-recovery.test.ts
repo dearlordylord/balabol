@@ -157,9 +157,10 @@ it("freezes the response before pending-memory reads even when provider complete
   const answer = Layer.succeed(
     AnswerGeneration,
     AnswerGeneration.of({
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: () =>
         Stream.concat(
-          Stream.succeed({ kind: "Delta", text: "retained partial" }),
+          Stream.succeed({ kind: "Delta", text: "retained partial", languageSpans: [] }),
           Stream.fromEffect(Effect.promise(() => providerGate).pipe(Effect.as({ kind: "Completed" })))
         )
     })
@@ -212,11 +213,12 @@ it("invalidates queued delivery on provider terminal failure and rejects late co
   const answer = Layer.succeed(
     AnswerGeneration,
     AnswerGeneration.of({
+      capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
       generate: () =>
         Stream.fromIterable([
-          { kind: "Delta", text: "partial" },
+          { kind: "Delta", text: "partial", languageSpans: [] },
           { kind: "Completed" },
-          { kind: "Delta", text: "late" }
+          { kind: "Delta", text: "late", languageSpans: [] }
         ])
     })
   )

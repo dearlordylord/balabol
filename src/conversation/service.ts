@@ -1,9 +1,10 @@
-import { fakeAnswerLayer, AnswerGeneration } from "../answer-generation/index.ts"
-import { defaultReplySettings, Replies, ReplyConfiguration } from "./replies.ts"
+import { fakeAnswerLayer, AnswerGeneration, AnswerCapabilities, AnswerFailed } from "../answer-generation/index.ts"
+import { Replies } from "./replies.ts"
+import { defaultReplySettings, ReplyConfiguration } from "./reply-configuration.ts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { ReplyDelivery, DeliverySettlement, ResponseTarget } from "./delivery.ts"
 import type { DeliveryTicket, ReplyDeliveryRegistration } from "./delivery.ts"
-import { DeliveryId, Memory } from "../memory/index.ts"
+import { DeliveryId, Memory, samePayload, type DeliveryPayload } from "../memory/index.ts"
 import {
   type CurrentTurn,
   ReplyBusy,
@@ -35,13 +36,14 @@ export {
 } from "./contracts.ts"
 const invalidIdentity = () => new InvalidInput({ message: "Invalid conversation identity or input" })
 const parseId = (id: string) => Schema.decodeUnknownEffect(DeliveryId)(id).pipe(Effect.mapError(invalidIdentity))
-const assertIdentity = (payload: { text: string; role?: "user" | "assistant" } | undefined, message: SendMessage) =>
-  payload !== undefined && (payload.text !== message.text || payload.role === "assistant")
+const assertIdentity = (payload: Message | DeliveryPayload | undefined, message: SendMessage) =>
+  payload !== undefined && (!samePayload(payload, { ...message, role: "user" }) || payload.role === "assistant")
     ? Effect.fail(new DeliveryConflict({ message: "Delivery identity already belongs to another payload" }))
     : Effect.void
 export class Conversation extends Context.Service<
   Conversation,
   {
+    readonly replyLanguages: readonly string[]
     registerReplyDelivery: (
       input: ReplyDeliveryRegistration
     ) => Effect.Effect<{ registrationId: string }, InvalidInput | ReplyBusy>
@@ -66,7 +68,11 @@ export class Conversation extends Context.Service<
     Conversation,
     Effect.gen(function* () {
       const memory = yield* Memory
-      const answer = yield* AnswerGeneration
+      const provider = yield* AnswerGeneration
+      const capabilities = yield* Schema.decodeUnknownEffect(AnswerCapabilities)(provider.capabilities).pipe(
+        Effect.mapError(() => new AnswerFailed({ message: "Invalid answer provider capabilities" }))
+      )
+      const answer = { ...provider, capabilities }
       const scope = yield* Effect.scope
       const settings = yield* ReplyConfiguration
       const semaphore = yield* Semaphore.make(1)
@@ -76,7 +82,8 @@ export class Conversation extends Context.Service<
       const replies = new Replies(memory, answer, scope, settings, delivery, deadline)
       const send = Effect.fn("Conversation.send")(
         function* (raw: SendMessage) {
-          const message = yield* Schema.decodeUnknownEffect(SendMessage)(raw).pipe(Effect.mapError(invalidIdentity))
+          const parsed = yield* Schema.decodeUnknownEffect(SendMessage)(raw).pipe(Effect.mapError(invalidIdentity))
+          const message = { ...parsed, languageSpans: parsed.languageSpans ?? [] }
           const existing = yield* memory.find(message.deliveryId)
           const payload = existing?.state === "Accepted" ? existing.receipt : existing?.payload
           yield* assertIdentity(payload, message)
@@ -117,6 +124,7 @@ export class Conversation extends Context.Service<
           Effect.uninterruptible
         )
       return Conversation.of({
+        replyLanguages: answer.capabilities.languages,
         registerReplyDelivery: (input) => delivery.register(input).pipe(semaphore.withPermits(1)),
         deliverySnapshot: (id) => parseId(id).pipe(Effect.map((parsed) => delivery.snapshot(parsed))),
         interruptResponse: (target) =>
@@ -175,4 +183,4 @@ export class Conversation extends Context.Service<
   )
 }
 
-export { ReplySettings, ReplyConfiguration, defaultReplySettings } from "./replies.ts"
+export { ReplySettings, ReplyConfiguration, defaultReplySettings } from "./reply-configuration.ts"

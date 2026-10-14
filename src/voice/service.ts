@@ -6,7 +6,9 @@ import { VoiceTransport, SessionId, OutputReady, OutputInterrupt, failed } from 
 import type { VoiceJoin, VoiceSnapshot, VoiceFailed } from "./contracts.ts"
 import { StartVoiceRequest, ResolveSpeechAdmissions } from "./recovery-contracts.ts"
 import type { SpeechResolutions } from "./recovery-contracts.ts"
-import { VoiceAdmissions, speechPayloadHash } from "./admissions.ts"
+import { VoiceAdmissions, speechPayloadHash, speechAnnotationsHash } from "./admissions.ts"
+import { VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration, validateVoiceLanguages } from "./languages.ts"
+import type { VoiceLanguageCapabilities } from "./languages.ts"
 import { Session } from "./session.ts"
 import { ReplyAudio } from "./output.ts"
 const maximumSessions = 2
@@ -16,6 +18,7 @@ const controlMillis = 30000
 export class Voice extends Context.Service<
   Voice,
   {
+    languages: () => Effect.Effect<VoiceLanguageCapabilities>
     authorize: (id: string, token: string) => Effect.Effect<void, VoiceFailed>
     start: (request: StartVoiceRequest) => Effect.Effect<VoiceJoin, VoiceFailed>
     resolve: (request: ResolveSpeechAdmissions) => Effect.Effect<SpeechResolutions, VoiceFailed>
@@ -26,13 +29,20 @@ export class Voice extends Context.Service<
     end: (id: string) => Effect.Effect<VoiceSnapshot, VoiceFailed>
   }
 >()("balabol/voice") {
-  static readonly layer = Layer.effect(
+  static readonly configuredLayer = Layer.effect(
     Voice,
     Effect.gen(function* () {
+      const languageSettings = yield* VoiceLanguageConfiguration
       const admissions = yield* VoiceAdmissions
       const conversation = yield* Conversation
       const provider = yield* SpeechRecognition
       const synthesis = yield* SpeechSynthesis
+      const languages = yield* validateVoiceLanguages(
+        languageSettings,
+        provider.capabilities,
+        synthesis.capabilities,
+        conversation.replyLanguages
+      )
       const transport = yield* VoiceTransport
       const scope = yield* Effect.scope
       const sessions = new Map<string, { session: Session; join: Redacted.Redacted<VoiceJoin> }>()
@@ -81,6 +91,7 @@ export class Voice extends Context.Service<
         Effect.forEach(sessions.values(), (record) => end(record.session), { discard: true })
       )
       return Voice.of({
+        languages: () => Effect.succeed(languages),
         authorize: (id, token) =>
           get(id).pipe(
             Effect.flatMap((session) =>
@@ -120,7 +131,8 @@ export class Voice extends Context.Service<
               scope,
               admissions,
               request.startRequestId,
-              request.muted
+              request.muted,
+              languages.allowedLanguages
             )
             const startedAt = yield* Clock.currentTimeMillis
             session.joinDeadlineAt = startedAt + joinMillis
@@ -210,7 +222,8 @@ export class Voice extends Context.Service<
                         Effect.map((receipt) =>
                           receipt !== null &&
                           receipt.role === "user" &&
-                          speechPayloadHash(receipt.text) === checkpoint.payloadHash
+                          speechPayloadHash(receipt.text) === checkpoint.payloadHash &&
+                          speechAnnotationsHash(receipt.languageSpans) === checkpoint.languageSpansHash
                             ? { ...association, status: "Accepted" as const, receipt }
                             : {
                                 ...association,
@@ -271,5 +284,8 @@ export class Voice extends Context.Service<
         end: (id) => get(id).pipe(Effect.flatMap(end))
       })
     })
+  )
+  static readonly layer = Voice.configuredLayer.pipe(
+    Layer.provide(Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration))
   )
 }

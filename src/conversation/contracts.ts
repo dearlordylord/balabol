@@ -1,7 +1,12 @@
 import { Schema } from "effect"
+import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 import { DeliveryId, MessageText, Position, Receipt } from "../memory/index.ts"
 export { StorageUnavailable, WriterUnavailable } from "../memory/index.ts"
-export const SendMessage = Schema.Struct({ deliveryId: DeliveryId, text: MessageText })
+export const SendMessage = Schema.Struct({
+  deliveryId: DeliveryId,
+  text: MessageText,
+  languageSpans: Schema.optionalKey(LanguageSpans)
+}).check(Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans ?? [])))
 export type SendMessage = typeof SendMessage.Type
 export const Message = Receipt
 export type Message = typeof Message.Type
@@ -34,9 +39,11 @@ export const ErrorResponse = Schema.Struct({
 const maximumReplyLength = 100_000
 const responseFields = {
   responseId: DeliveryId,
+  responseLanguage: Schema.optionalKey(LanguageTag),
   inputDeliveryId: DeliveryId,
   sequence: Position,
-  text: Schema.String.check(Schema.isMaxLength(maximumReplyLength))
+  text: Schema.String.check(Schema.isMaxLength(maximumReplyLength)),
+  languageSpans: Schema.optionalKey(LanguageSpans)
 }
 export const ReplyError = Schema.Struct({
   code: Schema.Literals([
@@ -55,13 +62,15 @@ const validCompletion = (value: {
   responseId: string
   inputDeliveryId: string
   text: string
+  languageSpans?: typeof LanguageSpans.Type
 }) =>
   value.receipt !== null &&
   value.receipt.role === "assistant" &&
   value.receipt.responseId === value.responseId &&
   value.receipt.deliveryId === value.responseId &&
   value.receipt.inputDeliveryId === value.inputDeliveryId &&
-  value.receipt.text === value.text
+  value.receipt.text === value.text &&
+  JSON.stringify(value.receipt.languageSpans) === JSON.stringify(value.languageSpans ?? [])
 export const Reply = Schema.Union([
   Schema.Struct({
     ...responseFields,
@@ -77,6 +86,7 @@ export const Reply = Schema.Union([
   }),
   Schema.Struct({ ...responseFields, state: Schema.Literal("Failed"), error: ReplyError, receipt: Schema.Null })
 ]).check(
+  Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans ?? [])),
   Schema.makeFilter((value) => {
     if (value.responseId === value.inputDeliveryId) return false
     if (value.state === "Waiting") return value.text.length === 0

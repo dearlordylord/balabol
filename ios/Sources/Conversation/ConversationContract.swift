@@ -20,11 +20,12 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   public let recordId: Int
   public let position: Int
   public let text: String
+  public let languageSpans: [LanguageSpan]
   public var id: UUID { deliveryId }
   public var isValid: Bool {
     guard
       recordId >= 0 && position >= 0 && (!text.isEmpty || outcome == .interrupted)
-        && text.utf16.count <= 100_000
+        && text.utf16.count <= 100_000 && LanguageSpan.areValid(languageSpans, for: text)
     else {
       return false
     }
@@ -37,7 +38,8 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   }
   public init(
     deliveryId: UUID, recordId: Int, position: Int, text: String, role: Role = .user,
-    responseId: UUID? = nil, inputDeliveryId: UUID? = nil, outcome: Outcome? = nil
+    responseId: UUID? = nil, inputDeliveryId: UUID? = nil, outcome: Outcome? = nil,
+    languageSpans: [LanguageSpan] = []
   ) {
     self.role = role
     self.outcome = role == .assistant ? outcome ?? .completed : outcome
@@ -47,9 +49,11 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
     self.recordId = recordId
     self.position = position
     self.text = text
+    self.languageSpans = languageSpans
   }
   private enum CodingKeys: String, CodingKey {
-    case deliveryId, recordId, position, text, role, responseId, inputDeliveryId, outcome
+    case deliveryId, recordId, position, text, role, responseId, inputDeliveryId, outcome,
+      languageSpans
   }
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -64,6 +68,9 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
     recordId = try container.decode(Int.self, forKey: .recordId)
     position = try container.decode(Int.self, forKey: .position)
     text = try container.decode(String.self, forKey: .text)
+    languageSpans =
+      container.contains(.languageSpans)
+      ? try container.decode([LanguageSpan].self, forKey: .languageSpans) : []
     guard isValid else { throw ConversationFailure.invalidResponse }
   }
 }

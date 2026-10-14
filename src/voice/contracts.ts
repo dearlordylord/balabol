@@ -1,6 +1,7 @@
 import { Context, Schema, SchemaGetter } from "effect"
 import type { SynthesisAudio } from "../speech-synthesis/index.ts"
 import type { Effect } from "effect"
+import { LanguageSpans, validLanguageSpans } from "../language/index.ts"
 import { Message } from "../conversation/index.ts"
 const maximumTrackSid = 128
 const outputSampleRate = 24000
@@ -83,8 +84,13 @@ export const VoiceEvent = Schema.Union([
     kind: Schema.Literal("Final"),
     backendIncarnationId: Id,
     deliveryId: Id,
-    text: Schema.String
-  }).check(Schema.makeFilter((event) => event.deliveryId === event.utteranceId)),
+    text: Schema.String,
+    languageSpans: LanguageSpans
+  }).check(
+    Schema.makeFilter(
+      (event) => event.deliveryId === event.utteranceId && validLanguageSpans(event.text, event.languageSpans)
+    )
+  ),
   Schema.Struct({ ...utterance, kind: Schema.Literal("Accepted"), receipt: Message }).check(
     Schema.makeFilter((event) => event.receipt.deliveryId === event.utteranceId && event.receipt.role === "user")
   ),
@@ -102,6 +108,7 @@ export const VoiceEvent = Schema.Union([
 export type VoiceEvent = typeof VoiceEvent.Type
 export const PendingVoiceInput = Schema.Struct({
   backendIncarnationId: Id,
+  languageSpans: LanguageSpans,
   utteranceId: Id,
   deliveryId: Id,
   text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumText)),
@@ -111,9 +118,11 @@ export const PendingVoiceInput = Schema.Struct({
   Schema.makeFilter(
     (input) =>
       input.utteranceId === input.deliveryId &&
+      validLanguageSpans(input.text, input.languageSpans) &&
       (input.receipt === null ||
         (input.receipt.deliveryId === input.deliveryId &&
           input.receipt.text === input.text &&
+          JSON.stringify(input.receipt.languageSpans) === JSON.stringify(input.languageSpans) &&
           input.receipt.role === "user"))
   )
 )

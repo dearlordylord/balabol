@@ -72,7 +72,7 @@ it.effect("rejects unsupported languages and invalid phrase identities or length
   Effect.gen(function* () {
     const synthesis = yield* SpeechSynthesis
     for (const invalid of [
-      { ...request, language: "ja" },
+      { ...request, language: "de" },
       { ...request, text: "" },
       { ...request, text: "a".repeat(801) },
       { ...request, responseId: "invalid" }

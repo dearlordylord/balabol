@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { describe, expect, it } from "vitest"
 import { Voice } from "../src/voice/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
-import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
+import { SpeechRecognition, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
 import { replyLayer } from "./reply-fixture.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
@@ -156,5 +156,87 @@ it("reports deterministic recognition failures without saving an input", () =>
     fakeRecognitionLayer({
       languages: ["ru", "fr", "en"],
       scripts: [{ events: [], delayMillis: 0, failure: "Fixture failure" }]
+    })
+  ))
+
+it("ignores isolated transients before admitting sustained speech without consuming recognition", () => {
+  const received: { samples: number; prefix: number[] }[] = []
+  const provider = Layer.effect(
+    SpeechRecognition,
+    Effect.gen(function* () {
+      const base = yield* SpeechRecognition
+      return SpeechRecognition.of({
+        ...base,
+        recognize: (request) => {
+          const data = new DataView(
+            request.audio.bytes.buffer,
+            request.audio.bytes.byteOffset,
+            request.audio.bytes.byteLength
+          )
+          received.push({
+            samples: request.audio.sampleFrames,
+            prefix: [0, 320, 640].map((index) => data.getInt16(index * 2, true))
+          })
+          return base.recognize(request)
+        }
+      })
+    })
+  ).pipe(Layer.provide(script("Bonjour")))
+  return runVoice(
+    (fixture) =>
+      Effect.gen(function* () {
+        const voice = yield* Voice
+        const conversation = yield* Conversation
+        const joined = yield* voice.start(startVoiceRequest())
+        yield* fixture.send(fixture.audio(1200))
+        for (let frame = 0; frame < 20; frame++) yield* fixture.send(fixture.audio(0))
+        for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200))
+        yield* fixture.send(fixture.audio(0))
+        yield* fixture.send(fixture.audio(1200))
+        for (let frame = 0; frame < 20; frame++) yield* fixture.send(fixture.audio(0))
+        yield* settle
+        expect((yield* voice.snapshot(joined.sessionId, 0)).events).toEqual([])
+        expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
+        expect(received).toEqual([])
+        for (const sample of [1200, 1300, 1400]) yield* fixture.send(fixture.audio(sample))
+        for (let frame = 0; frame < 20; frame++) yield* fixture.send(fixture.audio(0))
+        yield* settle
+        const snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        const accepted = snapshot.events.filter((event) => event.kind === "Accepted")
+        expect(received).toEqual([{ samples: 7360, prefix: [1200, 1300, 1400] }])
+        expect(accepted).toHaveLength(1)
+        expect(accepted[0]?.receipt.text).toBe("Bonjour")
+        expect((yield* conversation.page({ limit: 100 })).messages[0]).toEqual(accepted[0]?.receipt)
+      }),
+    provider
+  )
+})
+
+it("clears tentative onset when microphone tracks, mute state or sessions change", () =>
+  runVoice((fixture) =>
+    Effect.gen(function* () {
+      const voice = yield* Voice
+      const conversation = yield* Conversation
+      const first = yield* voice.start(startVoiceRequest())
+      for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200))
+      yield* voice.mute(first.sessionId, true)
+      yield* voice.mute(first.sessionId, false)
+      yield* fixture.send(fixture.audio(1200))
+      for (let frame = 0; frame < 20; frame++) yield* fixture.send(fixture.audio(0))
+      for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200))
+      yield* fixture.send(fixture.audio(1200), "replacement")
+      for (let frame = 0; frame < 20; frame++) yield* fixture.send(fixture.audio(0), "replacement")
+      for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200), "replacement")
+      yield* voice.end(first.sessionId)
+      const second = yield* voice.start(startVoiceRequest())
+      yield* fixture.send(fixture.audio(1200))
+      for (let frame = 0; frame < 20; frame++) yield* fixture.send(fixture.audio(0))
+      yield* settle
+      expect((yield* voice.snapshot(first.sessionId, 0)).pending).toEqual([])
+      expect((yield* voice.snapshot(second.sessionId, 0)).events).toEqual([])
+      expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
+      yield* fixture.segment
+      yield* settle
+      expect((yield* voice.snapshot(second.sessionId, 0)).events.some((event) => event.kind === "Accepted")).toBe(true)
     })
   ))

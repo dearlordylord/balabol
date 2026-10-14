@@ -9,6 +9,8 @@ const answerRequest: AnswerRequest = {
   model: "sol",
   prior: "<chat>\n</chat>",
   input: "bonjour",
+  inputLanguageSpans: [{ language: "fr", start: 0, end: 7 }],
+  responseLanguage: "fr",
   capabilities: ["memory.context"]
 }
 
@@ -21,7 +23,7 @@ it.effect("emits bounded ordered deltas and exactly one terminal using the confi
     expect(events.at(-1)).toEqual({ kind: "Completed" })
     expect(events.filter((event) => event.kind === "Completed")).toHaveLength(1)
     expect(events.flatMap((event) => (event.kind === "Delta" ? [event.text] : [])).join("")).toBe(
-      "[Fake sol] bonjour\nPrior memory: (empty)"
+      "Ceci est une réponse fictive."
     )
   }).pipe(Effect.provide(fakeAnswerLayer(10)))
 )

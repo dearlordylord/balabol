@@ -10,6 +10,7 @@ import Observation
 @MainActor @Observable public final class VoiceViewModel {
   public private(set) var state = VoiceState()
   public private(set) var output = VoiceOutputState()
+  @ObservationIgnored private var languageTask: Task<Void, Never>?
   @ObservationIgnored private var outputTask: Task<Void, Never>?
   @ObservationIgnored private var interruptionTask: Task<Void, Never>?
   @ObservationIgnored private var outputRequest = UUID()
@@ -56,6 +57,10 @@ import Observation
     await restoreTask?.value
     if !state.checkpointLoaded { restoreTask = nil }
   }
+  public func loadLanguages() async {
+    receive(.loadLanguages)
+    await languageTask?.value
+  }
   public func start() { receive(.start) }
   public func end() {
     cutOutput()
@@ -68,6 +73,7 @@ import Observation
     cutOutput()
     receive(.shutdown)
     // Fence and quiesce every producer before draining the latest checkpoint.
+    await languageTask?.value
     await retryTask?.value
     await startTask?.value
     await muteTask?.value
@@ -91,6 +97,17 @@ import Observation
   }
   private func execute(_ command: VoiceCommand) {
     switch command {
+    case .refreshLanguages: receive(.loadLanguages)
+    case .loadLanguages(let request):
+      let control = control
+      languageTask = Task { [weak self] in
+        let result: Result<VoiceLanguages, VoiceFailure>
+        do { result = .success(try await control.languages()) } catch {
+          result = .failure(error as? VoiceFailure ?? .connection)
+        }
+        guard !Task.isCancelled else { return }
+        self?.receive(.languagesLoaded(request, result))
+      }
     case .begin(let generation):
       output = VoiceOutputState()
       interruptionTask?.cancel()
@@ -140,12 +157,10 @@ import Observation
               }
             },
             speechStarted: { [weak self] in
-              Task { @MainActor in
-                guard self?.state.generation == generation, self?.state.capture == .listening else {
-                  return
-                }
-                self?.speechStarted()
+              guard self?.state.generation == generation, self?.state.capture == .listening else {
+                return
               }
+              self?.speechStarted()
             },
             outputReceived: { [weak self] identity in
               Task { @MainActor in
@@ -255,6 +270,7 @@ import Observation
       }
     case .cancelRetry: retryTask?.cancel()
     case .cancelProducers:
+      languageTask?.cancel()
       retryTask?.cancel()
       startTask?.cancel()
       restoreTask?.cancel()
@@ -326,12 +342,7 @@ import Observation
     for command in output.transition(event) { executeOutput(command) }
   }
   private func cutOutput(nextInput: UUID? = nil) {
-    let pending = state.utterances.filter {
-      switch state.admissions[$0] {
-      case .saving, .checking: true
-      default: false
-      }
-    }
+    let pending = state.pendingAssociations.map(\.deliveryId)
     receiveOutput(.cut(nextInput: nextInput, pendingInputs: pending))
   }
   private func executeOutput(_ command: VoiceOutputCommand) {
