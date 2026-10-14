@@ -39,6 +39,11 @@ private struct ClientLocalState {
   }
 }
 
+@MainActor private final class VoiceInputIntentRelay {
+  weak var voice: VoiceViewModel?
+  func send(_ id: UUID) { voice?.inputIntent(id) }
+}
+
 @MainActor
 private struct ConversationRoot: View {
   @AppStorage private var configuredURL: String
@@ -106,6 +111,13 @@ private struct ConversationRoot: View {
       urlInput = configuredURL
       if !configuredURL.isEmpty {
         connect()
+      } else if localState.testNamespace == nil,
+        let bundledOrigin = Bundle.main.object(forInfoDictionaryKey: "BalabolDefaultControlURL")
+          as? String,
+        !bundledOrigin.isEmpty
+      {
+        urlInput = bundledOrigin
+        connect()
       } else {
         #if targetEnvironment(simulator)
           urlInput = "http://127.0.0.1:8787"
@@ -132,7 +144,10 @@ private struct ConversationRoot: View {
         for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
       let draftStore = FileDraftStore(
         url: localState.draftURL(in: directory))
-      let conversation = ConversationViewModel(transport: transport, draftStore: draftStore)
+      let inputRelay = VoiceInputIntentRelay()
+      let conversation = ConversationViewModel(
+        transport: transport, draftStore: draftStore,
+        inputIntent: { id in inputRelay.send(id) })
       let control = try HTTPVoiceControl(baseURL: url, session: candidate)
       voice = VoiceViewModel(
         control: control, media: LiveKitVoiceMedia(evidenceEnabled: localState.testNamespace != nil)
@@ -140,6 +155,7 @@ private struct ConversationRoot: View {
         [weak conversation] receipt in
         conversation?.acceptVoiceReceipt(receipt)
       }
+      inputRelay.voice = voice
       model = conversation
       session = candidate
       configuredURL = urlInput

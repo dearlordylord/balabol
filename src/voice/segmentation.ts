@@ -12,6 +12,9 @@ export class Segmenter {
     this.#frames = []
     this.#quiet = 0
   }
+  speechStarted(frame: VoiceFrame) {
+    return this.#frames.length === 0 && frame.data.some((sample) => Math.abs(sample) >= voiceThreshold)
+  }
   push(frame: VoiceFrame): Uint8Array | undefined {
     const voiced = frame.data.some((sample) => Math.abs(sample) >= voiceThreshold)
     if (!voiced && this.#frames.length === 0) return undefined

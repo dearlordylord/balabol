@@ -15,6 +15,7 @@ const snapshot = {
   sampleFramesReceived: 6720,
   events: [],
   nextAfter: 2,
+  output: null,
   pending: [pending]
 }
 it("validates canonical pending input identity and receipt payload at the snapshot edge", () => {

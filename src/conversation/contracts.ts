@@ -65,7 +65,7 @@ const validCompletion = (value: {
 export const Reply = Schema.Union([
   Schema.Struct({
     ...responseFields,
-    state: Schema.Literals(["Waiting", "Streaming"]),
+    state: Schema.Literals(["Waiting", "Streaming", "Delivering"]),
     error: Schema.Null,
     receipt: Schema.Null
   }),
@@ -80,7 +80,7 @@ export const Reply = Schema.Union([
   Schema.makeFilter((value) => {
     if (value.responseId === value.inputDeliveryId) return false
     if (value.state === "Waiting") return value.text.length === 0
-    if (value.state === "Streaming") return value.text.length > 0
+    if (["Streaming", "Delivering"].includes(value.state)) return value.text.length > 0
     if (value.state === "Failed") return true
     return (
       value.receipt !== null &&

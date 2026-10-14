@@ -14,6 +14,7 @@ public struct VoiceJoin: Codable, Sendable {
   public let sessionId: UUID
   public let roomName: String
   public let participantIdentity: String
+  public let backendParticipantIdentity: UUID
   public let mediaUrl: String
   public let token: String
   internal let controlToken: String
@@ -32,6 +33,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
   public let reason: String?
   public let code: String?
   public let message: String?
+  public let output: VoiceOutput?
   public var isValid: Bool {
     guard sequence > 0 else { return false }
     switch kind {
@@ -41,6 +43,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
       return utteranceId != nil && receipt?.isValid == true && receipt?.role == .user
         && receipt?.deliveryId == utteranceId
     case "Discarded": return utteranceId != nil && reason == "Empty"
+    case "Output": return output?.isValid(sessionId: sessionId) == true
     case "Muted": return muted != nil
     case "Ended": return true
     case "Error": return code?.isEmpty == false && message?.isEmpty == false
@@ -84,10 +87,12 @@ public struct VoiceSnapshot: Decodable, Sendable {
   public let audioFramesReceived: Int
   public let sampleFramesReceived: Int
   public let pending: [VoicePending]
+  public let output: VoiceOutput?
   internal init(
     sessionId: UUID, status: String, muted: Bool, sequence: Int,
     events: [VoiceWireEvent], nextAfter: Int?, firstSequence: Int? = nil,
-    audioFramesReceived: Int = 0, sampleFramesReceived: Int = 0, pending: [VoicePending] = []
+    audioFramesReceived: Int = 0, sampleFramesReceived: Int = 0, pending: [VoicePending] = [],
+    output: VoiceOutput? = nil
   ) {
     self.sessionId = sessionId
     self.status = status
@@ -99,6 +104,7 @@ public struct VoiceSnapshot: Decodable, Sendable {
     self.audioFramesReceived = audioFramesReceived
     self.sampleFramesReceived = sampleFramesReceived
     self.pending = pending
+    self.output = output
   }
 }
 
@@ -107,11 +113,18 @@ public protocol VoiceControl: Sendable {
   func snapshot(sessionId: UUID, after: Int) async throws -> VoiceSnapshot
   func mute(sessionId: UUID, muted: Bool) async throws
   func end(sessionId: UUID) async throws
+  func ready(sessionId: UUID, manifest: VoiceAudioManifest) async throws -> VoiceSnapshot
+  func interrupt(sessionId: UUID, target: VoiceOutputIdentity) async throws -> VoiceSnapshot
 }
 
 @MainActor public protocol VoiceMedia: AnyObject {
   func requestPermission() async -> Bool
-  func connect(_ join: VoiceJoin, failure: @escaping @Sendable () -> Void) async throws
+  func connect(
+    _ join: VoiceJoin, failure: @escaping @Sendable () -> Void,
+    speechStarted: @escaping @Sendable () -> Void,
+    outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void) async throws
   func mute(_ muted: Bool) async throws
   func disconnect() async
+  func prepareOutput(_ manifest: VoiceAudioManifest) async throws
+  func stopOutput() -> Task<Void, Never>
 }

@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect"
 import { expect, it } from "vitest"
 import { Voice } from "../src/voice/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
+import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { decoratedConversation, temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
@@ -24,7 +25,9 @@ it("reconciles a durable final after uncertain storage acknowledgement and sessi
     languages: ["ru", "fr", "en"],
     scripts: [{ events: [{ kind: "Final", text: "Durable speech", spans: [] }], delayMillis: 0, failure: null }]
   })
-  const voice = Voice.layer.pipe(Layer.provide(Layer.mergeAll(conversation, transport.layer, provider)))
+  const voice = Voice.layer.pipe(
+    Layer.provide(Layer.mergeAll(conversation, transport.layer, provider, fakeSynthesisLayer()))
+  )
   try {
     await Effect.runPromise(
       Effect.scoped(
@@ -36,7 +39,12 @@ it("reconciles a durable final after uncertain storage acknowledgement and sessi
           yield* Effect.sleep(50)
           yield* sessions.end(join.sessionId)
           const snapshot = yield* sessions.snapshot(join.sessionId, 0)
-          expect(snapshot.events.map((event) => event.kind)).toEqual(["Final", "Error", "Ended", "Accepted"])
+          expect(snapshot.events.filter((event) => event.kind !== "Output").map((event) => event.kind)).toEqual([
+            "Final",
+            "Error",
+            "Ended",
+            "Accepted"
+          ])
           expect(snapshot.events.find((event) => event.kind === "Error")?.code).toBe("StorageUnavailable")
           const accepted = snapshot.events.find((event) => event.kind === "Accepted")
           expect(accepted?.receipt.text).toBe("Durable speech")

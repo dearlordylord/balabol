@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect"
 import { describe, expect, it } from "vitest"
 import { Voice } from "../src/voice/index.ts"
+import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
 import { conversationLayer } from "../src/bootstrap/index.ts"
@@ -27,7 +28,9 @@ const runVoice = async (
   const database = await temporaryDatabase()
   const fixture = voiceTransportFixture()
   const conversation = conversationLayer(database.path)
-  const voice = Voice.layer.pipe(Layer.provide(Layer.mergeAll(conversation, fixture.layer, provider)))
+  const voice = Voice.layer.pipe(
+    Layer.provide(Layer.mergeAll(conversation, fixture.layer, provider, fakeSynthesisLayer()))
+  )
   try {
     await Effect.runPromise(Effect.scoped(program(fixture)).pipe(Effect.provide(Layer.merge(voice, conversation))))
   } finally {
@@ -48,7 +51,11 @@ describe("voice input uses the sole durable conversation", () => {
         yield* fixture.segment
         yield* settle
         const snapshot = yield* voice.snapshot(joined.sessionId, 0)
-        expect(snapshot.events.map((event) => event.kind)).toEqual(["Interim", "Final", "Accepted"])
+        expect(snapshot.events.filter((event) => event.kind !== "Output").map((event) => event.kind)).toEqual([
+          "Interim",
+          "Final",
+          "Accepted"
+        ])
         const messages = (yield* conversation.page({ limit: 100 })).messages
         expect(messages[0]?.text).toBe("Bonjour")
         expect(snapshot.events.find((event) => event.kind === "Accepted")?.receipt).toEqual(messages[0])

@@ -4,6 +4,41 @@ import XCTest
 
 @MainActor
 final class ReplyProjectionTests: XCTestCase {
+  func testDeliveringKeepsGeneratedTextPendingUntilDurableInterruptedReceipt() async throws {
+    let transport = ControlledReplyTransport()
+    let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
+    await model.start()
+    model.editDraft("Audio input")
+    await model.send()
+    await transport.waitForObservation()
+    let input = try XCTUnwrap(model.messages.first?.deliveryId)
+    let response = UUID()
+    await transport.emit(
+      ReplySnapshot(
+        responseId: response, inputDeliveryId: input, sequence: 2,
+        state: .delivering, text: "Generated but not all heard"))
+    for _ in 0..<1000 {
+      if model.replyText == "Generated but not all heard" { break }
+      await Task.yield()
+    }
+    XCTAssertTrue(model.isObservingReply)
+    XCTAssertEqual(model.messages.map(\.role), [.user])
+    let receipt = ConversationMessage(
+      deliveryId: response, recordId: 8, position: 1,
+      text: "Generated but not all heard", role: .assistant, responseId: response,
+      inputDeliveryId: input, outcome: .interrupted)
+    await transport.emit(
+      ReplySnapshot(
+        responseId: response, inputDeliveryId: input, sequence: 3,
+        state: .interrupted, text: receipt.text, receipt: receipt))
+    for _ in 0..<1000 {
+      if model.messages.count == 2 { break }
+      await Task.yield()
+    }
+    XCTAssertEqual(model.messages.last, receipt)
+    XCTAssertFalse(model.isObservingReply)
+  }
+
   func testProgressiveReplyBecomesHistoryOnlyAfterDurableCompletion() async throws {
     let transport = ControlledReplyTransport()
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())

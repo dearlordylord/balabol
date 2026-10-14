@@ -1,5 +1,5 @@
+import { liveKitFixturePath, liveKitSettings } from "./livekit-settings.ts"
 import { RoomServiceClient } from "livekit-server-sdk"
-import { readFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import {
   AudioFrame,
@@ -13,22 +13,6 @@ import {
 import { Effect, Redacted, Schema, Clock, Fiber, Exit } from "effect"
 import { describe, expect, it } from "vitest"
 import { VoiceTransport, liveKitLayer, VoiceFrame, VoiceEvent } from "../src/voice/index.ts"
-import type { LiveKitSettings } from "../src/voice/index.ts"
-const fixturePath = process.env.BALABOL_LIVEKIT_TEST_ENV
-const settings = async (): Promise<LiveKitSettings> => {
-  const values = new Map(
-    (await readFile(fixturePath ?? "", "utf8")).split("\n").map((line) => {
-      const at = line.indexOf("=")
-      return [line.slice(0, at), line.slice(at + 1)]
-    })
-  )
-  return {
-    url: values.get("BALABOL_LIVEKIT_URL") ?? "",
-    mediaUrl: values.get("BALABOL_LIVEKIT_MEDIA_URL") ?? "",
-    apiKey: values.get("BALABOL_LIVEKIT_API_KEY") ?? "",
-    apiSecret: Redacted.make(values.get("BALABOL_LIVEKIT_API_SECRET") ?? "")
-  }
-}
 const io = <A>(operation: () => Promise<A>) => Effect.promise(operation)
 const sourceRate = 16000
 const frameSamples = 320
@@ -39,11 +23,11 @@ const waveformFrequency = 440
 const waveformAmplitude = 1200
 const audioQueueMillis = 100
 const tooLarge = 20000
-describe.skipIf(fixturePath === undefined)(
+describe.skipIf(liveKitFixturePath === undefined)(
   "real LiveKit adapter contract (synthetic audio, not microphone evidence)",
   () => {
     it("issues constrained joins, receives microphone PCM and closes/replaces tracks", async () => {
-      const config = await settings()
+      const config = await liveKitSettings()
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
@@ -146,7 +130,7 @@ describe.skipIf(fixturePath === undefined)(
       )
     }, 20000)
     it("releases acquired rooms after post-connect failure and cancellation", async () => {
-      const config = await settings()
+      const config = await liveKitSettings()
       const admin = new RoomServiceClient(
         config.url.replace(/^ws/u, "http"),
         config.apiKey,

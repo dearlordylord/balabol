@@ -18,6 +18,7 @@ import { configuredUniiLayer, sqliteLayer, MemorySettings, defaultMemorySettings
 import { fakeAnswerLayer } from "../answer-generation/index.ts"
 import { FakeSummarySettings, configurableFakeSummaryLayer } from "../summary-generation/index.ts"
 import { fakeRecognitionLayer } from "../speech-recognition/index.ts"
+import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
 import { LiveKitSettings, liveKitLayer, Voice, voiceRoutes } from "../voice/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
 export const conversationLayer = (
@@ -40,6 +41,8 @@ export const conversationLayer = (
   )
 const maximumPort = 65_535
 const maximumOwnerIdentityLength = 254
+// Four seconds of fixture audio makes interruption observable without inference.
+const fixtureSynthesisFrames = 96_000
 export const ServerConfig = Schema.Struct({
   host: Schema.String.check(Schema.isMinLength(1)),
   port: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(maximumPort)),
@@ -112,6 +115,7 @@ export const serverLayer = (config: ServerConfig) => {
   const routes = Layer.mergeAll(conversationRoutes, welcomeRoutes, voiceRoutes)
   const application = Voice.layer.pipe(
     Layer.provide(fakeRecognitionLayer()),
+    Layer.provide(fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })),
     Layer.provide(liveKitLayer(config.voice)),
     Layer.provideMerge(conversation)
   )

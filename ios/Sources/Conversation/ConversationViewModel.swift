@@ -9,6 +9,7 @@ public final class ConversationViewModel {
   public private(set) var state = ConversationState()
   @ObservationIgnored private let transport: any ConversationTransport
   @ObservationIgnored private let draftStore: any DraftStore
+  @ObservationIgnored private let inputIntent: @MainActor (UUID) -> Void
   @ObservationIgnored private var draftTask: Task<Void, Never>?
   @ObservationIgnored private var deliveryTask: Task<Void, Never>?
   @ObservationIgnored private var interruptionReceiptTasks:
@@ -22,9 +23,13 @@ public final class ConversationViewModel {
   @ObservationIgnored private var deliveryRequest: ConversationState.Request?
   @ObservationIgnored private var historyRequest: ConversationState.Request?
 
-  public init(transport: any ConversationTransport, draftStore: any DraftStore) {
+  public init(
+    transport: any ConversationTransport, draftStore: any DraftStore,
+    inputIntent: @escaping @MainActor (UUID) -> Void = { _ in }
+  ) {
     self.transport = transport
     self.draftStore = draftStore
+    self.inputIntent = inputIntent
   }
 
   public var canRetryReply: Bool { state.canRetryReply }
@@ -115,6 +120,7 @@ public final class ConversationViewModel {
 
   private func execute(_ command: ConversationCommand) {
     switch command {
+    case .inputIntent(let id): inputIntent(id)
     case .current(let request):
       let transport = transport
       currentRequest = request

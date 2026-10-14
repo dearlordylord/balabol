@@ -9,6 +9,7 @@ public struct ReplyFailure: Codable, Equatable, Sendable {
     case storageUnavailable = "StorageUnavailable"
     case restarted = "Restarted"
     case cancelled = "Cancelled"
+    case audioUnavailable = "AudioUnavailable"
   }
   public let code: Code
   public let message: String
@@ -24,6 +25,7 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
   public enum Phase: String, Codable, Sendable {
     case waiting = "Waiting"
     case streaming = "Streaming"
+    case delivering = "Delivering"
     case completed = "Completed"
     case interrupted = "Interrupted"
     case failed = "Failed"
@@ -42,7 +44,7 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     }
     switch state {
     case .waiting: return text.isEmpty && error == nil && receipt == nil
-    case .streaming: return !text.isEmpty && error == nil && receipt == nil
+    case .streaming, .delivering: return !text.isEmpty && error == nil && receipt == nil
     case .failed: return error.map { !$0.code.rawValue.isEmpty } == true && receipt == nil
     case .completed, .interrupted:
       return error == nil

@@ -1,5 +1,5 @@
 #if os(iOS)
-  import AVFoundation
+  @preconcurrency import AVFoundation
   import LiveKit
   import Foundation
   import os
@@ -10,6 +10,23 @@
     private var room: Room?
     private var delegate: VoiceRoomDelegate?
     private var generation = 0
+    private var publisher: UUID?
+    private var wanted: VoiceAudioManifest?
+    private var outputTrack: RemoteAudioTrack?
+    private var playbackRenderer: VoicePlaybackRenderer?
+    private var outputReceived: (@Sendable (VoiceOutputIdentity) -> Void)?
+    private var outputPublication: RemoteTrackPublication?
+    private var microphone: LocalAudioTrack?
+    private var renderer: VoiceSpeechRenderer?
+    private var speechTask: Task<Void, Never>?
+    #if DEBUG
+      private var captureEvidenceTask: Task<Void, Never>?
+    #endif
+    private var suppressionTask: Task<Void, Never>?
+    private var rejectedTrackTask: Task<Void, Never>?
+    #if DEBUG
+      private var remainingStopEvidence = 8
+    #endif
     private let evidenceEnabled: Bool
     private var evidenceTask: Task<Void, Never>?
     public init(evidenceEnabled: Bool = false) {
@@ -27,16 +44,29 @@
       default: return false
       }
     }
-    public func connect(_ join: VoiceJoin, failure: @escaping @Sendable () -> Void) async throws {
+    public func connect(
+      _ join: VoiceJoin, failure: @escaping @Sendable () -> Void,
+      speechStarted: @escaping @Sendable () -> Void,
+      outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
+    ) async throws {
       generation += 1
       let expected = generation
-      let callback = VoiceRoomDelegate { [weak self] in
-        Task { @MainActor in
-          guard self?.generation == expected else { return }
-          failure()
-        }
-      }
-      let candidate = Room(delegate: callback)
+      publisher = join.backendParticipantIdentity
+      self.outputReceived = outputReceived
+      let callback = VoiceRoomDelegate(
+        failure: { [weak self] in
+          Task { @MainActor in
+            guard self?.generation == expected else { return }
+            failure()
+          }
+        },
+        publication: { [weak self] participant, publication in
+          Task { @MainActor in
+            guard self?.generation == expected else { return }
+            self?.received(participant, publication: publication)
+          }
+        })
+      let candidate = Room(delegate: callback, connectOptions: ConnectOptions(autoSubscribe: false))
       room = candidate
       delegate = callback
       do {
@@ -49,6 +79,44 @@
           guard let publication = try await candidate.localParticipant.setMicrophone(enabled: true),
             publication.track != nil, !publication.isMuted
           else { throw VoiceFailure.capture }
+          if let track = publication.track as? LocalAudioTrack {
+            microphone = track
+            let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let renderer: VoiceSpeechRenderer
+            #if DEBUG
+              if evidenceEnabled {
+                let evidence = AsyncStream<VoiceCaptureEvidence>.makeStream(
+                  bufferingPolicy: .bufferingNewest(1))
+                captureEvidenceTask?.cancel()
+                captureEvidenceTask = Task { [weak self] in
+                  let logger = os.Logger(
+                    subsystem: "app.balabol.voice.evidence", category: "capture")
+                  logger.notice("capture renderer attached")
+                  for await value in evidence.stream {
+                    guard !Task.isCancelled, self?.generation == expected else { return }
+                    logger.notice(
+                      "capture callbacks=\(value.callbacks, privacy: .public) frames=\(value.frames, privacy: .public) sampleRate=\(value.sampleRate, privacy: .public) format=\(value.format, privacy: .public) channels=\(value.channels, privacy: .public) interleaved=\(value.interleaved, privacy: .public) readable=\(value.readable, privacy: .public) peak=\(value.peak, privacy: .public) voiced=\(value.voiced, privacy: .public) onset=\(value.onset, privacy: .public)"
+                    )
+                  }
+                }
+                renderer = VoiceSpeechRenderer(
+                  started: { stream.continuation.yield(()) },
+                  diagnostic: { evidence.continuation.yield($0) })
+              } else {
+                renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
+              }
+            #else
+              renderer = VoiceSpeechRenderer { stream.continuation.yield(()) }
+            #endif
+            self.renderer = renderer
+            track.add(audioRenderer: renderer)
+            speechTask = Task { [weak self] in
+              for await _ in stream.stream {
+                guard !Task.isCancelled, self?.generation == expected else { return }
+                speechStarted()
+              }
+            }
+          }
           if evidenceEnabled, let track = publication.track {
             startEvidence(track, generation: expected)
           }
@@ -81,6 +149,17 @@
       }
     }
     public func disconnect() async {
+      let stopped = stopOutput()
+      speechTask?.cancel()
+      speechTask = nil
+      #if DEBUG
+        let captureEvidence = captureEvidenceTask
+        captureEvidenceTask?.cancel()
+        captureEvidenceTask = nil
+      #endif
+      if let microphone, let renderer { microphone.remove(audioRenderer: renderer) }
+      microphone = nil
+      renderer = nil
       generation += 1
       let task = evidenceTask
       evidenceTask?.cancel()
@@ -93,6 +172,113 @@
         await candidate.disconnect()
       }
       await task?.value
+      await stopped.value
+      #if DEBUG
+        await captureEvidence?.value
+      #endif
+      await rejectedTrackTask?.value
+      rejectedTrackTask = nil
+    }
+    public func prepareOutput(_ manifest: VoiceAudioManifest) async throws {
+      guard !Task.isCancelled, manifest.isValid, manifest.publisherIdentity == publisher,
+        room != nil
+      else { throw VoiceFailure.invalidResponse }
+      let expected = generation
+      wanted = manifest
+      for _ in 0..<200 {
+        guard !Task.isCancelled, expected == generation, wanted == manifest,
+          let room
+        else { throw CancellationError() }
+        if let participant = room.remoteParticipants.values.first(where: {
+          $0.identity.flatMap { UUID(uuidString: $0.stringValue) } == manifest.publisherIdentity
+        }),
+          let publication = participant.trackPublications.values.first(where: {
+            $0.sid.stringValue == manifest.trackSid && $0.kind == .audio
+          }) as? RemoteTrackPublication
+        {
+          if outputPublication !== publication {
+            outputPublication = publication
+            try await publication.set(subscribed: true)
+          }
+          if let track = publication.track as? RemoteAudioTrack, track.trackState == .started {
+            guard wanted == manifest,
+              expected == generation, !Task.isCancelled
+            else {
+              try? await track.stop()
+              try? await publication.set(subscribed: false)
+              throw CancellationError()
+            }
+            if outputTrack !== track {
+              let callback = outputReceived
+              let renderer = VoicePlaybackRenderer(evidenceEnabled: evidenceEnabled) {
+                callback?(manifest.identity)
+              }
+              playbackRenderer = renderer
+              track.add(audioRenderer: renderer)
+            }
+            outputTrack = track
+            return
+          }
+        }
+        try await Task.sleep(for: .milliseconds(50))
+      }
+      throw VoiceFailure.connection
+    }
+    public func stopOutput() -> Task<Void, Never> {
+      #if DEBUG
+        let manifest = wanted
+      #endif
+      wanted = nil
+      let track = outputTrack
+      let publication = outputPublication
+      #if DEBUG
+        let recordStop = evidenceEnabled && track != nil && remainingStopEvidence > 0
+        if recordStop { remainingStopEvidence -= 1 }
+      #endif
+      if let track, let playbackRenderer { track.remove(audioRenderer: playbackRenderer) }
+      playbackRenderer = nil
+      outputTrack = nil
+      outputPublication = nil
+      if track == nil, publication == nil, let suppressionTask { return suppressionTask }
+      let task = Task {
+        // Stop on the SDK RTC executor before control interruption is sent.
+        if let track {
+          do {
+            try await track.stop()
+            #if DEBUG
+              if recordStop, let manifest, track.trackState == .stopped {
+                let logger = os.Logger(
+                  subsystem: "app.balabol.voice.evidence", category: "playback")
+                logger.notice(
+                  "local SDK stop response=\(manifest.responseId.uuidString, privacy: .public) epoch=\(manifest.outputEpoch.uuidString, privacy: .public) sid=\(manifest.trackSid, privacy: .public) trackState=stopped"
+                )
+              }
+            #endif
+          } catch {
+            // Session disconnect remains the cleanup owner if the SDK stop fails.
+          }
+        }
+        if let publication { try? await publication.set(subscribed: false) }
+      }
+      suppressionTask = task
+      return task
+    }
+    private func received(_ participant: RemoteParticipant, publication: RemoteTrackPublication) {
+      let sid = publication.sid.stringValue
+      let trusted = participant.identity.flatMap { UUID(uuidString: $0.stringValue) } == publisher
+      guard trusted, publication.kind == .audio, wanted?.trackSid == sid else {
+        if let track = publication.track as? RemoteAudioTrack {
+          let previous = rejectedTrackTask
+          previous?.cancel()
+          rejectedTrackTask = Task {
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            try? await track.stop()
+            try? await publication.set(subscribed: false)
+          }
+        }
+        return
+      }
     }
     private func startEvidence(_ track: Track, generation expected: Int) {
       #if DEBUG
@@ -112,11 +298,169 @@
 
   }
 
+  private final class VoicePlaybackRenderer: AudioRenderer {
+    private let reported = OSAllocatedUnfairLock(initialState: false)
+    private let received: @Sendable () -> Void
+    private let evidenceEnabled: Bool
+    init(evidenceEnabled: Bool, received: @escaping @Sendable () -> Void) {
+      self.evidenceEnabled = evidenceEnabled
+      self.received = received
+    }
+    func render(pcmBuffer: AVAudioPCMBuffer) {
+      let count = min(Int(pcmBuffer.frameLength), 2048)
+      guard count > 0 else { return }
+      var nonzero = false
+      if let data = pcmBuffer.floatChannelData?[0] {
+        nonzero = (0..<count).contains { abs(data[$0]) > 0.0001 }
+      } else if let data = pcmBuffer.int16ChannelData?[0] {
+        nonzero = (0..<count).contains { data[$0] != 0 }
+      }
+      guard nonzero else { return }
+      let first = reported.withLock { value in
+        if value { return false }
+        value = true
+        return true
+      }
+      guard first else { return }
+      received()
+      #if DEBUG
+        if evidenceEnabled {
+          let logger = os.Logger(subsystem: "app.balabol.voice.evidence", category: "playback")
+          logger.notice("remote fixture audio received nonzero samples=\(count, privacy: .public)")
+        }
+      #endif
+    }
+  }
+
+  #if DEBUG
+    private struct VoiceCaptureEvidence: Sendable {
+      let callbacks: Int
+      let frames: Int
+      let sampleRate: Double
+      let format: UInt
+      let channels: UInt32
+      let interleaved: Bool
+      let readable: Bool
+      let peak: Float
+      let voiced: Bool
+      let onset: Bool
+    }
+  #endif
+
+  /// The render callback reads bounded energy only. It never transfers PCM,
+  /// performs network work, or changes track volume on the realtime callback.
+  private final class VoiceSpeechRenderer: AudioRenderer {
+    private struct State {
+      var speaking = false
+      var quiet = 0
+      #if DEBUG
+        var callbacks = 0
+        var frames = 0
+        var peak: Float = 0
+        var voiced = false
+        var onset = false
+        var reports = 0
+      #endif
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let started: @Sendable () -> Void
+    #if DEBUG
+      private let diagnostic: (@Sendable (VoiceCaptureEvidence) -> Void)?
+      init(
+        started: @escaping @Sendable () -> Void,
+        diagnostic: @escaping @Sendable (VoiceCaptureEvidence) -> Void
+      ) {
+        self.started = started
+        self.diagnostic = diagnostic
+      }
+    #endif
+    init(started: @escaping @Sendable () -> Void) {
+      self.started = started
+      #if DEBUG
+        diagnostic = nil
+      #endif
+    }
+    func render(pcmBuffer: AVAudioPCMBuffer) {
+      let count = min(Int(pcmBuffer.frameLength), 2048)
+      guard count > 0 else { return }
+      var peak: Float = 0
+      if let data = pcmBuffer.floatChannelData?[0] {
+        for i in 0..<count { peak = max(peak, abs(data[i])) }
+      } else if let data = pcmBuffer.int16ChannelData?[0] {
+        for i in 0..<count { peak = max(peak, abs(Float(data[i])) / 32768) }
+      }
+      let energy = peak
+      let onset = state.withLock { value in
+        if energy >= 0.025 {
+          value.quiet = 0
+          if !value.speaking {
+            value.speaking = true
+            return true
+          }
+        } else {
+          value.quiet += 1
+          if value.quiet >= 20 { value.speaking = false }
+        }
+        return false
+      }
+      if onset { started() }
+      #if DEBUG
+        if let diagnostic {
+          let frames = Int(pcmBuffer.frameLength)
+          let sampleRate = pcmBuffer.format.sampleRate
+          let format = pcmBuffer.format.commonFormat.rawValue
+          let channels = pcmBuffer.format.channelCount
+          let interleaved = pcmBuffer.format.isInterleaved
+          let readable = pcmBuffer.floatChannelData != nil || pcmBuffer.int16ChannelData != nil
+          let report = state.withLock { value -> VoiceCaptureEvidence? in
+            guard value.reports < 8 else { return nil }
+            value.callbacks += 1
+            value.frames += frames
+            value.peak = max(value.peak, energy)
+            value.voiced = value.voiced || energy >= 0.025
+            value.onset = value.onset || onset
+            guard value.callbacks == 1 || Double(value.frames) >= sampleRate * 2 else { return nil }
+            value.reports += 1
+            let report = VoiceCaptureEvidence(
+              callbacks: value.callbacks, frames: value.frames,
+              sampleRate: sampleRate, format: format, channels: channels, interleaved: interleaved,
+              readable: readable, peak: value.peak, voiced: value.voiced, onset: value.onset)
+            value.frames = 0
+            value.peak = 0
+            value.voiced = false
+            value.onset = false
+            return report
+          }
+          if let report { diagnostic(report) }
+        }
+      #endif
+    }
+  }
+
   /// SDK delegates are Sendable and nonisolated; only immutable callbacks cross
   /// the SDK queue. The media owner checks room generation on the MainActor hop.
   private final class VoiceRoomDelegate: RoomDelegate {
     let failure: @Sendable () -> Void
-    init(failure: @escaping @Sendable () -> Void) { self.failure = failure }
+    let publication: @Sendable (RemoteParticipant, RemoteTrackPublication) -> Void
+    init(
+      failure: @escaping @Sendable () -> Void,
+      publication: @escaping @Sendable (RemoteParticipant, RemoteTrackPublication) -> Void
+    ) {
+      self.failure = failure
+      self.publication = publication
+    }
+    func room(
+      _ room: Room, participant: RemoteParticipant,
+      didPublishTrack publication: RemoteTrackPublication
+    ) {
+      self.publication(participant, publication)
+    }
+    func room(
+      _ room: Room, participant: RemoteParticipant,
+      didSubscribeTrack publication: RemoteTrackPublication
+    ) {
+      self.publication(participant, publication)
+    }
     func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
       failure()
     }

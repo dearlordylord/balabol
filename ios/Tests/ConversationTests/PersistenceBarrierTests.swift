@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class PersistenceBarrierTests: XCTestCase {
+  func testInputIntentRunsBeforePendingCheckpointAndPost() async {
+    let store = GatedDraftStore(value: .editable(text: "Send this"))
+    let transport = CheckpointTransport(store: store)
+    var intent: UUID?
+    let model = ConversationViewModel(
+      transport: transport, draftStore: store, inputIntent: { intent = $0 })
+    await model.start()
+    let sending = Task { await model.send() }
+    await store.waitForSave()
+    XCTAssertNotNil(intent)
+    XCTAssertEqual(intent, model.pendingDelivery?.deliveryId)
+    let attempts = await transport.attempts
+    XCTAssertTrue(attempts.isEmpty)
+    await store.releaseSave()
+    await sending.value
+  }
+
   func testTypingCoalescesButPostWaitsForDurablePendingIdentity() async {
     let store = GatedDraftStore()
     let transport = CheckpointTransport(store: store)

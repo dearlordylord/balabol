@@ -9,7 +9,7 @@
 
 ## Authority
 
-`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory, answer generation, summary generation and Bootstrap implement the durable text slice. Voice and speech recognition implement microphone delivery and supplied-audio recognition; speech synthesis remains planned.
+`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory, answer generation, summary generation and Bootstrap implement the durable text slice. Voice and speech recognition implement microphone delivery and supplied-audio recognition. Speech synthesis accepts a complete bounded phrase and emits validated fixture audio; it does not accept appended text or install an inference engine.
 
 Each entrypoint hides sequencing, state coordination and implementation files. Cross-owner callers may import only the declared entrypoint; local implementation imports remain local. A dependency permission is an upper bound, not an instruction to create an interface or import it prematurely. Keep types with the concept they describe.
 
@@ -30,7 +30,7 @@ There is no separate framework memory or competing conversation state. unii stay
 
 A delivery ticket follows a capability across its backend owner, validated wire contract, Swift projection and behavioral verification. Technical subfolders may exist inside a capability; global `models`, `services`, `types` and `utils` owners do not.
 
-The Swift client has local conversation and voice-session capability slices plus a small application composition root. SwiftUI Views and MainActor ViewModels live inside those slices. They translate intents and project observable backend state; they do not become a second authority for acceptance, durability, compaction or response identity. Client transport adapters belong to the capability they serve. The text client implements that slice; voice remains deferred.
+The Swift client has local conversation and voice-session capability slices plus a small application composition root. SwiftUI Views and MainActor ViewModels live inside those slices. They translate intents and project observable backend state; they do not become a second authority for acceptance, durability, compaction or response identity. Client transport adapters belong to the capability they serve. Both slices have concrete state, events and owned asynchronous tasks. The LiveKit adapter owns microphone capture through the SDK's single audio-session owner.
 
 The conversation application boundary is the approved primary behavioral seam, composed with real unii, real durable storage and deterministic fake Layers. Contract tests use public adapter interfaces. Client ViewModel tests cover projections and intents; physical audio evidence remains a separate platform qualification.
 

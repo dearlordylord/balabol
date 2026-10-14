@@ -1,6 +1,8 @@
 import { fakeAnswerLayer, AnswerGeneration } from "../answer-generation/index.ts"
 import { defaultReplySettings, Replies, ReplyConfiguration } from "./replies.ts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
+import { ReplyDelivery, DeliverySettlement, ResponseTarget } from "./delivery.ts"
+import type { DeliveryTicket, ReplyDeliveryRegistration } from "./delivery.ts"
 import { DeliveryId, Memory } from "../memory/index.ts"
 import {
   type CurrentTurn,
@@ -40,6 +42,13 @@ const assertIdentity = (payload: { text: string; role?: "user" | "assistant" } |
 export class Conversation extends Context.Service<
   Conversation,
   {
+    registerReplyDelivery: (
+      input: ReplyDeliveryRegistration
+    ) => Effect.Effect<{ registrationId: string }, InvalidInput | ReplyBusy>
+    deliverySnapshot: (registrationId: string) => Effect.Effect<DeliveryTicket | null, InvalidInput>
+    interruptResponse: (target: ResponseTarget) => Effect.Effect<Reply | null, InvalidInput | StorageUnavailable>
+    settleReplyDelivery: (ticket: DeliverySettlement) => Effect.Effect<Reply | null, InvalidInput | StorageUnavailable>
+    unregisterReplyDelivery: (registrationId: string) => Effect.Effect<void, InvalidInput | StorageUnavailable>
     receipt: (deliveryId: string) => Effect.Effect<Message | null, StorageUnavailable | InvalidInput>
     currentTurn: () => Effect.Effect<CurrentTurn, ReplyNotFound | StorageUnavailable>
     retryReply: (id: string) => Effect.Effect<Reply, ReplyBusy | ReplyNotFound | StorageUnavailable | InvalidInput>
@@ -60,8 +69,11 @@ export class Conversation extends Context.Service<
       const answer = yield* AnswerGeneration
       const scope = yield* Effect.scope
       const settings = yield* ReplyConfiguration
-      const replies = new Replies(memory, answer, scope, settings)
       const semaphore = yield* Semaphore.make(1)
+      const delivery = new ReplyDelivery()
+      const deadline = (target: ResponseTarget): Effect.Effect<void, StorageUnavailable> =>
+        replies.expire(target).pipe(Effect.asVoid, Effect.uninterruptible, semaphore.withPermits(1))
+      const replies = new Replies(memory, answer, scope, settings, delivery, deadline)
       const send = Effect.fn("Conversation.send")(
         function* (raw: SendMessage) {
           const message = yield* Schema.decodeUnknownEffect(SendMessage)(raw).pipe(Effect.mapError(invalidIdentity))
@@ -105,6 +117,35 @@ export class Conversation extends Context.Service<
           Effect.uninterruptible
         )
       return Conversation.of({
+        registerReplyDelivery: (input) => delivery.register(input).pipe(semaphore.withPermits(1)),
+        deliverySnapshot: (id) => parseId(id).pipe(Effect.map((parsed) => delivery.snapshot(parsed))),
+        interruptResponse: (target) =>
+          Schema.decodeUnknownEffect(ResponseTarget)(target).pipe(
+            Effect.mapError(invalidIdentity),
+            Effect.flatMap((parsed) => replies.interrupt(parsed)),
+            semaphore.withPermits(1),
+            Effect.uninterruptible
+          ),
+        settleReplyDelivery: (ticket) =>
+          Schema.decodeUnknownEffect(DeliverySettlement)(ticket).pipe(
+            Effect.mapError(invalidIdentity),
+            Effect.flatMap((parsed) => replies.settle(parsed)),
+            semaphore.withPermits(1),
+            Effect.uninterruptible
+          ),
+        unregisterReplyDelivery: (id) =>
+          parseId(id).pipe(
+            Effect.flatMap((parsed) =>
+              Effect.gen(function* () {
+                const active = delivery.snapshot(parsed)
+                yield* (active === null ? Effect.void : replies.interrupt(active).pipe(Effect.asVoid)).pipe(
+                  Effect.ensuring(Effect.sync(() => delivery.detach(parsed)))
+                )
+              })
+            ),
+            semaphore.withPermits(1),
+            Effect.uninterruptible
+          ),
         receipt: (id) =>
           parseId(id).pipe(
             Effect.flatMap((parsed) => memory.find(parsed)),
@@ -113,11 +154,19 @@ export class Conversation extends Context.Service<
         currentTurn: () => currentTurn,
         retryReply,
         observeReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.observe(parsed))),
-        releaseReply: (id, token) => parseId(id).pipe(Effect.flatMap((parsed) => replies.release(parsed, token))),
+        releaseReply: (id, token) =>
+          parseId(id).pipe(
+            Effect.flatMap((parsed) => replies.release(parsed, token)),
+            semaphore.withPermits(1)
+          ),
         page,
         send,
         reply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.current(parsed))),
-        cancelReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.cancel(parsed)))
+        cancelReply: (id) =>
+          parseId(id).pipe(
+            Effect.flatMap((parsed) => replies.cancel(parsed)),
+            semaphore.withPermits(1)
+          )
       })
     })
   )

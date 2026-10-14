@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto"
 import { AudioStream, Room, RoomEvent, TrackSource } from "@livekit/rtc-node"
 import { AccessToken, TrackSource as GrantSource } from "livekit-server-sdk"
 import { Effect, Layer, Redacted, Schema, Scope, Clock, Exit } from "effect"
+import { openLiveKitOutput } from "./livekit-output.ts"
 import { VoiceTransport, failed } from "./contracts.ts"
 import type { AudioFrame } from "@livekit/rtc-node"
 import type { VoiceEvent, VoiceFailed } from "./contracts.ts"
 const secretMinimum = 32
 const datagramLimitBytes = 15360
 const tokenLifetimeMillis = 120000
+const disconnectMillis = 1000
 const websocket = Schema.String.check(
   Schema.makeFilter((value) => {
     try {
@@ -54,15 +56,17 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
                   roomJoin: true,
                   room: identity.roomName,
                   canSubscribe: true,
-                  canPublish: client,
+                  canPublish: true,
                   canPublishData: !client,
-                  ...(client ? { canPublishSources: [GrantSource.MICROPHONE] } : {})
+                  canPublishSources: [GrantSource.MICROPHONE]
                 })
                 return io(() => access.toJwt())
               }
-              const backendToken = yield* token(randomUUID(), false)
+              const backendParticipantIdentity = randomUUID()
+              const backendToken = yield* token(backendParticipantIdentity, false)
               const room = new Room()
               let closed = false
+              let closingRoom = false
               let generation = 0
               let trackSid: string | undefined
               let reader: ReadableStreamDefaultReader<AudioFrame> | undefined
@@ -75,10 +79,12 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
                 if (closed) return
                 closed = true
                 stopTrack()
-                yield* io(() => room.disconnect()).pipe(Effect.ignore)
+                yield* io(() => room.disconnect()).pipe(Effect.timeout(disconnectMillis), Effect.ignore)
               })
               yield* Scope.addFinalizer(roomScope, disconnect)
-              const close = Scope.close(roomScope, Exit.void)
+              const close = Effect.sync(() => {
+                closingRoom = true
+              }).pipe(Effect.andThen(Scope.close(roomScope, Exit.void)))
               room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
                 if (
                   closed ||
@@ -127,11 +133,18 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
               return {
                 join: {
                   ...identity,
+                  backendParticipantIdentity,
                   mediaUrl: config.mediaUrl,
                   token: clientToken,
                   expiresAt: now + tokenLifetimeMillis
                 },
                 connection: {
+                  openOutput: (outputEpoch: string) =>
+                    closed || closingRoom
+                      ? Effect.fail(failed("AudioUnavailable", "The media connection is closed"))
+                      : openLiveKitOutput(local, roomScope, backendParticipantIdentity, outputEpoch, () =>
+                          Effect.sync(disconnected).pipe(Effect.andThen(disconnect))
+                        ),
                   close: () => close,
                   publish: (event: VoiceEvent) =>
                     encodeEvent(event).pipe(

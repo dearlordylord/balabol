@@ -4,6 +4,7 @@ import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { expect, it } from "vitest"
 import { Voice, voiceRoutes, VoiceJoin, VoiceSnapshot } from "../src/voice/index.ts"
+import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { conversationLayer } from "../src/bootstrap/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
@@ -12,7 +13,9 @@ it("controls a session over real HTTP with a private scoped capability and bound
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
   const voice = Voice.layer.pipe(
-    Layer.provide(Layer.mergeAll(transport.layer, fakeRecognitionLayer(), conversationLayer(database.path)))
+    Layer.provide(
+      Layer.mergeAll(transport.layer, fakeRecognitionLayer(), conversationLayer(database.path), fakeSynthesisLayer())
+    )
   )
   const server = HttpRouter.serve(voiceRoutes).pipe(
     Layer.provide(voice),

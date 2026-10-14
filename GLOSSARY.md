@@ -29,3 +29,6 @@ A finished recognition result. It becomes part of the conversation only after ac
 
 **Accepted input**:
 A user message confirmed as durably saved in the single conversation. Rechecking its acceptance does not create another message.
+
+**Interrupted reply**:
+Assistant text collected before a response was stopped. The saved text may include words whose audio the user did not hear; it does not imply user agreement.

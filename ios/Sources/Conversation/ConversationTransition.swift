@@ -26,6 +26,7 @@ enum ConversationEvent {
 }
 
 enum ConversationCommand {
+  case inputIntent(UUID)
   case current(ConversationState.Request)
   case retryReply(ConversationState.Request, UUID)
   case cancelCurrent
@@ -140,8 +141,11 @@ extension ConversationState {
       replyRetryRequest = nil
       reply = .idle
       delivery = .waitingCheckpoint(pending)
-      if content.pending != nil, persistence == .clean { return beginSend(pending) }
-      return checkpoint(.awaitingReceipt(pending), purpose: .pending)
+      if content.pending != nil, persistence == .clean {
+        return [.inputIntent(pending.deliveryId)] + beginSend(pending)
+      }
+      return [.inputIntent(pending.deliveryId)]
+        + checkpoint(.awaitingReceipt(pending), purpose: .pending)
     case .loadHistory(let refresh):
       guard isActive, !isLoadingHistory, refresh || !hasLoadedHistory || hasMoreHistory else {
         return []
@@ -393,7 +397,8 @@ extension ConversationState {
       guard snapshot.text.hasPrefix(latest.text) else { return failObservation(input, latest) }
     }
     switch snapshot.state {
-    case .waiting, .streaming: reply = .observing(request, inputDeliveryId: input, latest: snapshot)
+    case .waiting, .streaming, .delivering:
+      reply = .observing(request, inputDeliveryId: input, latest: snapshot)
     case .failed:
       guard let error = snapshot.error else { return failObservation(input, latest) }
       reply = .providerFailed(inputDeliveryId: input, text: snapshot.text, error)

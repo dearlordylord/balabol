@@ -119,6 +119,6 @@ Minimize features while preserving parsing, durable acknowledgement, resource cl
 
 The owner explicitly approved minimizing features while preserving architecture and quality. The prototype is extensible application infrastructure with deterministic providers, not proof that local engines achieve natural realtime performance.
 
-Existing research identifies candidates and limitations; it is not product authority. A separate reminder titled “Create the real-model qualification task” must later create a bounded actual-model qualification task covering languages, streaming, warm/cold latency, cancellation, subscription capability isolation and physical mobile behavior.
+Existing research identifies candidates and limitations; it is not product authority. [Create the real-model qualification task](https://github.com/dearlordylord/balabol/issues/13) preserves the separate reminder to later create a bounded actual-model qualification task covering languages, streaming, warm/cold latency, cancellation, subscription capability isolation and physical mobile behavior.
 
 Remaining local wayfinder entries preserve design detail and evidence. The owner's to-spec invocation authorizes synthesis now; implementation must settle concrete reversible adapter/storage details within this contract and record significant architectural tradeoffs without inventing completed experiments.

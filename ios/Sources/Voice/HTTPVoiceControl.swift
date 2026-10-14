@@ -4,6 +4,7 @@ public actor HTTPVoiceControl: VoiceControl {
   private let baseURL: URL
   private let session: URLSession
   private var capabilities: [UUID: String] = [:]
+  private var publishers: [UUID: UUID] = [:]
   public init(baseURL: URL, session: URLSession) throws {
     guard ["http", "https"].contains(baseURL.scheme), baseURL.host != nil,
       baseURL.user == nil, baseURL.password == nil,
@@ -23,6 +24,7 @@ public actor HTTPVoiceControl: VoiceControl {
       join.controlToken.count == 64, join.controlToken.allSatisfy({ $0.isHexDigit })
     else { throw VoiceFailure.invalidResponse }
     capabilities = [join.sessionId: join.controlToken]
+    publishers = [join.sessionId: join.backendParticipantIdentity]
     return join
   }
   public func snapshot(sessionId: UUID, after: Int) async throws -> VoiceSnapshot {
@@ -32,6 +34,9 @@ public actor HTTPVoiceControl: VoiceControl {
   }
   private func validatedSnapshot(_ data: Data, sessionId: UUID, after: Int) throws -> VoiceSnapshot
   {
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      object.keys.contains("output")
+    else { throw VoiceFailure.invalidResponse }
     let page = try decode(VoiceSnapshot.self, data)
     guard page.sessionId == sessionId, ["active", "ended"].contains(page.status),
       after >= 0, after < Int.max, page.sequence >= after, page.sequence < Int.max,
@@ -52,7 +57,9 @@ public actor HTTPVoiceControl: VoiceControl {
       Set(page.pending.map(\.utteranceId)).count == page.pending.count,
       page.events.first?.sequence == max(after + 1, page.firstSequence) || page.sequence == after,
       page.events.last.map({ $0.sequence <= page.sequence }) ?? true,
-      page.nextAfter == page.sequence
+      page.nextAfter == page.sequence,
+      page.output.map({ validOutput($0, sessionId: sessionId) }) ?? true,
+      page.events.allSatisfy({ $0.output.map({ validOutput($0, sessionId: sessionId) }) ?? true })
     else { throw VoiceFailure.invalidResponse }
     return page
   }
@@ -66,6 +73,31 @@ public actor HTTPVoiceControl: VoiceControl {
     let data = try await request(
       "voice/sessions/\(sessionId.uuidString)/end", body: Data("{}".utf8), sessionId: sessionId)
     _ = try validatedSnapshot(data, sessionId: sessionId, after: 0)
+  }
+  private func validOutput(_ output: VoiceOutput, sessionId: UUID) -> Bool {
+    output.isValid(sessionId: sessionId)
+      && (output.manifest.map { $0.publisherIdentity == publishers[sessionId] } ?? true)
+  }
+  public func ready(sessionId: UUID, manifest: VoiceAudioManifest) async throws -> VoiceSnapshot {
+    struct Body: Encodable {
+      let responseId: UUID
+      let outputEpoch: UUID
+      let trackSid: String
+    }
+    let data = try await request(
+      "voice/sessions/\(sessionId.uuidString)/output/ready",
+      body: JSONEncoder().encode(
+        Body(
+          responseId: manifest.responseId, outputEpoch: manifest.outputEpoch,
+          trackSid: manifest.trackSid)), sessionId: sessionId)
+    return try validatedSnapshot(data, sessionId: sessionId, after: 0)
+  }
+  public func interrupt(sessionId: UUID, target: VoiceOutputIdentity) async throws -> VoiceSnapshot
+  {
+    let data = try await request(
+      "voice/sessions/\(sessionId.uuidString)/output/interrupt",
+      body: JSONEncoder().encode(target), sessionId: sessionId)
+    return try validatedSnapshot(data, sessionId: sessionId, after: 0)
   }
   private struct FailureBody: Decodable {
     let error: VoicePending.Failure

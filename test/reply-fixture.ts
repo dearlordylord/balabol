@@ -26,7 +26,7 @@ export const waitForReply = (conversation: Conversation["Service"], inputDeliver
     let reply = yield* conversation.reply(inputDeliveryId)
     for (
       let attempt = 0;
-      (reply.state === "Waiting" || reply.state === "Streaming") && attempt < maximumPolls;
+      ["Waiting", "Streaming", "Delivering"].includes(reply.state) && attempt < maximumPolls;
       attempt++
     ) {
       yield* Effect.sleep(pollMillis)

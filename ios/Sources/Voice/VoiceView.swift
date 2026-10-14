@@ -9,6 +9,20 @@
         Text("Scripted transcription").font(.caption).foregroundStyle(.secondary)
           .accessibilityIdentifier("scripted-transcription")
         Text(status).accessibilityIdentifier("voice-status")
+        if model.output.locallyInterrupted {
+          Text("Interrupted: generated text may include audio not heard").accessibilityIdentifier(
+            "voice-output-interrupted")
+        } else if model.output.unavailable {
+          Text("Audio unavailable").accessibilityIdentifier("voice-output-unavailable")
+        } else if let output = model.output.current {
+          if output.status == .playing && model.output.receivedAudio {
+            Text("Playing fixture audio").accessibilityIdentifier("voice-output-playing")
+          } else if output.status == .preparing || output.status == .awaitingReady
+            || output.status == .playing
+          {
+            Text("Replying…").accessibilityIdentifier("voice-output-replying")
+          }
+        }
         if !model.state.tentative.isEmpty {
           Text("Tentative: \(model.state.tentative)").foregroundStyle(.secondary)
             .accessibilityIdentifier("voice-tentative")

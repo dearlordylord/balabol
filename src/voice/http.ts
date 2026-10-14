@@ -2,7 +2,15 @@ import { Effect } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import type { VoiceFailed } from "./contracts.ts"
 import { Voice } from "./service.ts"
-import { VoiceJoin, VoiceSnapshot, MuteRequest, VoiceErrorResponse, failed } from "./contracts.ts"
+import {
+  VoiceJoin,
+  VoiceSnapshot,
+  MuteRequest,
+  OutputReady,
+  OutputInterrupt,
+  VoiceErrorResponse,
+  failed
+} from "./contracts.ts"
 const unauthorized = 401
 const missing = 404
 const busy = 409
@@ -39,6 +47,20 @@ const end = Effect.gen(function* () {
   const voice = yield* Voice
   return yield* HttpServerResponse.schemaJson(VoiceSnapshot)(yield* voice.end(yield* id))
 })
+const ready = Effect.gen(function* () {
+  const input = yield* HttpServerRequest.schemaBodyJson(OutputReady).pipe(
+    Effect.mapError(() => failed("InvalidInput", "Invalid readiness payload"))
+  )
+  const voice = yield* Voice
+  return yield* HttpServerResponse.schemaJson(VoiceSnapshot)(yield* voice.ready(yield* id, input))
+})
+const interrupt = Effect.gen(function* () {
+  const input = yield* HttpServerRequest.schemaBodyJson(OutputInterrupt).pipe(
+    Effect.mapError(() => failed("InvalidInput", "Invalid interruption payload"))
+  )
+  const voice = yield* Voice
+  return yield* HttpServerResponse.schemaJson(VoiceSnapshot)(yield* voice.interrupt(yield* id, input))
+})
 const errors = Effect.catchTags({
   VoiceFailed: (error: VoiceFailed) =>
     HttpServerResponse.schemaJson(VoiceErrorResponse)(
@@ -49,7 +71,7 @@ const errors = Effect.catchTags({
             ? unauthorized
             : error.code === "SessionNotFound"
               ? missing
-              : error.code === "VoiceBusy"
+              : error.code === "VoiceBusy" || error.code === "StaleOutput"
                 ? busy
                 : invalid
       }
@@ -60,6 +82,12 @@ export const voiceRoutes = HttpRouter.use(
     yield* router.add("POST", "/voice/sessions", start.pipe(errors))
     yield* router.add("GET", "/voice/sessions/:sessionId", authorize.pipe(Effect.andThen(snapshot), errors))
     yield* router.add("POST", "/voice/sessions/:sessionId/mute", authorize.pipe(Effect.andThen(mute), errors))
+    yield* router.add("POST", "/voice/sessions/:sessionId/output/ready", authorize.pipe(Effect.andThen(ready), errors))
+    yield* router.add(
+      "POST",
+      "/voice/sessions/:sessionId/output/interrupt",
+      authorize.pipe(Effect.andThen(interrupt), errors)
+    )
     yield* router.add("POST", "/voice/sessions/:sessionId/end", authorize.pipe(Effect.andThen(end), errors))
   })
 )

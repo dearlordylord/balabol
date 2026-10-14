@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { Context, Effect, Fiber, Schema, Stream } from "effect"
+import { Context, Effect, Fiber, Schema, Stream, Clock } from "effect"
 import type { Scope } from "effect"
 import { AnswerEvent, AnswerFailed, type AnswerGeneration } from "../answer-generation/index.ts"
 import {
@@ -9,10 +9,12 @@ import {
   type Receipt,
   type StorageUnavailable
 } from "../memory/index.ts"
+import type { ReplyDelivery, ResponseTarget, ResponseInvalidation, DeliverySettlement } from "./delivery.ts"
 import { Reply, ReplyNotFound } from "./contracts.ts"
 
 const maximumModelNameLength = 200
 const maximumReplyLength = 100_000
+const completeAnswer = (completed: boolean, text: string) => completed && text.length > 0
 export const ReplySettings = Schema.Struct({
   answerProvider: Schema.Literal("fake"),
   answerModel: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumModelNameLength)),
@@ -60,54 +62,61 @@ const responseIdentity = (inputDeliveryId: string) => {
 export class Replies {
   #state: Reply | undefined
   #task: Fiber.Fiber<void> | undefined
+  #deliveryDeadline: Fiber.Fiber<void, StorageUnavailable> | undefined
   #pendingCompletion: DeliveryPayload | undefined
-  #phase: "Generating" | "Committing" | "Interrupting" | "Cancelling" | "Terminal" = "Terminal"
+  #phase: "Generating" | "Delivering" | "Committing" | "Interrupting" | "Cancelling" | "Terminal" = "Terminal"
   #observer: string | undefined
   constructor(
     readonly memory: Memory["Service"],
     readonly answer: AnswerGeneration["Service"],
     readonly scope: Scope.Scope,
-    readonly settings: ReplySettings
+    readonly settings: ReplySettings,
+    readonly delivery: ReplyDelivery,
+    readonly onDeadline: (target: ResponseTarget) => Effect.Effect<void, StorageUnavailable>
   ) {}
-  admit(): Effect.Effect<void, StorageUnavailable> {
+  admit(reason: ResponseInvalidation["reason"] = "Interrupted"): Effect.Effect<void, StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
+      const state = this.#state
+      const task = this.#task
+      if (state !== undefined && this.#phase !== "Terminal" && this.#phase !== "Committing") {
+        // Fence provider updates and retain the exact interrupted intent before any storage yield.
+        this.#phase = "Interrupting"
+        this.delivery.invalidate(state, reason)
+        this.#pendingCompletion = {
+          deliveryId: state.responseId,
+          responseId: state.responseId,
+          inputDeliveryId: state.inputDeliveryId,
+          role: "assistant",
+          outcome: "interrupted",
+          text: state.text
+        }
+        this.#task = undefined
+        if (task !== undefined) yield* Fiber.interrupt(task)
+      } else if (this.#phase === "Committing" && task !== undefined) {
+        yield* Fiber.await(task)
+      }
       const pending = yield* this.memory.pendingReply()
       if (pending !== undefined) yield* this.memory.append(pending)
       yield* this.#settleCompletion()
-      const state = this.#state
-      if (state === undefined || this.#phase === "Terminal") return
-      if (this.#phase === "Committing") {
-        if (this.#task !== undefined) yield* Fiber.await(this.#task)
-        yield* this.#settleCompletion()
-        return
-      }
-      this.#phase = "Interrupting"
-      const task = this.#task
-      this.#task = undefined
-      if (task !== undefined) yield* Fiber.interrupt(task)
-      const payload = {
-        deliveryId: state.responseId,
-        responseId: state.responseId,
-        inputDeliveryId: state.inputDeliveryId,
-        role: "assistant" as const,
-        outcome: "interrupted" as const,
-        text: state.text
-      }
-      const receipt = yield* this.#appendReply(payload)
-      this.#phase = "Terminal"
-      this.#state = Schema.decodeUnknownSync(Reply)({
-        ...state,
-        sequence: state.sequence + 1,
-        state: "Interrupted",
-        error: null,
-        receipt
-      })
+    }).pipe(Effect.tapError((error) => Effect.sync(() => this.#storageFailure(error))))
+  }
+  #storageFailure(error: StorageUnavailable): void {
+    const state = this.#state
+    if (state === undefined) return
+    this.delivery.invalidate(state, "Failed")
+    this.#phase = "Terminal"
+    this.#state = Schema.decodeUnknownSync(Reply)({
+      ...state,
+      sequence: state.sequence + 1,
+      state: "Failed",
+      error: { code: "StorageUnavailable", message: error.message },
+      receipt: null
     })
   }
   #settleCompletion(): Effect.Effect<void, StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
       const payload = this.#pendingCompletion
-      if (payload === undefined || this.#phase === "Committing") return
+      if (payload === undefined) return
       const receipt = yield* this.#appendReply(payload)
       this.#pendingCompletion = undefined
       const state = this.#state
@@ -116,11 +125,11 @@ export class Replies {
       this.#state = Schema.decodeUnknownSync(Reply)({
         ...state,
         sequence: state.sequence + 1,
-        state: "Completed",
+        state: payload.outcome === "interrupted" ? "Interrupted" : "Completed",
         error: null,
         receipt
       })
-    })
+    }).pipe(Effect.tapError((error) => Effect.sync(() => this.#storageFailure(error))))
   }
   #appendReply(payload: DeliveryPayload) {
     return this.memory
@@ -183,6 +192,7 @@ export class Replies {
     const previous = this.#state
     if (previous === undefined) return
     if (!this.#acceptsUpdate(previous, next)) return
+    if (next.state === "Failed") this.delivery.invalidate(next, "Failed")
     if (next.state === "Completed" || next.state === "Failed") this.#phase = "Terminal"
     this.#state = Schema.decodeUnknownSync(Reply)({ ...next, sequence: previous.sequence + 1 })
   }
@@ -204,6 +214,18 @@ export class Replies {
       this.#phase = "Generating"
       this.#observer = undefined
       this.#state = { ...base, sequence: 0, state: "Waiting", text: "", error: null, receipt: null }
+      if (this.#deliveryDeadline !== undefined) yield* Fiber.interrupt(this.#deliveryDeadline)
+      this.#deliveryDeadline = undefined
+      const ticket = yield* this.delivery.begin(base)
+      if (ticket !== undefined) {
+        this.#deliveryDeadline = yield* Effect.sleep(
+          Math.max(0, ticket.deadlineAt - (yield* Clock.currentTimeMillis))
+        ).pipe(
+          Effect.andThen(Effect.suspend(() => (this.delivery.accepts(ticket) ? this.onDeadline(ticket) : Effect.void))),
+          Effect.interruptible,
+          Effect.forkIn(this.scope)
+        )
+      }
       const task = this.#generate(input, base).pipe(
         Effect.interruptible,
         Effect.catch((error) =>
@@ -227,7 +249,7 @@ export class Replies {
       yield* Effect.sleep(this.settings.attachmentMillis).pipe(
         Effect.andThen(
           Effect.suspend(() =>
-            this.#state?.responseId === responseId && this.#observer === undefined
+            this.#state?.responseId === responseId && this.#observer === undefined && !this.delivery.matches(base)
               ? this.cancel(input.deliveryId)
               : Effect.void
           )
@@ -295,9 +317,14 @@ export class Replies {
             })
           )
         )
-      if (!completed || text.length === 0)
+      if (!completeAnswer(completed, text))
         return yield* new AnswerFailed({ message: "Provider stream lacks nonempty completed answer" })
       if (!this.#canCommit(base.responseId)) return
+      if (this.delivery.matches(base)) {
+        this.#phase = "Delivering"
+        this.#update({ ...base, state: "Delivering", text, error: null, receipt: null })
+        return
+      }
       this.#phase = "Committing"
       this.#pendingCompletion = {
         deliveryId: base.responseId,
@@ -321,6 +348,40 @@ export class Replies {
       }).pipe(Effect.uninterruptible)
     })
   }
+  interrupt(
+    target: ResponseTarget,
+    reason: ResponseInvalidation["reason"] = "Interrupted"
+  ): Effect.Effect<Reply | null, StorageUnavailable> {
+    return Effect.gen({ self: this }, function* () {
+      const state = this.#state
+      if (state?.responseId !== target.responseId || state.inputDeliveryId !== target.inputDeliveryId) return null
+      yield* this.admit(reason)
+      return this.#state ?? null
+    })
+  }
+  expire(target: ResponseTarget): Effect.Effect<void, StorageUnavailable> {
+    return this.interrupt(target, "Deadline").pipe(Effect.asVoid)
+  }
+  settle(ticket: DeliverySettlement): Effect.Effect<Reply | null, StorageUnavailable> {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.delivery.accepts(ticket)) return null
+      const state = this.#state
+      if (ticket.outcome === "Failed") return yield* this.interrupt(ticket, "Failed")
+      if (state?.state !== "Delivering") return null
+      this.delivery.complete(ticket)
+      this.#phase = "Committing"
+      this.#pendingCompletion = {
+        deliveryId: state.responseId,
+        responseId: state.responseId,
+        inputDeliveryId: state.inputDeliveryId,
+        role: "assistant",
+        outcome: "completed",
+        text: state.text
+      }
+      yield* this.#settleCompletion()
+      return this.#state ?? null
+    })
+  }
   observe(inputDeliveryId: string): Effect.Effect<string, ReplyNotFound | StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
       yield* this.current(inputDeliveryId)
@@ -341,7 +402,7 @@ export class Replies {
     return Effect.gen({ self: this }, function* () {
       const state = this.#state
       const task = this.#task
-      if (!this.#canCancel(inputDeliveryId) || state === undefined) return
+      if (!this.#canCancel(inputDeliveryId) || state === undefined || this.delivery.matches(state)) return
       if (this.#phase === "Committing") {
         if (task !== undefined) yield* Fiber.await(task)
         return
