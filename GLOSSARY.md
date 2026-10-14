@@ -20,3 +20,12 @@ A period of live spoken interaction within the conversation. The same conversati
 
 **Memory**:
 The enduring record and retained context of the conversation, available to the assistant across voice sessions.
+
+**Recognition hypothesis**:
+Temporary text that may change before an utterance is finalized. It is not a saved message.
+
+**Finalized utterance**:
+A finished recognition result. It becomes part of the conversation only after acceptance.
+
+**Accepted input**:
+A user message confirmed as durably saved in the single conversation. Rechecking its acceptance does not create another message.

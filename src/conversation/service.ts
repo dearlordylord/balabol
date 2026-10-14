@@ -40,6 +40,7 @@ const assertIdentity = (payload: { text: string; role?: "user" | "assistant" } |
 export class Conversation extends Context.Service<
   Conversation,
   {
+    receipt: (deliveryId: string) => Effect.Effect<Message | null, StorageUnavailable | InvalidInput>
     currentTurn: () => Effect.Effect<CurrentTurn, ReplyNotFound | StorageUnavailable>
     retryReply: (id: string) => Effect.Effect<Reply, ReplyBusy | ReplyNotFound | StorageUnavailable | InvalidInput>
     observeReply: (inputDeliveryId: string) => Effect.Effect<string, ReplyNotFound | StorageUnavailable | InvalidInput>
@@ -104,6 +105,11 @@ export class Conversation extends Context.Service<
           Effect.uninterruptible
         )
       return Conversation.of({
+        receipt: (id) =>
+          parseId(id).pipe(
+            Effect.flatMap((parsed) => memory.find(parsed)),
+            Effect.map((delivery) => (delivery?.state === "Accepted" ? delivery.receipt : null))
+          ),
         currentTurn: () => currentTurn,
         retryReply,
         observeReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.observe(parsed))),

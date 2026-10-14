@@ -54,6 +54,12 @@ public final class ConversationViewModel {
   // Compatibility projection only; views render each lifecycle's error itself.
   public var failure: ConversationFailure? { draftFailure ?? deliveryFailure ?? historyFailure }
 
+  /// A validated voice receipt adds one durable fact without touching draft or history cursor.
+  public func acceptVoiceReceipt(_ receipt: ConversationMessage) {
+    receive(.voiceAccepted(receipt))
+    receive(.refreshCurrent)
+  }
+
   public func start() async {
     receive(.start)
     await flushDraft()

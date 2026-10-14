@@ -22,7 +22,7 @@ final class LiveBackendTests: XCTestCase {
     model.editDraft(text)
     await model.send()
     XCTAssertNil(model.failure)
-    let accepted = try XCTUnwrap(model.messages.first)
+    let accepted = try XCTUnwrap(model.messages.first { $0.role == .user && $0.text == text })
     XCTAssertEqual(accepted.text, text)
     XCTAssertNil(model.pendingDelivery)
     let duplicate = try await transport.send(

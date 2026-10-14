@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class ConversationViewModelTests: XCTestCase {
+  func testVoiceReceiptPreservesEditableDraftAndHistoryCursor() async {
+    let model = ConversationViewModel(
+      transport: CursorConversationTransport(), draftStore: MemoryDraftStore())
+    await model.start()
+    await model.loadHistory()
+    model.editDraft("Unsent text remains mine")
+    await model.flushDraft()
+    let voice = ConversationMessage(
+      deliveryId: UUID(), recordId: 20, position: 5, text: "Accepted voice")
+    model.acceptVoiceReceipt(voice)
+    model.acceptVoiceReceipt(voice)
+    XCTAssertEqual(model.messages.map(\.text), ["First", "Accepted voice"])
+    XCTAssertEqual(model.draft, "Unsent text remains mine")
+    XCTAssertEqual(model.state.historyCursor, 0)
+    XCTAssertNil(model.pendingDelivery)
+    await model.shutdown()
+  }
+
   func testReceiptConfirmsTranscriptAndClearsDraft() async throws {
     let transport = ScriptedTransport()
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())

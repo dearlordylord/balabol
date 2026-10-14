@@ -27,7 +27,8 @@
     "complexity": "node scripts/quality/cli.mjs complexity",
     "check-all": "pnpm secrets:files && pnpm test:harness && node scripts/quality/cli.mjs all && pnpm check-format",
     "verify:effect-cohort": "node scripts/quality/cli.mjs cohort",
-    "start": "node dist/bootstrap/main.js"
+    "start": "node dist/bootstrap/main.js",
+    "dev:voice": "node scripts/dev-voice.mjs"
   },
   "lint-staged": {
     "*.{md,json,yaml,yml}": "prettier --write",
@@ -70,6 +71,8 @@
     }
   },
   "dependencies": {
-    "@firfi/unii": "0.1.0"
+    "@firfi/unii": "0.1.0",
+    "@livekit/rtc-node": "1.1.0",
+    "livekit-server-sdk": "2.19.1"
   }
 }

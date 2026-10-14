@@ -4,6 +4,7 @@ import { checkArchitecture } from "./architecture.mjs";
 import { checkCohort } from "./cohort.mjs";
 import { command } from "./commands.mjs";
 import { sourceFiles } from "./files.mjs";
+import { withLiveKitFixture } from "./livekit-fixture.mjs";
 
 const [gate, option, directory] = process.argv.slice(2);
 const root = resolve(option === "--root" ? directory : ".");
@@ -44,12 +45,19 @@ const actions = {
     typescript.length ? run("oxlint", ["-c", ".oxlintrc.json", "--deny-warnings", ...typescript]) : absent(),
   duplication: () => (product.length ? run("jscpd", ["--silent", "src"]) : absent()),
   format: () => run("dprint", ["check", "--allow-no-files"]),
-  behavior: () => {
+  behavior: async () => {
     if (!product.length) return absent();
     if (!typescript.some((file) => file.endsWith(".test.ts")))
       throw new Error("Product source exists without behavioral tests");
     rmSync(resolve(root, "coverage/coverage-final.json"), { force: true });
-    run("vitest", ["run", "--coverage"]);
+    if (existsSync(resolve(root, "src/voice/livekit.ts"))) {
+      await withLiveKitFixture((environment) =>
+        command(root, "vitest", ["run", "--coverage"], false, {
+          ...process.env,
+          BALABOL_LIVEKIT_TEST_ENV: environment,
+        }),
+      );
+    } else run("vitest", ["run", "--coverage"]);
     actions.crap();
   },
   crap: () => {
@@ -88,13 +96,13 @@ try {
       "behavior",
     ]) {
       process.stdout.write(`Quality gate: ${name}\n`);
-      actions[name]();
+      await actions[name]();
     }
     if (!product.length)
       process.stdout.write("Harness configuration passed; product acceptance remains pending (no product source).\n");
   } else {
     if (!Object.hasOwn(actions, gate)) throw new Error(`Unknown quality gate: ${gate}`);
-    actions[gate]();
+    await actions[gate]();
   }
 } catch (error) {
   process.stderr.write(`${error.message}\n`);

@@ -9,7 +9,7 @@
 
 ## Commands and contracts
 
-`pnpm check-all` scans files for secrets before running tooling self-checks, then checks cohort, build, compiler, Effect diagnostics, architecture, dpdm cycles, complexity, lint, duplication, format and behavior/CRAP. Markdown, JSON, YAML and tooling JavaScript use Prettier; TypeScript uses the pinned dprint Oxc plugin exclusively. Both format checks are required.
+`pnpm check-all` scans files for secrets before running tooling self-checks, then checks cohort, build, compiler, Effect diagnostics, architecture, dpdm cycles, complexity, lint, duplication, format and behavior/CRAP. Markdown, JSON, YAML and tooling JavaScript use Prettier; TypeScript uses the pinned dprint Oxc plugin exclusively. Both format checks are required. When the LiveKit adapter exists, the behavior gate starts a pinned, isolated LiveKit Docker fixture automatically, passes its private configuration only to the test process, and removes the container and temporary keys after the run. Docker is required for this transport gate; synthetic RTC frames verify the adapter and do not replace microphone or physical-device qualification.
 
 The public `node scripts/quality/cli.mjs <gate> [--root <directory>]` interface supports isolated temporary fixture roots. Gates are `cohort`, `build`, `compiler`, `effect`, `architecture`, `cycles`, `complexity`, `lint`, `duplication`, `format`, `behavior`, `crap`, `secrets` and `all`. Unknown gates and subprocess failures/timeouts fail closed. Compiler configuration remains checked even without product source. Product-specific gates explicitly report the absence of source; that is harness readiness, never application acceptance.
 

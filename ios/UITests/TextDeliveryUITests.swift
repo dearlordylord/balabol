@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class TextDeliveryUITests: XCTestCase {
+  func testNamespacedDebugLaunchUsesPreconfiguredControlURLWithoutTyping() {
+    let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
+    app.launchEnvironment["BALABOL_UI_TEST_CONTROL_URL"] = "http://127.0.0.1:1"
+    app.launch()
+    XCTAssertTrue(app.textFields["message-draft"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.textFields["server-url"].exists)
+    app.buttons["Server"].tap()
+    let address = app.textFields["server-url"]
+    XCTAssertTrue(address.waitForExistence(timeout: 5))
+    XCTAssertEqual(address.value as? String, "http://127.0.0.1:1")
+  }
+
+  func testNamespacedDebugLaunchRejectsCredentialBearingControlURL() {
+    let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
+    app.launchEnvironment["BALABOL_UI_TEST_CONTROL_URL"] = "https://example:fixture@example.invalid"
+    app.launch()
+    XCTAssertTrue(app.textFields["server-url"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["start-voice"].exists)
+    XCTAssertTrue(
+      app.staticTexts["Enter a valid HTTP or HTTPS server URL without credentials or a path."]
+        .exists)
+  }
+
   func testFreshSimulatorOpensConversationWithoutServerSetup() throws {
     #if !targetEnvironment(simulator)
       throw XCTSkip("Automatic localhost setup is only available on Simulator.")

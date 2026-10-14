@@ -4,6 +4,7 @@ import Foundation
 /// Commands describe work; they do not execute it or acquire resources here.
 enum ConversationEvent {
   case start
+  case voiceAccepted(ConversationMessage)
   case refreshCurrent
   case retryReply
   case currentLoaded(ConversationState.Request, Result<CurrentTurn?, ConversationFailure>)
@@ -43,6 +44,9 @@ enum ConversationCommand {
 extension ConversationState {
   mutating func transition(_ event: ConversationEvent) -> [ConversationCommand] {
     switch event {
+    case .voiceAccepted(let receipt):
+      guard isActive, receipt.isValid, receipt.role == .user, merge([receipt]) else { return [] }
+      return []
     case .start:
       guard isActive, case .unloaded = draft else { return [] }
       let request = request()

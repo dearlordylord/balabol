@@ -13,6 +13,7 @@ struct BalabolApp: App {
 private struct ClientLocalState {
   let defaults: UserDefaults
   let testNamespace: String?
+  let launchControlURL: String?
 
   static func currentLaunch() -> ClientLocalState {
     #if DEBUG
@@ -20,10 +21,12 @@ private struct ClientLocalState {
         guard let namespace = UUID(uuidString: value)?.uuidString,
           let defaults = UserDefaults(suiteName: "app.balabol.uitests." + namespace)
         else { preconditionFailure("The UI test namespace must be a UUID.") }
-        return ClientLocalState(defaults: defaults, testNamespace: namespace)
+        return ClientLocalState(
+          defaults: defaults, testNamespace: namespace,
+          launchControlURL: ProcessInfo.processInfo.environment["BALABOL_UI_TEST_CONTROL_URL"])
       }
     #endif
-    return ClientLocalState(defaults: .standard, testNamespace: nil)
+    return ClientLocalState(defaults: .standard, testNamespace: nil, launchControlURL: nil)
   }
 
   func draftURL(in applicationSupport: URL) -> URL {
@@ -41,6 +44,7 @@ private struct ConversationRoot: View {
   @AppStorage private var configuredURL: String
   @State private var urlInput = ""
   @State private var model: ConversationViewModel?
+  @State private var voice: VoiceViewModel?
   @State private var session: URLSession?
   @State private var configurationError: String?
   private let localState: ClientLocalState
@@ -54,11 +58,14 @@ private struct ConversationRoot: View {
     NavigationStack {
       Group {
         if let model {
-          ConversationView(model: model)
+          VStack(spacing: 0) {
+            if let voice { VoiceView(model: voice) }
+            ConversationView(model: model)
+          }
         } else {
           Form {
             Text(
-              "On Simulator, use http://127.0.0.1:8787. On iPhone, use your Mac's Tailscale address with port 8787."
+              "On Simulator, use http://127.0.0.1:8787. On iPhone, use your Mac's private Tailscale HTTPS address with port 8444."
             )
             TextField("http://127.0.0.1:8787", text: $urlInput)
               .accessibilityIdentifier("server-url")
@@ -75,19 +82,27 @@ private struct ConversationRoot: View {
         if model != nil {
           Button("Server") {
             Task {
-              guard let current = model, current.canSwitchServer else { return }
+              guard let current = model, current.canSwitchServer, voice?.state.canStart != false
+              else { return }
+              await voice?.shutdown()
+              voice = nil
               await current.shutdown()
               session?.invalidateAndCancel()
               session = nil
               model = nil
             }
           }
-          .disabled(model?.canSwitchServer != true)
+          .disabled(model?.canSwitchServer != true || voice?.state.canStart == false)
         }
       }
     }
     .onAppear {
       guard model == nil else { return }
+      if let launchControlURL = localState.launchControlURL {
+        urlInput = launchControlURL
+        connect()
+        return
+      }
       urlInput = configuredURL
       if !configuredURL.isEmpty {
         connect()
@@ -117,7 +132,15 @@ private struct ConversationRoot: View {
         for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
       let draftStore = FileDraftStore(
         url: localState.draftURL(in: directory))
-      model = ConversationViewModel(transport: transport, draftStore: draftStore)
+      let conversation = ConversationViewModel(transport: transport, draftStore: draftStore)
+      let control = try HTTPVoiceControl(baseURL: url, session: candidate)
+      voice = VoiceViewModel(
+        control: control, media: LiveKitVoiceMedia(evidenceEnabled: localState.testNamespace != nil)
+      ) {
+        [weak conversation] receipt in
+        conversation?.acceptVoiceReceipt(receipt)
+      }
+      model = conversation
       session = candidate
       configuredURL = urlInput
       configurationError = nil
