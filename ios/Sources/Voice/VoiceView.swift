@@ -52,6 +52,9 @@
             Button(model.state.capture == .idle ? "Start voice" : "Try again") { model.start() }
               .accessibilityIdentifier("start-voice")
           }
+          if model.state.canResume {
+            Button("Resume") { model.resume() }.accessibilityIdentifier("resume-voice")
+          }
           if model.state.wantsListening {
             Button(model.state.wantsMuted ? "Unmute" : "Mute") { model.toggleMute() }
               .accessibilityIdentifier("mute-voice")
@@ -59,7 +62,7 @@
           }
           if [
             .requestingMicrophone, .connecting, .reconnecting, .hostUnavailable,
-            .checkingPreviousSpeech, .listening, .muted,
+            .checkingPreviousSpeech, .listening, .muted, .paused, .resuming,
           ].contains(model.state.capture) {
             Button("End") { model.end() }.accessibilityIdentifier("end-voice")
           }
@@ -95,6 +98,8 @@
       case .checkingPreviousSpeech: "Checking previous speech…"
       case .listening: "Listening"
       case .muted: "Microphone muted"
+      case .paused: "Voice interrupted. Resume when you’re ready."
+      case .resuming: "Resuming voice…"
       case .ending: "Ending voice…"
       case .ended: "Voice ended"
       case .failed(.permissionDenied): "Microphone permission denied"

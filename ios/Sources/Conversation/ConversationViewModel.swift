@@ -14,6 +14,9 @@ public final class ConversationViewModel {
   @ObservationIgnored private var deliveryTask: Task<Void, Never>?
   @ObservationIgnored private var interruptionReceiptTasks:
     [ConversationState.Request: Task<Void, Never>] = [:]
+  @ObservationIgnored private var platformStop: Task<Void, Never>?
+  @ObservationIgnored private var platformTasks: [ConversationState.Request: Task<Void, Never>] =
+    [:]
   @ObservationIgnored private var replyTask: Task<Void, Never>?
   @ObservationIgnored private var replyRequest: ConversationState.Request?
   @ObservationIgnored private var currentTask: Task<Void, Never>?
@@ -66,6 +69,11 @@ public final class ConversationViewModel {
     receive(.refreshCurrent)
   }
 
+  public func interruptForPlatform(handedInputIds: [UUID], afterLocalStop: Task<Void, Never>? = nil)
+  {
+    platformStop = afterLocalStop
+    receive(.platformInterrupt(handedInputIds))
+  }
   /// Refresh a bounded display page and current reply without moving pagination or draft.
   public func refreshReconnectDisplay() {
     receive(.refreshReconnectDisplay)
@@ -115,6 +123,8 @@ public final class ConversationViewModel {
   /// intents immediately, and waits for existing local checkpoints to quiesce.
   public func shutdown() async {
     receive(.shutdown)
+    for task in platformTasks.values { await task.value }
+    platformTasks = [:]
     await flushDraft()
     receive(.drained)
   }
@@ -126,6 +136,45 @@ public final class ConversationViewModel {
 
   private func execute(_ command: ConversationCommand) {
     switch command {
+    case .cancelPlatformTargets(let requests):
+      for request in requests { platformTasks.removeValue(forKey: request)?.cancel() }
+    case .cancelPlatformInterruptions:
+      for task in platformTasks.values { task.cancel() }
+    case .findPlatformTarget(let request, let input):
+      let stop = platformStop
+      let transport = transport
+      platformTasks[request]?.cancel()
+      platformTasks[request] = Task { [weak self] in
+        do {
+          await stop?.value
+          guard !Task.isCancelled else { return }
+          let snapshot = try await transport.replySnapshot(for: input)
+          guard !Task.isCancelled else { return }
+          self?.platformTasks[request] = nil
+          self?.receive(.platformTargetLoaded(request, input, snapshot))
+        } catch {
+          guard !Task.isCancelled else { return }
+          self?.platformTasks[request] = nil
+          self?.receive(.platformInterruptionFailed(request, input))
+        }
+      }
+    case .interruptPlatformTarget(let request, let input, let response):
+      let stop = platformStop
+      let transport = transport
+      platformTasks[request] = Task { [weak self] in
+        do {
+          await stop?.value
+          guard !Task.isCancelled else { return }
+          let snapshot = try await transport.interruptReply(
+            responseId: response, inputDeliveryId: input)
+          guard !Task.isCancelled else { return }
+          self?.receive(.platformInterrupted(request, input, snapshot))
+        } catch {
+          guard !Task.isCancelled else { return }
+          self?.receive(.platformInterruptionFailed(request, input))
+        }
+        self?.platformTasks[request] = nil
+      }
     case .inputIntent(let id): inputIntent(id)
     case .current(let request):
       let transport = transport

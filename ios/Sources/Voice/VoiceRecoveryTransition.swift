@@ -8,6 +8,16 @@ extension VoiceState {
     tentativeUtterance = nil
     markChecking()
     let oldSession = sessionId
+    if capture == .paused || resumeProbe {
+      if let sessionId {
+        drainingSession = sessionId
+        drainingIncarnation = backendIncarnationId
+      }
+      generation += 1
+      capture = .paused
+      resumeProbe = false
+      return [.cancelRetry, .cancelStart, .disconnect(generation, oldSession)]
+    }
     let retryable: Bool
     switch error {
     case .connection: retryable = true
@@ -74,7 +84,7 @@ extension VoiceState {
       stagedFinals = [:]
       let needsResolution =
         !wantsListening || [.hostUnavailable, .reconnecting].contains(capture)
-        || capture == .checkingPreviousSpeech
+        || capture == .checkingPreviousSpeech || capture == .paused
         || associations.values.contains { $0.sessionId != sessionId }
       return associations.isEmpty || !needsResolution ? [] : [.resolve(pendingAssociations)]
     case .checkpointFailed(let revision):

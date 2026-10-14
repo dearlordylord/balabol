@@ -10,6 +10,8 @@ import Observation
 @MainActor @Observable public final class VoiceViewModel {
   public private(set) var state = VoiceState()
   public private(set) var output = VoiceOutputState()
+  @ObservationIgnored private var interpretingCommands = false
+  @ObservationIgnored private var localStopBarrier: Task<Void, Never>?
   @ObservationIgnored private var languageTask: Task<Void, Never>?
   @ObservationIgnored private var outputTask: Task<Void, Never>?
   @ObservationIgnored private var interruptionTask: Task<Void, Never>?
@@ -18,6 +20,8 @@ import Observation
   @ObservationIgnored private let media: any VoiceMedia
   @ObservationIgnored private let retryClock: any VoiceRetryClock
   @ObservationIgnored private let checkpoint: any VoiceAdmissionCheckpoint
+  @ObservationIgnored private let interruptConversation:
+    @MainActor ([UUID], Task<Void, Never>) -> Void
   @ObservationIgnored private let refreshConversation: @MainActor () -> Void
   @ObservationIgnored private var retryTask: Task<Void, Never>?
   @ObservationIgnored private var restoreTask: Task<Void, Never>?
@@ -35,6 +39,7 @@ import Observation
     checkpoint: any VoiceAdmissionCheckpoint = VolatileVoiceAdmissionCheckpoint(),
     retryClock: any VoiceRetryClock = SystemVoiceRetryClock(),
     refreshConversation: @escaping @MainActor () -> Void = {},
+    interruptConversation: @escaping @MainActor ([UUID], Task<Void, Never>) -> Void = { _, _ in },
     accepted: @escaping @MainActor (ConversationMessage) -> Void
   ) {
     self.control = control
@@ -43,6 +48,7 @@ import Observation
     self.retryClock = retryClock
     self.checkpoint = checkpoint
     self.refreshConversation = refreshConversation
+    self.interruptConversation = interruptConversation
   }
   public func restore() async {
     guard !state.isRetired, !state.checkpointLoaded else { return }
@@ -61,16 +67,19 @@ import Observation
     receive(.loadLanguages)
     await languageTask?.value
   }
-  public func start() { receive(.start) }
-  public func end() {
-    cutOutput()
-    receive(.end)
+  public func start() {
+    observePlatform()
+    receive(.start)
   }
+  public func resume() { receive(.resume) }
+  private func observePlatform() {
+    media.observePlatform { [weak self] event in self?.receive(.platform(event)) }
+  }
+  public func end() { receive(.end) }
   public func inputIntent(_ deliveryId: UUID) { cutOutput(nextInput: deliveryId) }
   public func speechStarted() { cutOutput() }
   public func toggleMute() { receive(.mute) }
   public func shutdown() async {
-    cutOutput()
     receive(.shutdown)
     // Fence and quiesce every producer before draining the latest checkpoint.
     await languageTask?.value
@@ -93,10 +102,31 @@ import Observation
     outputTask = nil
   }
   private func receive(_ event: VoiceEvent) {
+    localStopBarrier = nil
+    interpretingCommands = true
+    defer {
+      localStopBarrier = nil
+      interpretingCommands = false
+    }
     for command in state.transition(event) { execute(command) }
   }
   private func execute(_ command: VoiceCommand) {
     switch command {
+    case .platformFence(let inputs):
+      let captureStopped = media.fenceCapture()
+      cutOutput()
+      let outputStopped = stopLocalOutput()
+      let stopped = Task {
+        await captureStopped.value
+        await outputStopped.value
+      }
+      localStopBarrier = stopped
+      interruptConversation(inputs, stopped)
+    case .cutOutput: cutOutput()
+    case .interruptHandedInputs(let inputs):
+      interruptConversation(inputs, stopLocalOutput())
+      receiveOutput(.cut(nextInput: nil, pendingInputs: inputs))
+    case .retirePlatformObservation: media.retirePlatformObservation()
     case .refreshLanguages: receive(.loadLanguages)
     case .loadLanguages(let request):
       let control = control
@@ -118,19 +148,25 @@ import Observation
       let media = media
       let priorOutput = outputTask
       let priorInterruption = interruptionTask
+      let priorSeal = serverEndTask
       let priorStart = startTask
       let priorStop = stopTask
       startTask = Task { [weak self] in
         await self?.restore()
         await priorStart?.value
         await priorStop?.value
+        await priorSeal?.value
+        if let draining = self?.state.drainingSession {
+          self?.receive(.sealFailed(draining))
+          return
+        }
         await priorOutput?.value
         await priorInterruption?.value
         guard !Task.isCancelled, self?.state.checkpointLoaded == true else { return }
         let allowed = await media.requestPermission()
         self?.receive(.permission(generation, allowed))
         guard allowed, !Task.isCancelled, self?.state.generation == generation,
-          self?.state.capture == .connecting
+          self?.state.isConnecting == true
         else { return }
         var join: VoiceJoin?
         do {
@@ -139,7 +175,7 @@ import Observation
           else { return }
           let value = try await control.start(requestId: requestId, muted: requestedMute)
           join = value
-          guard !Task.isCancelled, self?.state.capture == .connecting else {
+          guard !Task.isCancelled, self?.state.isConnecting == true else {
             try? await control.end(sessionId: value.sessionId)
             return
           }
@@ -169,7 +205,7 @@ import Observation
               }
             })
           guard !Task.isCancelled, self?.state.generation == generation,
-            self?.state.capture == .connecting
+            self?.state.isConnecting == true
           else {
             await media.disconnect()
             try? await control.end(sessionId: value.sessionId)
@@ -190,17 +226,37 @@ import Observation
       receiveOutput(.disconnected)
       let media = media
       let control = control
+      let captureStopped = media.fenceCapture()
+      let outputStopped = stopLocalOutput()
+      let stopped = Task {
+        await captureStopped.value
+        await outputStopped.value
+      }
+      localStopBarrier = stopped
       if let session {
         let previous = serverEndTask
         previous?.cancel()
-        serverEndTask = Task {
+        serverEndTask = Task { [weak self] in
+          await stopped.value
           await previous?.value
           guard !Task.isCancelled else { return }
-          try? await control.end(sessionId: session)
+          do {
+            let page = try await control.seal(sessionId: session)
+            guard !Task.isCancelled else { return }
+            switch page {
+            case .ended(let snapshot): self?.receive(.drainedSession(snapshot))
+            case .producerUnavailable(let session, let incarnation):
+              self?.receive(.producerUnavailable(session, incarnation))
+            }
+          } catch {
+            guard !Task.isCancelled else { return }
+            self?.receive(.sealFailed(session))
+          }
         }
       }
       let previousStop = stopTask
       stopTask = Task { [weak self] in
+        await stopped.value
         await previousStop?.value
         await media.disconnect()
         self?.receive(.ended(generation))
@@ -341,6 +397,12 @@ import Observation
   private func receiveOutput(_ event: VoiceOutputEvent) {
     for command in output.transition(event) { executeOutput(command) }
   }
+  private func stopLocalOutput() -> Task<Void, Never> {
+    if interpretingCommands, let localStopBarrier { return localStopBarrier }
+    let stopped = media.stopOutput()
+    if interpretingCommands { localStopBarrier = stopped }
+    return stopped
+  }
   private func cutOutput(nextInput: UUID? = nil) {
     let pending = state.pendingAssociations.map(\.deliveryId)
     receiveOutput(.cut(nextInput: nextInput, pendingInputs: pending))
@@ -353,7 +415,7 @@ import Observation
       let generation = state.generation
       let priorOutput = outputTask
       priorOutput?.cancel()
-      let stopped = media.stopOutput()
+      let stopped = stopLocalOutput()
       let media = media
       let control = control
       outputTask = Task { [weak self] in
@@ -382,7 +444,7 @@ import Observation
       if active {
         outputRequest = UUID()
         outputTask?.cancel()
-        stopped = media.stopOutput()
+        stopped = stopLocalOutput()
       } else {
         stopped = Task {}
       }

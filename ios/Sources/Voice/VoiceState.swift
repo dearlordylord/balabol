@@ -7,7 +7,7 @@ import Foundation
 public struct VoiceState: Equatable, Sendable {
   public enum Capture: Equatable, Sendable {
     case idle, requestingMicrophone, connecting, reconnecting, hostUnavailable,
-      checkingPreviousSpeech, listening, muted, ending, ended
+      checkingPreviousSpeech, listening, muted, paused, resuming, ending, ended
     case failed(VoiceFailure)
   }
   public enum Admission: Equatable, Sendable {
@@ -65,6 +65,11 @@ public struct VoiceState: Equatable, Sendable {
   internal var tentativeUtterance: UUID?
   internal var muteInFlight = false
   public init() {}
+  internal var isConnecting: Bool { capture == .connecting || capture == .resuming }
+  internal var resumeProbe = false
+  internal var drainingSession: UUID?
+  internal var drainingIncarnation: UUID?
+  public var canResume: Bool { capture == .paused && wantsListening }
   public var isChangingMute: Bool { muteInFlight }
   public var canStart: Bool {
     switch capture {
@@ -88,6 +93,11 @@ enum VoiceEvent {
   case languagesLoaded(UUID, Result<VoiceLanguages, VoiceFailure>)
   case snapshot(Int, VoiceSnapshot)
   case start
+  case platform(VoicePlatformEvent)
+  case drainedSession(VoiceSnapshot)
+  case producerUnavailable(UUID, UUID)
+  case sealFailed(UUID)
+  case resume
   case shutdown
   case permission(Int, Bool)
   case bootstrapped(Int, UUID, UUID)
@@ -121,6 +131,10 @@ enum VoiceCommand {
   case checkpoint(Int, [VoiceAdmissionAssociation])
   case resolve([VoiceAdmissionAssociation])
   case refreshConversation
+  case interruptHandedInputs([UUID])
+  case platformFence([UUID])
+  case cutOutput
+  case retirePlatformObservation
 }
 
 extension VoiceState {
@@ -139,6 +153,8 @@ extension VoiceState {
       }
     }
     switch event {
+    case .platform, .resume, .drainedSession, .sealFailed, .producerUnavailable:
+      return platformTransition(event)
     case .loadLanguages:
       guard languageRequest == nil else { return [] }
       let request = UUID()
@@ -174,7 +190,8 @@ extension VoiceState {
       snapshotSequence = page.sequence
       var commands: [VoiceCommand] = []
       if sequence < page.firstSequence - 1 { sequence = page.firstSequence - 1 }
-      for pending in page.pending where pending.isValid {
+      for pending in page.pending
+      where pending.isValid && pending.backendIncarnationId == page.backendIncarnationId {
         let association = VoiceAdmissionAssociation(
           backendIncarnationId: pending.backendIncarnationId,
           sessionId: page.sessionId, deliveryId: pending.deliveryId)
@@ -204,23 +221,26 @@ extension VoiceState {
       capture = .requestingMicrophone
       return [.begin(generation)]
     case .permission(let id, let allowed):
-      guard id == generation, capture == .requestingMicrophone || capture == .reconnecting else {
+      guard id == generation,
+        capture == .requestingMicrophone || capture == .reconnecting || capture == .resuming
+      else {
         return []
       }
-      capture = allowed ? .connecting : .failed(.permissionDenied)
+      capture = allowed ? (resumeProbe ? .resuming : .connecting) : .failed(.permissionDenied)
       if !allowed { intent = .off }
       return []
     case .bootstrapped(let id, let session, let incarnation):
-      guard id == generation, capture == .connecting else { return [] }
+      guard id == generation, isConnecting else { return [] }
       sessionId = session
       backendIncarnationId = incarnation
       bootstrapKnown = true
       return []
     case .connected(let id, let session, let actuallyMuted):
-      guard id == generation, capture == .connecting, sessionId == session, wantsListening else {
+      guard id == generation, isConnecting, sessionId == session, wantsListening else {
         return []
       }
       retryStep = 0
+      resumeProbe = false
       capture =
         hasPendingAdmission ? .checkingPreviousSpeech : (actuallyMuted ? .muted : .listening)
       var commands: [VoiceCommand] = [
@@ -244,7 +264,8 @@ extension VoiceState {
       tentative = ""
       markChecking()
       var commands: [VoiceCommand] = [
-        .cancelRetry, .cancelStart, .disconnect(generation, sessionId),
+        .cutOutput, .retirePlatformObservation, .cancelRetry, .cancelStart,
+        .disconnect(generation, sessionId),
       ]
       if !associations.isEmpty, stagedFinals.isEmpty {
         commands.append(.resolve(pendingAssociations))
@@ -257,7 +278,7 @@ extension VoiceState {
     case .mute:
       guard wantsListening, !muteInFlight else { return [] }
       intent = .listening(muted: !wantsMuted)
-      if capture == .connecting, bootstrapKnown { return transportFailed(.connection) }
+      if isConnecting, bootstrapKnown { return transportFailed(.connection) }
       guard let sessionId, capture == .listening || capture == .muted else { return [] }
       muteInFlight = true
       return [.setMuted(generation, sessionId, wantsMuted)]
@@ -332,4 +353,112 @@ extension VoiceState {
       return []
     }
   }
+}
+
+/// Platform observations describe availability; only user Resume authorizes a
+/// fresh SDK-owned probe. A recommendation never reopens capture or old output.
+public enum VoicePlatformEvent: Equatable, Sendable {
+  case interrupted
+  case resumeRecommended(Bool)
+  case routeChanged(privateOutputRemoved: Bool)
+  case servicesLost, servicesReset
+}
+
+extension VoiceState {
+  mutating func platformTransition(_ event: VoiceEvent) -> [VoiceCommand] {
+    switch event {
+    case .drainedSession, .producerUnavailable: break
+    default: guard wantsListening else { return [] }
+    }
+    switch event {
+    case .producerUnavailable(let session, let incarnation):
+      guard session == drainingSession, incarnation == drainingIncarnation else { return [] }
+      drainingSession = nil
+      drainingIncarnation = nil
+      // Closure authorizes a fresh producer only. Known admissions retain their
+      // exact association and checkpoint; absence never means NotAccepted.
+      return []
+    case .sealFailed(let session):
+      guard session == drainingSession else { return [] }
+      capture = .paused
+      resumeProbe = false
+      return [.cancelStart]
+    case .drainedSession(let page):
+      guard page.sessionId == drainingSession, page.backendIncarnationId == drainingIncarnation
+      else { return [] }
+      guard page.status == "ended" else { return platformTransition(.sealFailed(page.sessionId)) }
+      drainingSession = nil
+      drainingIncarnation = nil
+      var commands: [VoiceCommand] = []
+      for pending in page.pending
+      where pending.isValid && pending.backendIncarnationId == page.backendIncarnationId {
+        let association = VoiceAdmissionAssociation(
+          backendIncarnationId: pending.backendIncarnationId, sessionId: page.sessionId,
+          deliveryId: pending.deliveryId)
+        if let receipt = pending.receipt {
+          commands += acceptedAdmission(association, receipt: receipt, expectedText: pending.text)
+        } else {
+          commands += stageFinal(
+            association, text: pending.text, languageSpans: pending.languageSpans)
+        }
+      }
+      if !bootstrapKnown { startMuted = wantsMuted || hasPendingAdmission }
+      let handed = page.pending.filter(\.isValid).map(\.deliveryId)
+      if !handed.isEmpty { commands.append(.interruptHandedInputs(Array(handed.prefix(2)))) }
+      return commands
+    case .resume:
+      guard canResume else { return [] }
+      generation += 1
+      startRequestId = UUID()
+      startMuted = wantsMuted || hasPendingAdmission
+      bootstrapKnown = false
+      sessionId = nil
+      backendIncarnationId = nil
+      sequence = 0
+      snapshotSequence = -1
+      resumeProbe = true
+      capture = .resuming
+      var commands: [VoiceCommand] = []
+      if let drainingSession { commands.append(.disconnect(generation, drainingSession)) }
+      commands.append(.begin(generation))
+      return commands
+    case .platform(let value):
+      switch value {
+      case .resumeRecommended, .servicesReset:
+        return []
+      case .routeChanged(false): return []
+      case .interrupted, .servicesLost, .routeChanged(true):
+        guard capture != .paused, capture != .ending, capture != .ended else { return [] }
+        let oldSession = sessionId
+        drainingSession = oldSession
+        drainingIncarnation = backendIncarnationId
+        sessionId = nil
+        backendIncarnationId = nil
+        generation += 1
+        capture = .paused
+        resumeProbe = false
+        muteInFlight = false
+        tentative = ""
+        tentativeUtterance = nil
+        markChecking()
+        var commands: [VoiceCommand] = [
+          .platformFence(pendingAssociations.map(\.deliveryId)), .cancelRetry, .cancelStart,
+          .disconnect(generation, oldSession),
+        ]
+        if !associations.isEmpty, stagedFinals.isEmpty {
+          commands.append(.resolve(pendingAssociations))
+        }
+        return commands
+      }
+    default: return []
+    }
+  }
+}
+
+/// Notification delivery is independent of the RTC room lifetime. A capture
+/// epoch rejects notices queued before mute, pause or a new recovery attempt.
+internal struct VoicePlatformEpoch: Sendable {
+  private(set) var identity = UUID()
+  mutating func advance(to identity: UUID) { self.identity = identity }
+  func accepts(_ identity: UUID) -> Bool { self.identity == identity }
 }

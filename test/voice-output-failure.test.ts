@@ -149,14 +149,20 @@ effectIt.effect("the Conversation delivery deadline fences late synthesis and ow
         outputEpoch: output.outputEpoch,
         trackSid: output.manifest.trackSid
       })
-      yield* TestClock.adjust(31000)
+      // Keep control alive so its lease expiry cannot substitute for the reply deadline.
+      yield* TestClock.adjust(20000)
+      expect((yield* voice.snapshot(join.sessionId, 0)).status).toBe("active")
+      yield* TestClock.adjust(11000)
       const snapshot = yield* voice.snapshot(join.sessionId, 0)
+      expect(snapshot.status).toBe("active")
       expect(snapshot.output?.status).toBe("Failed")
       expect(snapshot.output?.error?.code).toBe("AudioUnavailable")
       const turn = yield* conversation.currentTurn()
       expect(turn?.reply.state).toBe("Interrupted")
       expect(turn?.reply.text).toBe("This is a fixture reply.")
       expect(turn?.reply.receipt?.outcome).toBe("interrupted")
+      // Retire unrelated recurring lease polling before checking the late provider boundary.
+      yield* voice.end(join.sessionId)
       yield* TestClock.adjust(60000)
       expect(transport.captured).toEqual([])
       expect((yield* conversation.page({ limit: 100 })).messages).toHaveLength(2)

@@ -10,7 +10,7 @@ import {
   TrackPublishOptions,
   TrackSource
 } from "@livekit/rtc-node"
-import { Effect, Redacted, Schema, Clock, Fiber, Exit } from "effect"
+import { Effect, Redacted, Schema, Clock, Fiber, Exit, Deferred } from "effect"
 import { describe, expect, it } from "vitest"
 import { VoiceTransport, liveKitLayer, VoiceFrame, VoiceEvent } from "../src/voice/index.ts"
 const io = <A>(operation: () => Promise<A>) => Effect.promise(operation)
@@ -23,6 +23,7 @@ const waveformFrequency = 440
 const waveformAmplitude = 1200
 const audioQueueMillis = 100
 const tooLarge = 20000
+const disconnectObservationMillis = 5000
 describe.skipIf(liveKitFixturePath === undefined)(
   "real LiveKit adapter contract (synthetic audio, not microphone evidence)",
   () => {
@@ -33,14 +34,14 @@ describe.skipIf(liveKitFixturePath === undefined)(
           Effect.gen(function* () {
             const transport = yield* VoiceTransport
             const frames: unknown[] = []
-            let disconnected = false
+            const disconnected = yield* Deferred.make<void>()
             let joined = false
             const identity = { sessionId: randomUUID(), roomName: randomUUID(), participantIdentity: randomUUID() }
             const opened = yield* transport.open(
               identity,
               (_track, frame) => frames.push(frame),
               () => {
-                disconnected = true
+                Deferred.doneUnsafe(disconnected, Effect.void)
               },
               () => {
                 joined = true
@@ -126,8 +127,9 @@ describe.skipIf(liveKitFixturePath === undefined)(
             yield* io(() => local.publishTrack(next, publishOptions))
             yield* Effect.sleep(100)
             yield* io(() => client.disconnect())
-            yield* Effect.sleep(50)
-            expect(disconnected).toBe(true)
+            // The remote departure callback follows signaling propagation, not a fixed delay.
+            yield* Deferred.await(disconnected).pipe(Effect.timeout(disconnectObservationMillis))
+            expect(yield* Deferred.isDone(disconnected)).toBe(true)
             yield* opened.connection.close()
             yield* opened.connection.close()
           })

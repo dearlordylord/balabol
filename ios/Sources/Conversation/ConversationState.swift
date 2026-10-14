@@ -54,6 +54,13 @@ public struct ConversationState: Equatable, Sendable {
     case failed(ConversationFailure)
   }
 
+  // At most one displayed input plus two already handed voice finals. This
+  // cancellation fence is independent of draft, Memory and reply observation.
+  internal struct PlatformCancellation: Equatable, Sendable {
+    let request: Request
+    var responseId: UUID?
+  }
+  internal var platformCancellations: [UUID: PlatformCancellation] = [:]
   public enum Reply: Equatable, Sendable {
     case idle
     case observing(Request, inputDeliveryId: UUID, latest: ReplySnapshot?)

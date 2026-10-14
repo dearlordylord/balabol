@@ -4,6 +4,10 @@ import Foundation
 /// Commands describe work; they do not execute it or acquire resources here.
 enum ConversationEvent {
   case start
+  case platformInterrupt([UUID])
+  case platformTargetLoaded(ConversationState.Request, UUID, ReplySnapshot?)
+  case platformInterrupted(ConversationState.Request, UUID, ReplySnapshot?)
+  case platformInterruptionFailed(ConversationState.Request, UUID)
   case voiceAccepted(ConversationMessage)
   case refreshReconnectDisplay
   case reconnectDisplayLoaded(
@@ -31,6 +35,10 @@ enum ConversationEvent {
 
 enum ConversationCommand {
   case inputIntent(UUID)
+  case findPlatformTarget(ConversationState.Request, UUID)
+  case interruptPlatformTarget(ConversationState.Request, UUID, UUID)
+  case cancelPlatformInterruptions
+  case cancelPlatformTargets([ConversationState.Request])
   case current(ConversationState.Request)
   case retryReply(ConversationState.Request, UUID)
   case cancelCurrent
@@ -51,8 +59,14 @@ enum ConversationCommand {
 extension ConversationState {
   mutating func transition(_ event: ConversationEvent) -> [ConversationCommand] {
     switch event {
+    case .platformInterrupt, .platformTargetLoaded, .platformInterrupted,
+      .platformInterruptionFailed:
+      return platformInterruptionTransition(event)
     case .voiceAccepted(let receipt):
       guard isActive, receipt.isValid, receipt.role == .user, merge([receipt]) else { return [] }
+      if let target = platformCancellations[receipt.deliveryId] {
+        return [.findPlatformTarget(target.request, receipt.deliveryId)]
+      }
       return []
     case .start:
       guard isActive, case .unloaded = draft else { return [] }
@@ -162,6 +176,7 @@ extension ConversationState {
       }
     case .retryReply:
       guard canRetryReply, case .providerFailed(let input, _, _, _) = reply else { return [] }
+      platformCancellations[input] = nil
       currentRequest = nil
       let request = request()
       replyRetryRequest = request
@@ -328,9 +343,10 @@ extension ConversationState {
       }
       if case .loading = draft { draft = .unloaded }
       interruptionRecoveries.removeAll()
+      platformCancellations = [:]
       return [
         .cancelCurrent, .cancelSend, .cancelHistory, .cancelReply, .cancelInterruptionRecoveries,
-        .cancelReconnectDisplay,
+        .cancelReconnectDisplay, .cancelPlatformInterruptions,
       ]
     case .drained:
       guard case .stopping = connection else { return [] }
@@ -552,5 +568,74 @@ extension ConversationState {
     }
     messages = merged.sorted { $0.position < $1.position }
     return true
+  }
+}
+
+extension ConversationState {
+  /// A platform cut cancels only the input/response captured by that intent.
+  /// Missing response identity is resolved only for those bounded inputs; a
+  /// later retry clears the fence before it can capture a new generation.
+  mutating func platformInterruptionTransition(_ event: ConversationEvent) -> [ConversationCommand]
+  {
+    guard isActive else { return [] }
+    switch event {
+    case .platformInterruptionFailed(let request, let input):
+      guard platformCancellations[input]?.request == request else { return [] }
+      interruptedReceiptFailure = .unavailable
+      return []
+    case .platformInterrupt(let handedInputs):
+      var inputs = Array(Set(handedInputs.prefix(2)))
+      var current: ReplySnapshot?
+      switch reply {
+      case .observing(_, let input, let latest), .observationFailed(let input, let latest, _):
+        current = latest
+        if !inputs.contains(input) { inputs.append(input) }
+      default: break
+      }
+      // A new platform intent supersedes obsolete displayed targets; the
+      // handed-final set itself is supplied from the bounded Voice owner.
+      let obsolete = platformCancellations.filter { !inputs.contains($0.key) }.values.map(\.request)
+      platformCancellations = platformCancellations.filter { inputs.contains($0.key) }
+      var commands: [ConversationCommand] =
+        obsolete.isEmpty ? [] : [.cancelPlatformTargets(obsolete)]
+      for input in inputs where platformCancellations[input] == nil {
+        guard platformCancellations.count < 3 else { break }
+        let request = request()
+        let snapshot = current?.inputDeliveryId == input ? current : nil
+        if snapshot?.isTerminal == true { continue }
+        platformCancellations[input] = PlatformCancellation(
+          request: request, responseId: snapshot?.responseId)
+        if let snapshot {
+          commands.append(.interruptPlatformTarget(request, input, snapshot.responseId))
+        } else if messages.contains(where: { $0.deliveryId == input && $0.role == .user }) {
+          commands.append(.findPlatformTarget(request, input))
+        }
+      }
+      return commands
+    case .platformTargetLoaded(let request, let input, let snapshot):
+      guard let target = platformCancellations[input], target.request == request,
+        let snapshot, snapshot.isValid, snapshot.inputDeliveryId == input,
+        target.responseId == nil || target.responseId == snapshot.responseId
+      else { return [] }
+      if snapshot.isTerminal {
+        platformCancellations[input] = nil
+        return []
+      }
+      platformCancellations[input]?.responseId = snapshot.responseId
+      return [.interruptPlatformTarget(request, input, snapshot.responseId)]
+    case .platformInterrupted(let request, let input, let snapshot):
+      guard let target = platformCancellations[input], target.request == request else { return [] }
+      guard let snapshot else {
+        platformCancellations[input] = nil
+        return []
+      }
+      guard snapshot.isValid, snapshot.inputDeliveryId == input,
+        snapshot.responseId == target.responseId
+      else { return [] }
+      platformCancellations[input] = nil
+      if let receipt = snapshot.receipt { _ = merge([receipt]) }
+      return []
+    default: return []
+    }
   }
 }

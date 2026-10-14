@@ -16,14 +16,37 @@ public struct HTTPConversationTransport: ConversationTransport {
     self.baseURL = baseURL
     self.session = session
   }
+  public func interruptReply(responseId: UUID, inputDeliveryId: UUID) async throws -> ReplySnapshot?
+  {
+    struct Target: Encodable {
+      let responseId: UUID
+      let inputDeliveryId: UUID
+    }
+    var request = URLRequest(url: baseURL.appendingPathComponent("conversation/replies/interrupt"))
+    request.httpMethod = "POST"
+    request.timeoutInterval = 15
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try JSONEncoder().encode(
+      Target(responseId: responseId, inputDeliveryId: inputDeliveryId))
+    let result = try await execute(request, as: ReplySnapshot?.self)
+    guard
+      result.map({
+        $0.isValid && $0.responseId == responseId && $0.inputDeliveryId == inputDeliveryId
+      }) ?? true
+    else {
+      throw ConversationFailure.invalidResponse
+    }
+    return result
+  }
   public func currentTurn() async throws -> CurrentTurn? {
     var request = URLRequest(url: baseURL.appendingPathComponent("conversation/current"))
     request.timeoutInterval = 15
     return try await execute(request, as: CurrentTurn?.self)
   }
   public func retryReply(for inputDeliveryId: UUID) async throws -> ReplySnapshot {
-    var request = URLRequest(url: baseURL.appendingPathComponent(
-      "conversation/replies/" + inputDeliveryId.uuidString + "/retry"))
+    var request = URLRequest(
+      url: baseURL.appendingPathComponent(
+        "conversation/replies/" + inputDeliveryId.uuidString + "/retry"))
     request.httpMethod = "POST"
     request.timeoutInterval = 15
     return try await execute(request, as: ReplySnapshot.self)

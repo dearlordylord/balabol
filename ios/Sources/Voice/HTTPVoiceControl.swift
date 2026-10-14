@@ -112,20 +112,36 @@ public actor HTTPVoiceControl: VoiceControl {
       body: JSONEncoder().encode(MuteBody(muted: muted)), sessionId: sessionId)
     _ = try validatedSnapshot(data, sessionId: sessionId, after: 0)
   }
-  public func end(sessionId: UUID) async throws {
-    let data = try await request(
-      "voice/sessions/\(sessionId.uuidString)/end", body: Data("{}".utf8), sessionId: sessionId)
-    _ = try validatedSnapshot(data, sessionId: sessionId, after: 0)
-    pruneCapabilities()
+  public func end(sessionId: UUID) async throws { _ = try await seal(sessionId: sessionId) }
+  public func seal(sessionId: UUID) async throws -> VoiceSealResult {
+    guard let incarnation = incarnations[sessionId] else { throw VoiceFailure.invalidResponse }
+    do {
+      let data = try await request(
+        "voice/sessions/\(sessionId.uuidString)/end", body: Data("{}".utf8), sessionId: sessionId,
+        producerIncarnation: incarnation)
+      let page = try validatedSnapshot(data, sessionId: sessionId, after: 0)
+      guard page.status == "ended" else { throw VoiceFailure.invalidResponse }
+      pruneCapabilities()
+      return .ended(page)
+    } catch let closure as AbsentProducer {
+      return .producerUnavailable(
+        sessionId: closure.sessionId, backendIncarnationId: closure.incarnation)
+    }
+  }
+  private struct AbsentProducer: Error {
+    let sessionId: UUID
+    let incarnation: UUID
   }
   public func retain(admissions: [VoiceAdmissionAssociation]) async {
     retainedSessions = Set(admissions.prefix(2).map(\.sessionId))
     pruneCapabilities()
   }
   private func pruneCapabilities() {
-    let now = Date().timeIntervalSince1970 * 1000
+    // Lease deadlines express availability, not producer closure. Preserve
+    // bounded current/draining Join authority until seal or replacement, even
+    // when a late admission checkpoint arrives after its control deadline.
     for id in capabilities.keys
-    where (id != currentSession && !retainedSessions.contains(id)) || (deadlines[id] ?? 0) <= now {
+    where id != currentSession && !retainedSessions.contains(id) {
       capabilities.removeValue(forKey: id)
       publishers.removeValue(forKey: id)
       incarnations.removeValue(forKey: id)
@@ -170,6 +186,14 @@ public actor HTTPVoiceControl: VoiceControl {
       body: JSONEncoder().encode(target), sessionId: sessionId)
     return try validatedSnapshot(data, sessionId: sessionId, after: 0)
   }
+  internal static func isProducerClosure(statusCode: Int, data: Data) -> Bool {
+    guard statusCode == 404,
+      let failure = try? JSONDecoder().decode(FailureBody.self, from: data),
+      failure.error.code == "SessionNotFound", failure.error.code.utf16.count <= 100,
+      failure.error.message.utf16.count <= 1000
+    else { return false }
+    return true
+  }
   private struct FailureBody: Decodable {
     let error: VoicePending.Failure
   }
@@ -179,7 +203,10 @@ public actor HTTPVoiceControl: VoiceControl {
       throw VoiceFailure.invalidResponse
     }
   }
-  private func request(_ path: String, body: Data? = nil, after: Int? = nil, sessionId: UUID? = nil)
+  private func request(
+    _ path: String, body: Data? = nil, after: Int? = nil, sessionId: UUID? = nil,
+    producerIncarnation: UUID? = nil
+  )
     async throws -> Data
   {
     guard
@@ -206,6 +233,12 @@ public actor HTTPVoiceControl: VoiceControl {
       throw VoiceFailure.invalidResponse
     }
     guard (200..<300).contains(http.statusCode) else {
+      if let sessionId, let producerIncarnation,
+        incarnations[sessionId] == producerIncarnation,
+        Self.isProducerClosure(statusCode: http.statusCode, data: data)
+      {
+        throw AbsentProducer(sessionId: sessionId, incarnation: producerIncarnation)
+      }
       if let failure = try? JSONDecoder().decode(FailureBody.self, from: data),
         !failure.error.code.isEmpty, !failure.error.message.isEmpty
       {

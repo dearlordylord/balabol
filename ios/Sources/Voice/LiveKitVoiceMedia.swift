@@ -7,6 +7,9 @@
   /// LiveKit AudioManager.shared automatic AVAudioSession configuration is the
   /// sole audio owner. No AVAudioEngine or manual audio-session activation here.
   @MainActor public final class LiveKitVoiceMedia: VoiceMedia {
+    private var platformObservers: [NSObjectProtocol] = []
+    private var observationEpoch = UUID()
+    private let platformCaptureEpoch = OSAllocatedUnfairLock(initialState: VoicePlatformEpoch())
     private var room: Room?
     private var delegate: VoiceRoomDelegate?
     private var generation = 0
@@ -18,6 +21,7 @@
     private var outputPublication: RemoteTrackPublication?
     private var microphone: LocalAudioTrack?
     private var renderer: VoiceSpeechRenderer?
+    private var captureStopTask: Task<Void, Never>?
     private var speechTask: Task<Void, Never>?
     private var speechStartedCallback: (@MainActor @Sendable () -> Void)?
     #if DEBUG
@@ -38,6 +42,98 @@
       #endif
       LiveKitSDK.disableLogging()
     }
+    public func observePlatform(
+      _ receive: @escaping @MainActor @Sendable (VoicePlatformEvent) -> Void
+    ) {
+      guard platformObservers.isEmpty else { return }
+      let epoch = observationEpoch
+      let captureEpoch = platformCaptureEpoch
+      let deliver: @Sendable (VoicePlatformEvent) -> Void = { [weak self] event in
+        let captured = captureEpoch.withLock { $0.identity }
+        Task { @MainActor in
+          guard let self, self.observationEpoch == epoch,
+            captureEpoch.withLock({ $0.accepts(captured) })
+          else { return }
+          receive(event)
+        }
+      }
+      let center = NotificationCenter.default
+      func add(
+        _ name: Notification.Name, decode: @escaping @Sendable (Notification) -> VoicePlatformEvent?
+      ) {
+        platformObservers.append(
+          center.addObserver(forName: name, object: AVAudioSession.sharedInstance(), queue: nil) {
+            notice in
+            if let event = decode(notice) { deliver(event) }
+          })
+      }
+      if #available(iOS 27.0, *) {
+        add(AVAudioSession.didBecomeInactiveNotification) { notice in
+          guard
+            let context = notice.userInfo?[AVAudioSession.deactivationContextKey]
+              as? AVAudioSession.DeactivationContext,
+            context.source == .system
+          else { return nil }
+          // SDK-requested deactivation during mute/cleanup is not a call.
+          return .interrupted
+        }
+        add(AVAudioSession.resumptionRecommendationNotification) { notice in
+          guard
+            let context = notice.userInfo?[AVAudioSession.resumptionContextKey]
+              as? AVAudioSession.ResumptionContext
+          else { return nil }
+          return .resumeRecommended(context.recommendation == .shouldResume)
+        }
+      } else {
+        add(AVAudioSession.interruptionNotification) { notice in
+          guard
+            let raw = (notice.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue,
+            let type = AVAudioSession.InterruptionType(rawValue: raw)
+          else { return nil }
+          if type == .began { return .interrupted }
+          let options =
+            (notice.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber)?.uintValue ?? 0
+          return .resumeRecommended(
+            AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume))
+        }
+      }
+      add(AVAudioSession.routeChangeNotification) { notice in
+        guard
+          let previous = notice.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
+            as? AVAudioSessionRouteDescription
+        else { return nil }
+        let privateTypes: Set<AVAudioSession.Port> = [
+          .headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+        ]
+        let wasPrivate = previous.outputs.contains { privateTypes.contains($0.portType) }
+        let current = AVAudioSession.sharedInstance().currentRoute.outputs
+        let nowPrivate = current.contains { privateTypes.contains($0.portType) }
+        return .routeChanged(
+          privateOutputRemoved: wasPrivate && !nowPrivate
+            && current.contains { $0.portType == .builtInSpeaker })
+      }
+      add(AVAudioSession.mediaServicesWereLostNotification) { _ in .servicesLost }
+      add(AVAudioSession.mediaServicesWereResetNotification) { _ in .servicesReset }
+    }
+    public func retirePlatformObservation() {
+      observationEpoch = UUID()
+      for token in platformObservers { NotificationCenter.default.removeObserver(token) }
+      platformObservers = []
+    }
+    public func fenceCapture() -> Task<Void, Never> {
+      let epoch = UUID()
+      platformCaptureEpoch.withLock { $0.advance(to: epoch) }
+      generation += 1
+      renderer?.resetOnset()
+      speechTask?.cancel()
+      if let captureStopTask { return captureStopTask }
+      let candidate = room
+      let task = Task {
+        if let candidate { _ = try? await candidate.localParticipant.setMicrophone(enabled: false) }
+      }
+      captureStopTask = task
+      return task
+    }
     public func requestPermission() async -> Bool {
       switch AVCaptureDevice.authorizationStatus(for: .audio) {
       case .authorized: return true
@@ -50,8 +146,13 @@
       speechStarted: @escaping @MainActor @Sendable () -> Void,
       outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
     ) async throws {
+      let epoch = UUID()
+      platformCaptureEpoch.withLock { $0.advance(to: epoch) }
       generation += 1
       let expected = generation
+      await captureStopTask?.value
+      captureStopTask = nil
+      guard expected == generation, !Task.isCancelled else { throw CancellationError() }
       publisher = join.backendParticipantIdentity
       self.outputReceived = outputReceived
       speechStartedCallback = speechStarted
@@ -84,6 +185,9 @@
               let track = publication.track as? LocalAudioTrack, !publication.isMuted
             else { throw VoiceFailure.capture }
             installMicrophone(track, generation: expected, speechStarted: speechStarted)
+            // Publication alone is signaling, not usable capture. A fresh
+            // readable SDK renderer frame qualifies this attempt, even silence.
+            try await awaitCapture(generation: expected)
           }
         } catch {
           throw VoiceFailure.capture
@@ -102,6 +206,14 @@
         }
         throw error
       }
+    }
+    private func awaitCapture(generation expected: Int) async throws {
+      for _ in 0..<100 {
+        guard expected == generation, !Task.isCancelled else { throw CancellationError() }
+        if renderer?.hasReadableCapture == true { return }
+        try await Task.sleep(for: .milliseconds(50))
+      }
+      throw VoiceFailure.capture
     }
     private func installMicrophone(
       _ track: LocalAudioTrack, generation expected: Int,
@@ -153,6 +265,8 @@
       if evidenceEnabled { startEvidence(track, generation: expected) }
     }
     public func mute(_ muted: Bool) async throws {
+      let epoch = UUID()
+      platformCaptureEpoch.withLock { $0.advance(to: epoch) }
       guard let room else { throw VoiceFailure.capture }
       let expected = generation
       if muted, microphone == nil { return }
@@ -165,10 +279,12 @@
         renderer?.resetOnset()
         if !muted, let speechStartedCallback {
           installMicrophone(track, generation: expected, speechStarted: speechStartedCallback)
+          try await awaitCapture(generation: expected)
         }
       } catch { throw VoiceFailure.capture }
     }
     public func disconnect() async {
+      await captureStopTask?.value
       let stopped = stopOutput()
       speechTask?.cancel()
       speechTask = nil
@@ -373,6 +489,7 @@
   private final class VoiceSpeechRenderer: AudioRenderer {
     private struct State {
       var onsetTracker = VoiceOnsetTracker()
+      var readableCapture = false
       #if DEBUG
         var callbacks = 0
         var frames = 0
@@ -406,8 +523,12 @@
     }
     func resetOnset() {
       let epoch = UUID()
-      state.withLock { $0.onsetTracker.reset(epoch: epoch) }
+      state.withLock {
+        $0.onsetTracker.reset(epoch: epoch)
+        $0.readableCapture = false
+      }
     }
+    var hasReadableCapture: Bool { state.withLock { $0.readableCapture } }
     func acceptsOnset(_ notice: VoiceOnsetNotice) -> Bool {
       state.withLock { $0.onsetTracker.isCurrent(notice) }
     }
@@ -422,7 +543,10 @@
       }
       let energy = peak
       let onset = state.withLock { value in
-        value.onsetTracker.process(
+        value.readableCapture =
+          value.readableCapture || pcmBuffer.floatChannelData != nil
+          || pcmBuffer.int16ChannelData != nil
+        return value.onsetTracker.process(
           peak: energy, frameCount: Int(pcmBuffer.frameLength),
           sampleRate: pcmBuffer.format.sampleRate)
       }
@@ -488,7 +612,10 @@
       failure()
     }
     func room(_ room: Room, didFailToConnectWithError error: LiveKitError?) { failure() }
-    func roomIsReconnecting(_ room: Room) { failure() }
+    func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) { failure() }
+    func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
+      // Completion from this retired attempt cannot restore a newer capture.
+    }
     func room(
       _ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,
       forTopic topic: String, encryptionType: EncryptionType

@@ -105,6 +105,7 @@ public enum ConversationFailure: Error, Equatable, Sendable {
 }
 
 public protocol ConversationTransport: Sendable {
+  func interruptReply(responseId: UUID, inputDeliveryId: UUID) async throws -> ReplySnapshot?
   func currentTurn() async throws -> CurrentTurn?
   func retryReply(for inputDeliveryId: UUID) async throws -> ReplySnapshot
   func send(_ delivery: PendingDelivery) async throws -> ConversationMessage
@@ -139,4 +140,11 @@ public actor MemoryDraftStore: DraftStore {
   public init() {}
   public func load() throws -> SavedDraft { value }
   public func save(_ draft: SavedDraft) throws { value = draft }
+}
+
+extension ConversationTransport {
+  public func interruptReply(responseId: UUID, inputDeliveryId: UUID) async throws -> ReplySnapshot?
+  {
+    throw ConversationFailure.unavailable
+  }
 }

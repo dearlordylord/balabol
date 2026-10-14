@@ -29,11 +29,36 @@ final class VoiceCaptureUITests: XCTestCase {
       predicate: NSPredicate(format: "label == %@", "Listening"), object: status)
     let unmuteResult = await XCTWaiter.fulfillment(of: [unmuted], timeout: 10)
     XCTAssertEqual(unmuteResult, .completed)
-    app.buttons["end-voice"].tap()
+    // XCTest can resolve a button, pause for SpringBoard checks, then tap its
+    // obsolete coordinates after a reconnecting status wraps. Re-query only
+    // until the actual intent is acknowledged, within the original deadline.
+    let endDeadline = Date().addingTimeInterval(10)
+    var endAcknowledged = false
+    for _ in 0..<3 {
+      guard endDeadline.timeIntervalSinceNow > 0 else { break }
+      if ["Ending voice…", "Voice ended"].contains(status.label) {
+        endAcknowledged = true
+        break
+      }
+      let end = app.buttons["end-voice"]
+      guard end.exists else { break }
+      end.tap()
+      let acknowledged = XCTNSPredicateExpectation(
+        predicate: NSPredicate(format: "label IN %@", ["Ending voice…", "Voice ended"]),
+        object: status)
+      let acknowledgment = await XCTWaiter.fulfillment(
+        of: [acknowledged], timeout: min(1, max(0, endDeadline.timeIntervalSinceNow)))
+      if acknowledgment == .completed {
+        endAcknowledged = true
+        break
+      }
+    }
+    XCTAssertTrue(endAcknowledged, "End intent was not acknowledged: " + status.label)
     let ended = XCTNSPredicateExpectation(
       predicate: NSPredicate(format: "label == %@", "Voice ended"), object: status)
-    let endResult = await XCTWaiter.fulfillment(of: [ended], timeout: 10)
-    XCTAssertEqual(endResult, .completed)
+    let endResult = await XCTWaiter.fulfillment(
+      of: [ended], timeout: max(0, endDeadline.timeIntervalSinceNow))
+    XCTAssertEqual(endResult, .completed, "End did not settle: " + status.label)
     XCTAssertTrue(app.textFields["message-draft"].isEnabled)
   }
   func testRealSDKFixtureAudioPlaysAndTextIntentInterruptsBeforeAnotherInput() async throws {

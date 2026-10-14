@@ -164,6 +164,9 @@ private struct ConversationRoot: View {
         checkpoint: checkpoint,
         refreshConversation: { [weak conversation] in
           conversation?.refreshReconnectDisplay()
+        },
+        interruptConversation: { [weak conversation] inputs, stopped in
+          conversation?.interruptForPlatform(handedInputIds: inputs, afterLocalStop: stopped)
         }
       ) {
         [weak conversation] receipt in

@@ -4,6 +4,46 @@ import XCTest
 @testable import Voice
 
 @MainActor final class VoiceHTTPTests: XCTestCase {
+  func testSealWithoutSuccessfulJoinCannotInferProducerClosure() async throws {
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
+    let control = try HTTPVoiceControl(
+      baseURL: XCTUnwrap(URL(string: "http://127.0.0.1:1")), session: session)
+    do {
+      _ = try await control.seal(sessionId: UUID())
+      XCTFail("Unjoined scope cannot establish producer closure")
+    } catch {
+      XCTAssertEqual(error as? VoiceFailure, .invalidResponse)
+    }
+  }
+  func testExpiredDeadlineCheckpointRetainsKnownJoinAuthorityUntilSealed() async throws {
+    guard let endpoint = ProcessInfo.processInfo.environment["BALABOL_TEST_VOICE_SERVER"],
+      let url = URL(string: endpoint)
+    else { throw XCTSkip("Set BALABOL_TEST_VOICE_SERVER to an isolated LiveKit backend.") }
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
+    let control = try HTTPVoiceControl(baseURL: url, session: session)
+    let join = try await control.start(requestId: UUID(), muted: true)
+    let remaining = join.controlDeadlineAt - Date().timeIntervalSince1970 * 1000
+    guard remaining >= 0, remaining <= 35_000 else {
+      XCTFail("Expected bounded prototype control lease")
+      try? await control.end(sessionId: join.sessionId)
+      return
+    }
+    // The public checkpoint retention operation used to erase even the current
+    // successful Join after its lease expired. Deadline is not closure evidence.
+    try await Task.sleep(for: .milliseconds(Int(remaining) + 150))
+    await control.retain(admissions: [])
+    switch try await control.seal(sessionId: join.sessionId) {
+    case .ended(let page):
+      XCTAssertEqual(page.status, "ended")
+      XCTAssertEqual(page.sessionId, join.sessionId)
+      XCTAssertEqual(page.backendIncarnationId, join.backendIncarnationId)
+    case .producerUnavailable(let sessionId, let incarnation):
+      XCTAssertEqual(sessionId, join.sessionId)
+      XCTAssertEqual(incarnation, join.backendIncarnationId)
+    }
+  }
   func testRealBootstrapCapabilityAuthorizesOnlyItsSession() async throws {
     guard let endpoint = ProcessInfo.processInfo.environment["BALABOL_TEST_VOICE_SERVER"],
       let url = URL(string: endpoint)

@@ -178,6 +178,13 @@ public struct VoiceSnapshot: Decodable, Sendable {
   }
 }
 
+/// Producer closure is not an admission verdict. Known speech associations
+/// remain independently checking even when their media producer is absent.
+public enum VoiceSealResult: Sendable {
+  case ended(VoiceSnapshot)
+  case producerUnavailable(sessionId: UUID, backendIncarnationId: UUID)
+}
+
 public protocol VoiceControl: Sendable {
   func languages() async throws -> VoiceLanguages
   func start(requestId: UUID, muted: Bool) async throws -> VoiceJoin
@@ -185,12 +192,16 @@ public protocol VoiceControl: Sendable {
   func retain(admissions: [VoiceAdmissionAssociation]) async
   func snapshot(sessionId: UUID, after: Int) async throws -> VoiceSnapshot
   func mute(sessionId: UUID, muted: Bool) async throws
+  func seal(sessionId: UUID) async throws -> VoiceSealResult
   func end(sessionId: UUID) async throws
   func ready(sessionId: UUID, manifest: VoiceAudioManifest) async throws -> VoiceSnapshot
   func interrupt(sessionId: UUID, target: VoiceOutputIdentity) async throws -> VoiceSnapshot
 }
 
 @MainActor public protocol VoiceMedia: AnyObject {
+  func observePlatform(_ receive: @escaping @MainActor @Sendable (VoicePlatformEvent) -> Void)
+  func retirePlatformObservation()
+  func fenceCapture() -> Task<Void, Never>
   func requestPermission() async -> Bool
   func connect(
     _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,
@@ -206,4 +217,12 @@ extension VoiceControl {
   public func languages() async throws -> VoiceLanguages { throw VoiceFailure.connection }
   public func start() async throws -> VoiceJoin { try await start(requestId: UUID(), muted: false) }
   public func retain(admissions: [VoiceAdmissionAssociation]) async {}
+}
+
+extension VoiceMedia {
+  public func observePlatform(
+    _ receive: @escaping @MainActor @Sendable (VoicePlatformEvent) -> Void
+  ) {}
+  public func retirePlatformObservation() {}
+  public func fenceCapture() -> Task<Void, Never> { Task {} }
 }
