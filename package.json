@@ -28,7 +28,8 @@
     "check-all": "pnpm secrets:files && pnpm test:harness && node scripts/quality/cli.mjs all && pnpm check-format",
     "verify:effect-cohort": "node scripts/quality/cli.mjs cohort",
     "start": "node dist/bootstrap/main.js",
-    "dev:voice": "node scripts/dev-voice.mjs"
+    "dev:voice": "node scripts/dev-voice.mjs",
+    "subscription": "pnpm build && node dist/bootstrap/subscription-main.js"
   },
   "lint-staged": {
     "*.{md,json,yaml,yml}": "prettier --write",
@@ -73,6 +74,7 @@
   "dependencies": {
     "@firfi/unii": "0.1.0",
     "@livekit/rtc-node": "1.1.0",
+    "jose": "6.2.12",
     "livekit-server-sdk": "2.19.1"
   }
 }

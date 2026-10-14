@@ -49,6 +49,12 @@
       "dependencies": ["conversation", "speech-recognition", "speech-synthesis", "language"]
     },
     {
+      "name": "subscription",
+      "root": "src/subscription",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
       "name": "bootstrap",
       "root": "src/bootstrap",
       "entry": "index.ts",
@@ -60,7 +66,8 @@
         "speech-recognition",
         "speech-synthesis",
         "voice",
-        "language"
+        "language",
+        "subscription"
       ]
     }
   ]

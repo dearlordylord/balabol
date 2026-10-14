@@ -13,17 +13,18 @@
 
 Each entrypoint hides sequencing, state coordination and implementation files. Cross-owner callers may import only the declared entrypoint; local implementation imports remain local. A dependency permission is an upper bound, not an instruction to create an interface or import it prematurely. Keep types with the concept they describe.
 
-| Owner              | Policy and state it owns                                                                                 | Permitted domain dependencies                                |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Language           | Canonical BCP47 tags and validated UTF-16 text spans shared by language-aware contracts                  | None                                                         |
-| Conversation       | Sole conversation, input acceptance, response identity, interruption and recovery                        | Memory, answer generation, Language                          |
-| Memory             | Hosting real unii, durable adapter, bounded reads, summary readiness and independent compaction lifetime | Summary generation, Language                                 |
-| Answer generation  | Parsed reply requests and typed streaming/cancellation outcomes; fake reply implementation               | Language                                                     |
-| Summary generation | Parsed summary requests and typed completion/cancellation outcomes; fake summary implementation          | None                                                         |
-| Speech recognition | Bounded audio recognition and validated partial/final outcomes; fake recognition implementation          | Language                                                     |
-| Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake synthesis implementation              | Language                                                     |
-| Voice              | Temporary voice-session delivery, transport and stale-media rejection                                    | Conversation, speech recognition, speech synthesis, Language |
-| Bootstrap          | Configuration parsing and resource acquisition/release, assembling Layers and adapters                   | The owners above                                             |
+| Owner              | Policy and state it owns                                                                                             | Permitted domain dependencies                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Language           | Canonical BCP47 tags and validated UTF-16 text spans shared by language-aware contracts                              | None                                                         |
+| Conversation       | Sole conversation, input acceptance, response identity, interruption and recovery                                    | Memory, answer generation, Language                          |
+| Memory             | Hosting real unii, durable adapter, bounded reads, summary readiness and independent compaction lifetime             | Summary generation, Language                                 |
+| Answer generation  | Parsed reply requests and typed streaming/cancellation outcomes; fake reply implementation                           | Language                                                     |
+| Summary generation | Parsed summary requests and typed completion/cancellation outcomes; fake summary implementation                      | None                                                         |
+| Speech recognition | Bounded audio recognition and validated partial/final outcomes; fake recognition implementation                      | Language                                                     |
+| Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake synthesis implementation                          | Language                                                     |
+| Voice              | Temporary voice-session delivery, transport and stale-media rejection                                                | Conversation, speech recognition, speech synthesis, Language |
+| Subscription       | Backend-only ChatGPT authorization, protected credentials, refresh and model catalog; no conversation or agent state | None                                                         |
+| Bootstrap          | Configuration parsing and resource acquisition/release, assembling Layers and adapters                               | The owners above, Subscription                               |
 
 Language is a shared value-contract owner consumed by Conversation, Memory, answer generation, speech recognition, speech synthesis, Voice and Bootstrap. It validates canonical tags and text-span boundaries; it does not select response languages or providers. Conversation owns response-language preference from accepted annotations. Voice owns allowed-language configuration and validates it against the selected providers. Provider capabilities are explicit; canonical tags do not imply installed support.
 
@@ -60,3 +61,7 @@ Conversation owns validated send/page wire contracts, conflict admission and ser
 `SqliteMemoryStorage` is a composition-only resource, acquired once through `sqliteStorageLayer`. Bootstrap shares its held database and exclusive writer lease with the Memory adapter and Voice's speech-admission adapter. Voice owns its admission table, migrations and bounded recovery operations; it borrows the database and never closes it. Domain services do not receive SQL handles. Both consumers finish scoped work before the shared resource closes; standalone `sqliteLayer` retains the same acquisition and lifetime guarantees.
 
 Acceptance commits the complete raw batch and delivery association atomically. Post-raw tree persistence failure leaves the durable receipt available for retry. Memory serializes core append/recovery/shutdown and automatically closes and reconstructs a failed unii session on the next admitted send. The underlying durable adapter and exclusive lease remain acquired across session recovery. Persistent failure is bounded to one recovery attempt per send and remains a typed error; a later send resumes once the store recovers. Acknowledgement is durable input acceptance, independent of summary readiness. Bounded history queries do not imply bounded unii startup hydration. Tests exercise the real conversation seam and temporary SQLite database, socket transport, injected persistence failure and actual process termination.
+
+## Subscription connection
+
+Subscription owns its OAuth attempt, validated account connection, protected credential persistence and serialized refresh. Bootstrap mounts a separate loopback-only setup console; it is never included in phone or Tailscale control routes. Answer and summary adapters may later consume its narrow authenticated capability, while Conversation and unii remain independent of OAuth. A scoped writer lease prevents concurrent local processes from rotating or deleting the same credential store.
