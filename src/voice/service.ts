@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Clock, Queue, Redacted, Scope, Exit, Semaphore } from "effect"
+import { Context, Effect, Layer, Schema, Clock, Queue, Redacted, Scope, Exit, Semaphore, Option } from "effect"
 import { Conversation } from "../conversation/index.ts"
 import { SpeechRecognition } from "../speech-recognition/index.ts"
 import { SpeechSynthesis } from "../speech-synthesis/index.ts"
@@ -13,6 +13,7 @@ import { Session } from "./session.ts"
 import { VoiceOutputSettings, VoiceOutputConfiguration, defaultVoiceOutputSettings } from "./output-configuration.ts"
 import { SpeechActivity, fakeSpeechActivityLayer } from "./activity.ts"
 import { ReplyAudio } from "./output.ts"
+import { VoiceDiagnostics, disabledVoiceDiagnostics, recordVoiceDiagnostic } from "./diagnostics.ts"
 const maximumSessions = 2
 const disconnectPollMillis = 20
 const joinMillis = 10000
@@ -34,6 +35,10 @@ export class Voice extends Context.Service<
   static readonly configuredLayer = Layer.effect(
     Voice,
     Effect.gen(function* () {
+      const diagnostics = Option.getOrElse(
+        yield* Effect.serviceOption(VoiceDiagnostics),
+        () => disabledVoiceDiagnostics
+      )
       const languageSettings = yield* VoiceLanguageConfiguration
       const outputSettings = yield* Schema.decodeUnknownEffect(VoiceOutputSettings)(
         yield* VoiceOutputConfiguration
@@ -66,6 +71,12 @@ export class Voice extends Context.Service<
       const end = (session: Session) =>
         Effect.gen(function* () {
           if (session.status === "ended") return session.snapshot(0)
+          recordVoiceDiagnostic(diagnostics, {
+            cause: "lifecycle",
+            sessionId: session.id,
+            applied: true,
+            generation: session.generation
+          })
           session.status = "ended"
           session.audio?.retire()
           yield* session.stop()
@@ -162,6 +173,12 @@ export class Voice extends Context.Service<
                 (track, raw) => {
                   if (disconnected !== undefined) return
                   if (!Queue.offerUnsafe(frames, { track, raw, generation: session.generation })) {
+                    recordVoiceDiagnostic(diagnostics, {
+                      cause: "queueOverflow",
+                      sessionId: session.id,
+                      applied: true,
+                      generation: session.generation
+                    })
                     session.fenceInput()
                     disconnected = "Overloaded"
                   }
@@ -199,7 +216,8 @@ export class Voice extends Context.Service<
               opened.connection,
               sessionScope,
               (output) => session.emit({ kind: "Output", output }),
-              outputSettings
+              outputSettings,
+              diagnostics
             )
             yield* session.audio.attach().pipe(
               Effect.onError(() =>

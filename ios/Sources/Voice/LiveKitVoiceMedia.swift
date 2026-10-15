@@ -41,6 +41,10 @@
       #if DEBUG
         self.evidenceEnabled = evidenceEnabled
         if evidenceEnabled {
+          VoiceTransitionTrace.shared.configure(
+            destination:
+              FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+              .appendingPathComponent("balabol-voice-transitions.json"))
           print(
             "[BALABOL-AUDIO] {\"stage\":\"diagnostics-enabled\",\"uptimeSeconds\":\(ProcessInfo.processInfo.systemUptime)}"
           )
@@ -366,11 +370,23 @@
           guard !Task.isCancelled, let self, self.generation == expected else { return }
           switch event {
           case .speech(let notice):
-            guard renderer.acceptsOnset(notice) else { continue }
+            guard renderer.acceptsOnset(notice) else {
+              #if DEBUG
+                VoiceTransitionTrace.shared.record(.onsetRejected, microphone: notice.epoch)
+              #endif
+              continue
+            }
+            #if DEBUG
+              VoiceTransitionTrace.shared.record(.onsetAccepted, microphone: notice.epoch)
+            #endif
             self.audioDiagnostic("speech-qualified")
             speechStarted()
           case .failed(let epoch):
             guard renderer.acceptsFailure(epoch) else { continue }
+            #if DEBUG
+              VoiceTransitionTrace.shared.record(
+                .captureFailure, microphone: epoch, status: renderer.failureCode?.traceStatus)
+            #endif
             self.audioDiagnostic("speech-classifier-failed")
             self.captureFailureCallback?()
           }
@@ -483,6 +499,9 @@
             }
             outputTrack = track
             audioDiagnostic("playout-prepared")
+            #if DEBUG
+              VoiceTransitionTrace.shared.record(.playoutPrepared, target: manifest.identity)
+            #endif
             return
           }
         }
@@ -733,6 +752,9 @@
       }
     #endif
     deinit { worker.close() }
+    #if DEBUG
+      var failureCode: VoiceActivityError? { worker.failureCode }
+    #endif
     func resetOnset() { worker.reset() }
     func shutdown() async { await worker.stop() }
     func acceptsFailure(_ epoch: UUID) -> Bool { worker.acceptsFailure(epoch) }

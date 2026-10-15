@@ -97,3 +97,37 @@ extension VoiceActivityTests {
     }
   }
 }
+
+#if DEBUG
+  extension VoiceActivityTests {
+    func testTransitionTraceBoundsPersistsAndHashesWithoutRawIdentifiers() throws {
+      let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let file = directory.appendingPathComponent("trace.json")
+      let trace = VoiceTransitionTrace()
+      trace.configure(destination: file)
+      let response = UUID()
+      let target = VoiceOutputIdentity(
+        inputDeliveryId: UUID(), responseId: response, outputEpoch: UUID())
+      for _ in 0..<300 { trace.record(.interruptDispatch, target: target) }
+      trace.flush()
+      let data = try Data(contentsOf: file)
+      let snapshot = try JSONDecoder().decode(VoiceTraceSnapshot.self, from: data)
+      XCTAssertEqual(snapshot.events.count, 128)
+      XCTAssertEqual(snapshot.dropped, 173)
+      XCTAssertLessThanOrEqual(data.count, 131072)
+      XCTAssertEqual(snapshot.events.last?.response, VoiceTransitionTrace.hash(response))
+      XCTAssertEqual(snapshot.events.last?.response?.count, 12)
+      XCTAssertFalse(String(decoding: data, as: UTF8.self).contains(response.uuidString))
+      XCTAssertEqual(
+        VoiceTransitionTrace.hash(
+          try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000000"))), "12b9377cbe7e")
+      // A non-directory destination exercises harmless disk failure, not audio failure.
+      trace.configure(destination: file.appendingPathComponent("impossible"))
+      trace.record(.speech)
+      trace.flush()
+      XCTAssertEqual(trace.snapshot.events.last?.cause, .speech)
+    }
+  }
+#endif

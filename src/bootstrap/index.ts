@@ -48,7 +48,10 @@ import {
   SpeechActivitySettings,
   fakeSpeechActivityLayer,
   sileroSpeechActivityLayer,
-  speechActivityModel
+  speechActivityModel,
+  voiceDiagnosticsLayer,
+  voiceDiagnosticFile,
+  VoiceDiagnostics
 } from "../voice/index.ts"
 import { subscriptionLayer, subscriptionInferenceLayer } from "../subscription/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
@@ -103,6 +106,7 @@ export const ServerConfig = Schema.Struct({
   fakeSummary: Schema.optionalKey(FakeSummarySettings),
   reply: Schema.optionalKey(ReplySettings),
   voice: Schema.optionalKey(LiveKitSettings),
+  voiceDiagnostics: Schema.optionalKey(Schema.Boolean),
   voiceLanguages: Schema.optionalKey(LanguageTags),
   recognition: Schema.optionalKey(WhisperSettings),
   activity: Schema.optionalKey(SpeechActivitySettings),
@@ -207,6 +211,7 @@ const speechSelection = (environment: NodeJS.ProcessEnv) => ({
 })
 export const parseConfig = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(ServerConfig)({
+    voiceDiagnostics: environment.BALABOL_VOICE_DIAGNOSTICS === "1",
     host: environment.BALABOL_HOST ?? "127.0.0.1",
     port: Number(environment.BALABOL_PORT ?? "8787"),
     database: environment.BALABOL_DATABASE ?? ".data/conversation.sqlite",
@@ -267,7 +272,14 @@ export const serverLayer = (config: ServerConfig) => {
       return sqliteVoiceAdmissions(resource.storage.database)
     })
   )
+  const diagnostics =
+    config.voiceDiagnostics === true
+      ? voiceDiagnosticsLayer(
+          voiceDiagnosticFile(join(homedir(), ".local", "share", "balabol", "diagnostics", "backend.json"))
+        )
+      : Layer.succeed(VoiceDiagnostics, { record: () => {} })
   const application = Voice.configuredLayer.pipe(
+    Layer.provide(diagnostics),
     Layer.provide(
       Layer.succeed(VoiceLanguageConfiguration, {
         allowedLanguages: config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages

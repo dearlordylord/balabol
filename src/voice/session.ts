@@ -230,7 +230,7 @@ export class Session {
     this.track = track
   }
   interruptOnSpeech() {
-    return (this.audio?.speechStarted() ?? Effect.void).pipe(
+    return (this.audio?.speechStarted(this.generation) ?? Effect.void).pipe(
       Effect.catch((error) =>
         this.emit({ kind: "Error", utteranceId: null, code: error.code, message: error.message })
       ),
@@ -252,6 +252,7 @@ export class Session {
       yield* this.classified(windows, generation)
     }).pipe(
       Effect.catch((error) => {
+        this.audio?.trace("captureError", true)
         this.fenceInput()
         return this.emit({ kind: "Error", utteranceId: null, code: error.code, message: error.message })
       })

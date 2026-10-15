@@ -7,6 +7,9 @@ private final class VoiceCaptureSlot: @unchecked Sendable {
   let samples = UnsafeMutablePointer<Float>.allocate(capacity: 8192)
   var count = 0
   var sampleRate = 0.0
+  #if DEBUG
+    var capturedAt = 0.0
+  #endif
   var epoch = UUID()
   init() { samples.initialize(repeating: 0, count: 8192) }
   deinit {
@@ -20,6 +23,9 @@ internal final class VoiceActivityCapture: Sendable {
     var epoch = UUID()
     var readable = false
     var failed = false
+    #if DEBUG
+      var failureCode: VoiceActivityError?
+    #endif
     var closed = false
     var rate = 0.0
     var channels = 0
@@ -69,6 +75,11 @@ internal final class VoiceActivityCapture: Sendable {
             let probability = try await classifier.probability(frame)
             let onset = try decision.accept(probability)
             if onset && state.withLock({ !$0.closed && !$0.failed && $0.epoch == slot.epoch }) {
+              #if DEBUG
+                VoiceTransitionTrace.shared.record(
+                  .onset, microphone: slot.epoch, capturedAt: slot.capturedAt,
+                  classifiedAt: ProcessInfo.processInfo.systemUptime)
+              #endif
               started(slot.epoch, probability)
             }
           }
@@ -77,6 +88,9 @@ internal final class VoiceActivityCapture: Sendable {
             guard value.epoch == slot.epoch, !value.closed else { return nil }
             value.epoch = UUID()
             value.failed = true
+            #if DEBUG
+              value.failureCode = (error as? VoiceActivityError) ?? .inference
+            #endif
             value.readable = false
             return value.epoch
           }
@@ -96,11 +110,17 @@ internal final class VoiceActivityCapture: Sendable {
   func acceptsFailure(_ epoch: UUID) -> Bool {
     state.withLock { $0.epoch == epoch && !$0.closed }
   }
+  #if DEBUG
+    var failureCode: VoiceActivityError? { state.withLock { $0.failureCode } }
+  #endif
   func reset() {
     state.withLock {
       $0.epoch = UUID()
       $0.readable = false
       $0.failed = false
+      #if DEBUG
+        $0.failureCode = nil
+      #endif
     }
   }
   func stop() async {
@@ -128,6 +148,9 @@ internal final class VoiceActivityCapture: Sendable {
     frameCount: Int, channels: Int, sampleRate: Double,
     sample: (_ frame: Int, _ channel: Int) -> Float
   ) -> Bool {
+    #if DEBUG
+      let capturedAt = ProcessInfo.processInfo.systemUptime
+    #endif
     let reservation = state.withLock { value -> Reservation in
       var reservation = Reservation(epoch: value.epoch)
       guard !value.closed, !value.failed else { return reservation }
@@ -143,6 +166,9 @@ internal final class VoiceActivityCapture: Sendable {
       else {
         value.epoch = UUID()
         value.failed = true
+        #if DEBUG
+          value.failureCode = value.free.count < needed ? .overflow : .invalidFrame
+        #endif
         value.readable = false
         reservation.epoch = value.epoch
         reservation.failed = true
@@ -174,6 +200,9 @@ internal final class VoiceActivityCapture: Sendable {
         }
         slot.samples[frame] = sum / Float(channels)
       }
+      #if DEBUG
+        slot.capturedAt = capturedAt
+      #endif
       slot.count = count
       slot.sampleRate = sampleRate
       slot.epoch = reservation.epoch
@@ -186,6 +215,9 @@ internal final class VoiceActivityCapture: Sendable {
         guard value.epoch == reservation.epoch, !value.closed else { return nil }
         value.epoch = UUID()
         value.failed = true
+        #if DEBUG
+          value.failureCode = .invalidFrame
+        #endif
         value.readable = false
         return value.epoch
       }

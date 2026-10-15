@@ -1183,6 +1183,16 @@ import XCTest
   }
 
   func testClassifiedNonSpeechPreservesWaitingReplyAndQualifiedSpeechInterrupts() async throws {
+    #if DEBUG
+      let traceFile = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString)
+      VoiceTransitionTrace.shared.configure(destination: traceFile)
+      defer {
+        VoiceTransitionTrace.shared.configure(destination: nil)
+        VoiceTransitionTrace.shared.flush()
+        try? FileManager.default.removeItem(at: traceFile)
+      }
+    #endif
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)
     let model = VoiceViewModel(control: control, media: media) { _ in
@@ -1240,9 +1250,33 @@ import XCTest
         sample: { _, _ in 0.0001 }))
     await settle { model.output.locallyInterrupted }
     XCTAssertTrue(model.output.locallyInterrupted)
+    #if DEBUG
+      let events = VoiceTransitionTrace.shared.snapshot.events
+      let speech = try XCTUnwrap(events.lastIndex(where: { $0.cause == .speech }))
+      let cut = try XCTUnwrap(events.lastIndex(where: { $0.cause == .cut }))
+      XCTAssertLessThan(speech, cut)
+      XCTAssertEqual(events[cut].response, VoiceTransitionTrace.hash(response))
+      XCTAssertEqual(events[cut].outputEpoch, VoiceTransitionTrace.hash(epoch))
+      XCTAssertTrue(
+        events.contains { $0.cause == .onset && $0.capturedAt != nil && $0.classifiedAt != nil })
+    #endif
     await capture.stop()
     notices.continuation.finish()
     await projection.value
+    #if DEBUG
+      let droppedBeforeReplay = VoiceTransitionTrace.shared.snapshot.dropped
+      var terminal = preparing
+      terminal["status"] = "Interrupted"
+      for sequence in 2...145 {
+        await control.append(
+          try event(
+            session: session, sequence: sequence, kind: "Output", fields: ["output": terminal]))
+      }
+      await settle { model.state.sequence >= 145 }
+      XCTAssertGreaterThanOrEqual(model.state.sequence, 145)
+      XCTAssertEqual(VoiceTransitionTrace.shared.snapshot.dropped, droppedBeforeReplay)
+      XCTAssertTrue(VoiceTransitionTrace.shared.snapshot.events.contains { $0.cause == .speech })
+    #endif
     await model.shutdown()
   }
 

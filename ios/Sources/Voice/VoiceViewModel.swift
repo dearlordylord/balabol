@@ -73,13 +73,37 @@ import Observation
   }
   public func resume() { receive(.resume) }
   private func observePlatform() {
-    media.observePlatform { [weak self] event in self?.receive(.platform(event)) }
+    media.observePlatform { [weak self] event in
+      #if DEBUG
+        VoiceTransitionTrace.shared.record(
+          .platform, target: self?.output.current?.identity, status: event.traceStatus)
+      #endif
+      self?.receive(.platform(event))
+    }
   }
-  public func end() { receive(.end) }
-  public func inputIntent(_ deliveryId: UUID) { cutOutput(nextInput: deliveryId) }
-  public func speechStarted() { cutOutput() }
+  public func end() {
+    #if DEBUG
+      trace(.end)
+    #endif
+    receive(.end)
+  }
+  public func inputIntent(_ deliveryId: UUID) {
+    #if DEBUG
+      trace(.input)
+    #endif
+    cutOutput(nextInput: deliveryId)
+  }
+  public func speechStarted() {
+    #if DEBUG
+      trace(.speech)
+    #endif
+    cutOutput()
+  }
   public func toggleMute() { receive(.mute) }
   public func shutdown() async {
+    #if DEBUG
+      trace(.shutdown)
+    #endif
     receive(.shutdown)
     // Fence and quiesce every producer before draining the latest checkpoint.
     await languageTask?.value
@@ -113,6 +137,9 @@ import Observation
   private func execute(_ command: VoiceCommand) {
     switch command {
     case .platformFence(let inputs):
+      #if DEBUG
+        trace(.platform)
+      #endif
       let captureStopped = media.fenceCapture()
       cutOutput()
       let outputStopped = stopLocalOutput()
@@ -188,6 +215,9 @@ import Observation
             failure: { [weak self] in
               Task { @MainActor in
                 guard self?.state.generation == generation else { return }
+                #if DEBUG
+                  self?.trace(.captureFailure)
+                #endif
                 self?.cutOutput()
                 self?.receive(.failed(generation, .connection))
               }
@@ -201,6 +231,9 @@ import Observation
             outputReceived: { [weak self] identity in
               Task { @MainActor in
                 guard self?.state.generation == generation else { return }
+                #if DEBUG
+                  VoiceTransitionTrace.shared.record(.audioReceived, target: identity)
+                #endif
                 self?.receiveOutput(.audioReceived(identity))
               }
             })
@@ -395,15 +428,47 @@ import Observation
     receiveOutput(.observed(sequence: sequence, value))
   }
   private func receiveOutput(_ event: VoiceOutputEvent) {
-    for command in output.transition(event) { executeOutput(command) }
+    #if DEBUG
+      let previousIdentity = output.current?.identity
+      let previousStatus = output.current?.status
+      let previouslyInterrupted = output.locallyInterrupted
+    #endif
+    let commands = output.transition(event)
+    #if DEBUG
+      if previousIdentity != output.current?.identity || previousStatus != output.current?.status
+        || previouslyInterrupted != output.locallyInterrupted
+      {
+        trace(.output)
+      }
+    #endif
+    for command in commands { executeOutput(command) }
   }
   private func stopLocalOutput() -> Task<Void, Never> {
     if interpretingCommands, let localStopBarrier { return localStopBarrier }
+    #if DEBUG
+      trace(.localStop)
+      let target = output.current?.identity
+    #endif
     let stopped = media.stopOutput()
+    #if DEBUG
+      Task {
+        await stopped.value
+        VoiceTransitionTrace.shared.record(.localStopped, target: target)
+      }
+    #endif
     if interpretingCommands { localStopBarrier = stopped }
     return stopped
   }
+  #if DEBUG
+    private func trace(_ cause: VoiceTraceCause) {
+      VoiceTransitionTrace.shared.record(
+        cause, target: output.current?.identity, status: output.current?.status.rawValue)
+    }
+  #endif
   private func cutOutput(nextInput: UUID? = nil) {
+    #if DEBUG
+      trace(.cut)
+    #endif
     let pending = state.pendingAssociations.map(\.deliveryId)
     receiveOutput(.cut(nextInput: nextInput, pendingInputs: pending))
   }
@@ -456,7 +521,22 @@ import Observation
         await stopped.value
         await priorInterruption?.value
         guard !Task.isCancelled else { return }
-        _ = try? await control.interrupt(sessionId: session, target: target)
+        #if DEBUG
+          VoiceTransitionTrace.shared.record(.interruptDispatch, target: target)
+        #endif
+        do {
+          let result = try await control.interrupt(sessionId: session, target: target)
+          #if DEBUG
+            VoiceTransitionTrace.shared.record(
+              .interruptReturned, target: target,
+              status: result.output?.identity == target
+                ? result.output?.status.rawValue : "DifferentTarget")
+          #endif
+        } catch {
+          #if DEBUG
+            VoiceTransitionTrace.shared.record(.interruptFailed, target: target)
+          #endif
+        }
       }
     }
   }

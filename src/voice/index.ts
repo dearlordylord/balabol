@@ -34,3 +34,5 @@ export type { ActivityStream } from "./activity.ts"
 export { sileroSpeechActivityLayer } from "./activity-silero.ts"
 export { speechActivityModel, activityProcessRuntime } from "./activity-runtime.ts"
 export type { ActivityRuntime, ActivityModelRunner } from "./activity-runtime.ts"
+
+export { VoiceDiagnostics, voiceDiagnosticsLayer, voiceDiagnosticFile, VoiceDiagnosticRecord } from "./diagnostics.ts"

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Deferred, Effect, Fiber, Queue, Stream, Schema } from "effect"
 import type { Scope } from "effect"
-import type { Conversation, DeliveryTicket, ResponseInvalidation } from "../conversation/index.ts"
+import type { Conversation, DeliveryTicket, ResponseInvalidation, ResponseTarget } from "../conversation/index.ts"
 import { SynthesisEvent, SynthesisCapabilities } from "../speech-synthesis/index.ts"
 import type { SpeechSynthesis } from "../speech-synthesis/index.ts"
 import { failed } from "./contracts.ts"
@@ -16,6 +16,8 @@ import type {
 import type { Phrase } from "./phrases.ts"
 import type { VoiceOutputSettings } from "./output-configuration.ts"
 import { Phrases } from "./phrases.ts"
+import { disabledVoiceDiagnostics, recordVoiceDiagnostic } from "./diagnostics.ts"
+import type { VoiceDiagnostics, VoiceDiagnosticInput } from "./diagnostics.ts"
 const sampleRate = 24000
 const readinessMillis = 5000
 const pollMillis = 20
@@ -24,6 +26,17 @@ const invalidationMessage = (target: ResponseInvalidation, previous: { message: 
   target.reason === "Deadline"
     ? "Reply audio delivery exceeded its deadline"
     : (previous?.message ?? "Reply generation or audio delivery failed")
+const invalidationCauses: Record<ResponseInvalidation["reason"], VoiceDiagnosticInput["cause"]> = {
+  Interrupted: "conversationInvalidation",
+  Deadline: "deadline",
+  Failed: "failed",
+  Detached: "detach"
+}
+const diagnosticTarget = (target: ResponseTarget & { outputEpoch?: string }) => ({
+  responseId: target.responseId,
+  inputDeliveryId: target.inputDeliveryId,
+  ...(target.outputEpoch === undefined ? {} : { outputEpoch: target.outputEpoch })
+})
 export class ReplyAudio {
   #ticket: DeliveryTicket | undefined
   #fenced = true
@@ -40,7 +53,8 @@ export class ReplyAudio {
     readonly connection: MediaConnection,
     readonly scope: Scope.Scope,
     readonly emit: (output: VoiceOutput) => Effect.Effect<void>,
-    readonly settings: VoiceOutputSettings
+    readonly settings: VoiceOutputSettings,
+    readonly diagnostics: VoiceDiagnostics["Service"] = disabledVoiceDiagnostics
   ) {}
   get snapshot() {
     return this.#state
@@ -51,7 +65,34 @@ export class ReplyAudio {
   #notify() {
     if (this.#notices !== undefined) Queue.offerUnsafe(this.#notices, true)
   }
+  trace(
+    cause: VoiceDiagnosticInput["cause"],
+    applied: boolean,
+    target?: ResponseTarget & { outputEpoch?: string },
+    generation?: number
+  ) {
+    const state = target === undefined || this.#matchesTarget(target) ? this.#state : null
+    recordVoiceDiagnostic(this.diagnostics, {
+      cause,
+      applied,
+      sessionId: this.sessionId,
+      ...(generation === undefined ? {} : { generation }),
+      ...(state === null
+        ? {}
+        : {
+            responseId: state.responseId,
+            inputDeliveryId: state.inputDeliveryId,
+            outputEpoch: state.outputEpoch,
+            priorStatus: state.status
+          }),
+      ...(target === undefined ? {} : diagnosticTarget(target))
+    })
+  }
+  #matchesTarget(target: ResponseTarget) {
+    return this.#state?.responseId === target.responseId && this.#state.inputDeliveryId === target.inputDeliveryId
+  }
   #invalidated(target: ResponseInvalidation) {
+    this.trace(invalidationCauses[target.reason], this.#matchesTarget(target), target)
     if (this.#state?.responseId !== target.responseId) return
     this.#fenced = true
     this.#publication?.invalidate()
@@ -122,6 +163,7 @@ export class ReplyAudio {
   #failure(ticket: DeliveryTicket, message: string) {
     return Effect.gen({ self: this }, function* () {
       if (!this.#active(ticket) || this.#state === null) return
+      this.trace("failed", true)
       this.#publication?.invalidate()
       this.#state = {
         ...this.#state,
@@ -279,17 +321,22 @@ export class ReplyAudio {
         state.inputDeliveryId !== input.inputDeliveryId ||
         state.outputEpoch !== input.outputEpoch ||
         ["Delivered", "Interrupted", "Failed"].includes(state.status)
-      )
+      ) {
+        this.trace("clientInterrupt", false, input)
         return
+      }
+      this.trace("clientInterrupt", true, input)
       this.#invalidated({ ...input, reason: "Interrupted" })
       yield* this.conversation
         .interruptResponse(input)
         .pipe(Effect.mapError((error) => failed("AudioUnavailable", error.message)))
     })
   }
-  speechStarted() {
+  speechStarted(generation?: number) {
     const state = this.#state
-    if (state === null || ["Delivered", "Interrupted", "Failed"].includes(state.status)) return Effect.void
+    const applied = state !== null && !["Delivered", "Interrupted", "Failed"].includes(state.status)
+    this.trace("backendSpeech", applied, undefined, generation)
+    if (!applied || state === null) return Effect.void
     this.#invalidated({ ...state, reason: "Interrupted" })
     return this.conversation.interruptResponse(state).pipe(
       Effect.mapError((error) => failed("AudioUnavailable", error.message)),
