@@ -152,7 +152,8 @@ export class Voice extends Context.Service<
               request.startRequestId,
               request.muted,
               languages.allowedLanguages,
-              activityStream
+              activityStream,
+              diagnostics
             )
             const startedAt = yield* Clock.currentTimeMillis
             session.joinDeadlineAt = startedAt + joinMillis

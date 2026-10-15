@@ -76,7 +76,8 @@ import Observation
     media.observePlatform { [weak self] event in
       #if DEBUG
         VoiceTransitionTrace.shared.record(
-          .platform, target: self?.output.current?.identity, status: event.traceStatus)
+          .platform, target: self?.output.current?.identity, status: event.traceStatus,
+          session: self?.state.sessionId)
       #endif
       self?.receive(.platform(event))
     }
@@ -132,7 +133,20 @@ import Observation
       localStopBarrier = nil
       interpretingCommands = false
     }
-    for command in state.transition(event) { execute(command) }
+    #if DEBUG
+      traceFailure(event)
+      let previousCapture = state.capture
+      let previousSession = state.sessionId
+    #endif
+    let commands = state.transition(event)
+    #if DEBUG
+      if state.capture != previousCapture, case .failed(let failure) = state.capture {
+        VoiceTransitionTrace.shared.record(
+          .transportFailed, target: output.current?.identity, failure: failure,
+          session: previousSession)
+      }
+    #endif
+    for command in commands { execute(command) }
   }
   private func execute(_ command: VoiceCommand) {
     switch command {
@@ -232,7 +246,8 @@ import Observation
               Task { @MainActor in
                 guard self?.state.generation == generation else { return }
                 #if DEBUG
-                  VoiceTransitionTrace.shared.record(.audioReceived, target: identity)
+                  VoiceTransitionTrace.shared.record(
+                    .audioReceived, target: identity, session: self?.state.sessionId)
                 #endif
                 self?.receiveOutput(.audioReceived(identity))
               }
@@ -448,21 +463,44 @@ import Observation
     #if DEBUG
       trace(.localStop)
       let target = output.current?.identity
+      let session = state.sessionId
     #endif
     let stopped = media.stopOutput()
     #if DEBUG
       Task {
         await stopped.value
-        VoiceTransitionTrace.shared.record(.localStopped, target: target)
+        VoiceTransitionTrace.shared.record(.localStopped, target: target, session: session)
       }
     #endif
     if interpretingCommands { localStopBarrier = stopped }
     return stopped
   }
   #if DEBUG
+    private func traceFailure(_ event: VoiceEvent) {
+      switch event {
+      case .failed(let generation, let failure) where generation == state.generation:
+        VoiceTransitionTrace.shared.record(
+          .failure, target: output.current?.identity, failure: failure, session: state.sessionId)
+      case .observationFailed(let generation, let failure) where generation == state.generation:
+        VoiceTransitionTrace.shared.record(
+          .observationFailed, target: output.current?.identity, failure: failure,
+          session: state.sessionId)
+      case .wire(let generation, let wire)
+      where generation == state.generation && wire.sessionId == state.sessionId
+        && wire.sequence > state.sequence && wire.isValid && wire.kind == "Error":
+        VoiceTransitionTrace.shared.record(
+          .wireError, target: output.current?.identity,
+          failure: .backend(code: wire.code ?? "", message: ""), session: state.sessionId)
+      case .checkpointFailed(let revision) where revision == state.checkpointRevision:
+        VoiceTransitionTrace.shared.record(
+          .failure, failure: .checkpointUnavailable, session: state.sessionId)
+      default: break
+      }
+    }
     private func trace(_ cause: VoiceTraceCause) {
       VoiceTransitionTrace.shared.record(
-        cause, target: output.current?.identity, status: output.current?.status.rawValue)
+        cause, target: output.current?.identity, status: output.current?.status.rawValue,
+        session: state.sessionId)
     }
   #endif
   private func cutOutput(nextInput: UUID? = nil) {
@@ -522,7 +560,7 @@ import Observation
         await priorInterruption?.value
         guard !Task.isCancelled else { return }
         #if DEBUG
-          VoiceTransitionTrace.shared.record(.interruptDispatch, target: target)
+          VoiceTransitionTrace.shared.record(.interruptDispatch, target: target, session: session)
         #endif
         do {
           let result = try await control.interrupt(sessionId: session, target: target)
@@ -534,7 +572,7 @@ import Observation
           #endif
         } catch {
           #if DEBUG
-            VoiceTransitionTrace.shared.record(.interruptFailed, target: target)
+            VoiceTransitionTrace.shared.record(.interruptFailed, target: target, session: session)
           #endif
         }
       }

@@ -15,6 +15,8 @@ import {
 } from "../src/voice/index.ts"
 import type { VoiceDiagnosticInput } from "../src/voice/diagnostics.ts"
 import { SpeechSynthesis, SpeechSynthesisFailed, fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
+import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
+import { diagnosticErrorCode } from "../src/voice/diagnostics.ts"
 import { parseConfig } from "../src/bootstrap/index.ts"
 import { Conversation, type ReplyDeliveryRegistration, type ResponseInvalidation } from "../src/conversation/index.ts"
 import { ReplyAudio } from "../src/voice/output.ts"
@@ -329,6 +331,64 @@ it("attributes a stale invalidation to its requested response without borrowing 
         ),
         Effect.scoped
       )
+    )
+  } finally {
+    await database.close()
+  }
+})
+
+it("records a pre-Final recognition failure without output or an accepted message", async () => {
+  const database = await temporaryDatabase()
+  const transport = voiceTransportFixture()
+  const records: VoiceDiagnosticInput[] = []
+  try {
+    const recognition = fakeRecognitionLayer({
+      languages: ["ru", "fr", "en"],
+      scripts: [{ events: [], delayMillis: 0, failure: "private synthetic failure text" }]
+    })
+    const layer = voiceOutputLayer(
+      database.path,
+      transport,
+      fakeSynthesisLayer(),
+      fakeAnswerLayer(0),
+      recognition
+    ).pipe(
+      Layer.provide(
+        Layer.succeed(VoiceDiagnostics, {
+          record(input) {
+            records.push(input)
+          }
+        })
+      )
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const voice = yield* Voice
+        const conversation = yield* Conversation
+        const join = yield* voice.start(startVoiceRequest())
+        for (let index = 0; index < 3; index++) yield* transport.send(transport.audio(1200))
+        for (let index = 0; index < 50; index++) yield* transport.send(transport.audio(0))
+        let snapshot = yield* voice.snapshot(join.sessionId, 0)
+        for (let index = 0; !snapshot.events.some((event) => event.kind === "Error") && index < 100; index++) {
+          yield* Effect.sleep(5)
+          snapshot = yield* voice.snapshot(join.sessionId, 0)
+        }
+        expect(snapshot.events.some((event) => event.kind === "Error" && event.code === "RecognitionFailed")).toBe(true)
+        expect(snapshot.output).toBeNull()
+        expect((yield* conversation.page({ limit: 10 })).messages).toEqual([])
+        expect(records.some((record) => record.cause === "recognitionStarted")).toBe(true)
+        expect(
+          records.some(
+            (record) =>
+              record.cause === "sessionError" &&
+              record.errorCode === "RecognitionFailed" &&
+              record.recognitionReason === "Other"
+          )
+        ).toBe(true)
+        expect(JSON.stringify(records)).not.toContain("private synthetic")
+        expect(diagnosticErrorCode("untrusted arbitrary text")).toBe("Other")
+        expect(diagnosticErrorCode("InvalidRecognition")).toBe("InvalidRecognition")
+      }).pipe(Effect.provide(layer), Effect.scoped)
     )
   } finally {
     await database.close()

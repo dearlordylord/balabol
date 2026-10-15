@@ -193,6 +193,7 @@ extension VoiceState {
       return transportFailed(
         .backend(code: "AdmissionCapacity", message: "Speech admission tracking is full"))
     }
+    unrecognizedUtterance = nil
     trimSettledAdmissions()
     associations[association.deliveryId] = association
     stagedFinals[association.deliveryId] = text

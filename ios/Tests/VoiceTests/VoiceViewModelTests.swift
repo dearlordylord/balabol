@@ -1182,6 +1182,211 @@ import XCTest
     await model.shutdown()
   }
 
+  func testRepeatNoticeRetainsThroughInterimAndScopedErrorsDoNotBroadenRecovery() throws {
+    let session = UUID()
+    let utterance = UUID()
+    var healthy = VoiceState()
+    healthy.capture = .listening
+    healthy.intent = .listening(muted: false)
+    healthy.sessionId = session
+    healthy.tentativeUtterance = utterance
+    healthy.tentative = "synthetic failed interim"
+    let failure = try event(
+      session: session, sequence: 1, kind: "Error",
+      fields: [
+        "utteranceId": utterance.uuidString, "code": "RecognitionFailed", "message": "fixture",
+      ])
+    var state = healthy
+    XCTAssertTrue(state.transition(.wire(0, failure)).isEmpty)
+    XCTAssertEqual(state.unrecognizedUtterance, utterance)
+    XCTAssertEqual(state.tentative, "")
+    _ = state.transition(
+      .wire(
+        0,
+        try event(
+          session: session, sequence: 2, kind: "Interim",
+          fields: [
+            "utteranceId": UUID().uuidString, "text": "synthetic interim",
+          ])))
+    XCTAssertEqual(state.unrecognizedUtterance, utterance)
+    XCTAssertEqual(state.tentative, "synthetic interim")
+    _ = state.transition(.end)
+    XCTAssertNil(state.unrecognizedUtterance)
+    _ = state.transition(.ended(0))
+    _ = state.transition(.start)
+    XCTAssertNil(state.unrecognizedUtterance)
+    for (eventSession, generation) in [(UUID(), 0), (session, 1)] {
+      var stale = healthy
+      _ = stale.transition(
+        .wire(
+          generation,
+          try event(
+            session: eventSession, sequence: 1, kind: "Error",
+            fields: [
+              "utteranceId": utterance.uuidString, "code": "RecognitionFailed",
+              "message": "fixture",
+            ])))
+      XCTAssertEqual(stale.capture, .listening)
+      XCTAssertNil(stale.unrecognizedUtterance)
+    }
+    let fatalCases: [(Any, String)] = [
+      (NSNull(), "RecognitionFailed"), (NSNull(), "InvalidRecognition"),
+      (utterance.uuidString, "Unauthorized"),
+    ]
+    for (id, code) in fatalCases {
+      var fatal = healthy
+      _ = fatal.transition(
+        .wire(
+          0,
+          try event(
+            session: session, sequence: 1, kind: "Error",
+            fields: [
+              "utteranceId": id, "code": code, "message": "fixture",
+            ])))
+      XCTAssertEqual(fatal.capture, .failed(.backend(code: code, message: "fixture")))
+      XCTAssertNil(fatal.unrecognizedUtterance)
+    }
+  }
+
+  func testUtteranceRecognitionFailureKeepsHealthySessionAndNextSpeechCanBeAccepted() async throws {
+    for code in ["RecognitionFailed", "InvalidRecognition"] {
+      for muted in [false, true] {
+        let control = FixtureControl()
+        let media = FixtureMedia(allowed: true)
+        media.holdOutput = false
+        var receipts: [ConversationMessage] = []
+        let model = VoiceViewModel(control: control, media: media) { receipts.append($0) }
+        model.start()
+        await settle { model.state.capture == .listening }
+        if muted {
+          model.toggleMute()
+          await settle { model.state.capture == .muted }
+        }
+        let session = await control.identity()
+        let priorResponse = UUID()
+        let priorInput = UUID()
+        let priorEpoch = UUID()
+        await control.append(
+          try event(
+            session: session, sequence: 1, kind: "Output",
+            fields: [
+              "output": [
+                "responseId": priorResponse.uuidString, "inputDeliveryId": priorInput.uuidString,
+                "outputEpoch": priorEpoch.uuidString, "status": "Preparing", "manifest": NSNull(),
+                "error": NSNull(),
+              ]
+            ]))
+        await settle { model.output.current?.responseId == priorResponse }
+        let stops = media.stoppedOutput
+        let failedUtterance = UUID()
+        await control.append(
+          try event(
+            session: session, sequence: 2, kind: "Error",
+            fields: [
+              "utteranceId": failedUtterance.uuidString, "code": code,
+              "message": "synthetic recognition failure",
+            ]))
+        await settle { model.state.sequence >= 2 }
+        let expected: VoiceState.Capture = muted ? .muted : .listening
+        XCTAssertEqual(
+          model.state.capture, expected, "An utterance failure must not end a healthy session")
+        guard model.state.capture == expected else {
+          await model.shutdown()
+          return
+        }
+        XCTAssertEqual(model.state.sessionId, session)
+        XCTAssertEqual(model.state.unrecognizedUtterance, failedUtterance)
+        XCTAssertFalse(media.disconnected)
+        XCTAssertEqual(media.stoppedOutput, stops)
+        XCTAssertFalse(model.output.locallyInterrupted)
+        XCTAssertTrue(receipts.isEmpty)
+        XCTAssertTrue(model.state.admissions.isEmpty)
+        let ended = await control.wasEnded()
+        let opened = await control.openedCount()
+        XCTAssertFalse(ended)
+        XCTAssertEqual(opened, 1)
+        let delivery = UUID()
+        await control.append(
+          try event(
+            session: session, sequence: 3, kind: "Final",
+            fields: [
+              "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString,
+              "text": "synthetic next speech",
+            ]))
+        await settle { model.state.hasPendingAdmission }
+        XCTAssertNil(model.state.unrecognizedUtterance)
+        let receipt = ConversationMessage(
+          deliveryId: delivery, recordId: 1, position: 1, text: "synthetic next speech")
+        await control.append(
+          try event(
+            session: session, sequence: 4, kind: "Accepted",
+            fields: [
+              "utteranceId": delivery.uuidString,
+              "receipt": try JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)),
+            ]))
+        await settle { receipts == [receipt] }
+        let reply = UUID()
+        await control.append(
+          try event(
+            session: session, sequence: 5, kind: "Output",
+            fields: [
+              "output": outputValue(
+                session: session, input: delivery, response: reply, epoch: UUID())
+            ]))
+        await settle { model.output.current?.responseId == reply && media.preparedOutputs == 1 }
+        XCTAssertEqual(model.state.capture, expected)
+        XCTAssertEqual(model.state.sessionId, session)
+        await model.shutdown()
+      }
+    }
+  }
+
+  #if DEBUG
+    func testBackendFailureBeforeAnyReplyPersistsSanitizedCause() async throws {
+      let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      VoiceTransitionTrace.shared.configure(destination: file)
+      defer {
+        VoiceTransitionTrace.shared.configure(destination: nil)
+        VoiceTransitionTrace.shared.flush()
+        try? FileManager.default.removeItem(at: file)
+      }
+      let control = FixtureControl()
+      let model = VoiceViewModel(control: control, media: FixtureMedia(allowed: true)) { _ in }
+      model.start()
+      await settle { model.state.capture == .listening }
+      let session = await control.identity()
+      await control.append(
+        try event(
+          session: session, sequence: 1, kind: "Error",
+          fields: [
+            "utteranceId": NSNull(), "code": "RecognitionFailed",
+            "message": "synthetic private detail",
+          ]))
+      await settle {
+        if case .failed = model.state.capture { return true }
+        return false
+      }
+      let events = VoiceTransitionTrace.shared.snapshot.events
+      let wire = try XCTUnwrap(events.last { $0.cause == .wireError })
+      XCTAssertEqual(wire.failureKind, "Backend")
+      XCTAssertEqual(wire.backendCode, "RecognitionFailed")
+      XCTAssertNil(wire.response)
+      XCTAssertEqual(wire.session, VoiceTransitionTrace.hash(session))
+      XCTAssertTrue(
+        events.contains { $0.cause == .transportFailed && $0.backendCode == "RecognitionFailed" })
+      VoiceTransitionTrace.shared.record(
+        .failure, failure: .backend(code: "untrusted private code", message: "private"))
+      VoiceTransitionTrace.shared.flush()
+      let persisted = try String(contentsOf: file, encoding: .utf8)
+      XCTAssertFalse(persisted.contains("private"))
+      XCTAssertEqual(
+        VoiceTransitionTrace.shared.snapshot.events.last?.backendCode, "OtherBackendCode")
+      XCTAssertEqual(VoiceFailure.invalidResponse.traceKind, "InvalidResponse")
+      XCTAssertEqual(VoiceFailure.checkpointUnavailable.traceKind, "CheckpointUnavailable")
+      await model.shutdown()
+    }
+  #endif
+
   func testClassifiedNonSpeechPreservesWaitingReplyAndQualifiedSpeechInterrupts() async throws {
     #if DEBUG
       let traceFile = FileManager.default.temporaryDirectory.appendingPathComponent(

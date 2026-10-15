@@ -131,10 +131,10 @@ it.effect("deadline and cancellation release the serialized worker and suppress 
     })
     yield* Effect.gen(function* () {
       const provider = yield* SpeechRecognition
-      const task = yield* Effect.forkChild(collect(provider))
+      const task = yield* Effect.forkChild(collect(provider).pipe(Effect.flip))
       yield* Deferred.await(entered)
       yield* TestClock.adjust(30001)
-      expect((yield* Fiber.await(task))._tag).toBe("Failure")
+      expect(yield* Fiber.join(task)).toMatchObject({ _tag: "RecognitionFailed", reason: "Deadline" })
       expect(released).toBe(true)
       yield* Deferred.succeed(late, payload("en", "Late"))
       expect(yield* collect(provider)).toMatchObject([{ text: "Recovered" }])
@@ -191,6 +191,54 @@ it.effect("discards only observed standalone non-speech caption segments and ret
           detectedLanguage: item.expected.length === 0 ? null : "en"
         }
       ])
+    }
+  })
+)
+
+it.effect("preserves typed failure stage without inspecting or exposing provider messages", () =>
+  Effect.gen(function* () {
+    const cases: { native: WhisperNative; input: RecognitionRequest; reason: string }[] = [
+      { native: fixture(() => Effect.succeed("{")), input: request, reason: "Json" },
+      { native: fixture(() => Effect.succeed('{"result":{},"transcription":[]}')), input: request, reason: "Result" },
+      { native: fixture(() => Effect.succeed(payload("de", "Guten Tag"))), input: request, reason: "DetectedLanguage" },
+      {
+        native: fixture(() => Effect.succeed(payload("en", "unused"))),
+        input: { ...request, allowedLanguages: ["xx"] },
+        reason: "Request"
+      },
+      {
+        native: fixture(() =>
+          Effect.succeed(
+            JSON.stringify({ result: { language: "en" }, transcription: [{ text: "x".repeat(100000) }, { text: "y" }] })
+          )
+        ),
+        input: request,
+        reason: "Final"
+      },
+      {
+        native: fixture(() =>
+          Effect.fail(new RecognitionFailed({ message: "private process diagnostics", reason: "Process" }))
+        ),
+        input: request,
+        reason: "Process"
+      },
+      {
+        native: fixture(() => Effect.fail(new RecognitionFailed({ message: "private file path", reason: "File" }))),
+        input: request,
+        reason: "File"
+      },
+      {
+        native: fixture(() => Effect.fail(new RecognitionFailed({ message: "legacy provider failure" }))),
+        input: request,
+        reason: "Other"
+      }
+    ]
+    for (const item of cases) {
+      const error = yield* Effect.gen(function* () {
+        return yield* collect(yield* SpeechRecognition, item.input).pipe(Effect.flip)
+      }).pipe(Effect.provide(whisperRecognitionLayer(settings, item.native)))
+      expect(error._tag).toBe("RecognitionFailed")
+      expect(error.reason ?? "Other").toBe(item.reason)
     }
   })
 )

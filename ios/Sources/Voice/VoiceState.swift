@@ -55,6 +55,8 @@ public struct VoiceState: Equatable, Sendable {
   public internal(set) var languageFailure: VoiceFailure?
   internal var languageRequest: UUID?
   public internal(set) var admissionLanguageSpans: [UUID: [LanguageSpan]] = [:]
+  // A failed, unadmitted utterance is a repeat notice, never transcript history.
+  public internal(set) var unrecognizedUtterance: UUID?
   public internal(set) var tentative = ""
   public internal(set) var admissions: [UUID: Admission] = [:]
   public internal(set) var utterances: [UUID] = []
@@ -207,6 +209,7 @@ extension VoiceState {
       return commands
     case .start:
       guard canStart else { return [] }
+      unrecognizedUtterance = nil
       generation += 1
       sessionId = nil
       sequence = 0
@@ -232,6 +235,7 @@ extension VoiceState {
       return []
     case .bootstrapped(let id, let session, let incarnation):
       guard id == generation, isConnecting else { return [] }
+      unrecognizedUtterance = nil
       sessionId = session
       backendIncarnationId = incarnation
       bootstrapKnown = true
@@ -258,6 +262,7 @@ extension VoiceState {
       return transportFailed(error)
     case .end:
       guard capture != .idle, capture != .ending, capture != .ended else { return [] }
+      unrecognizedUtterance = nil
       intent = .off
       capture = .ending
       muteInFlight = false
@@ -318,6 +323,7 @@ extension VoiceState {
           tentative = ""
           tentativeUtterance = nil
         }
+        unrecognizedUtterance = nil
         return stageFinal(
           VoiceAdmissionAssociation(
             backendIncarnationId: incarnation,
@@ -342,6 +348,16 @@ extension VoiceState {
             admissions[utterance] = .checking(deliveryId: association.deliveryId, text: text)
           }
           return [.resolve(pendingAssociations)]
+        } else if let utterance = wire.utteranceId,
+          ["RecognitionFailed", "InvalidRecognition"].contains(wire.code ?? ""),
+          capture == .listening || capture == .muted
+        {
+          unrecognizedUtterance = utterance
+          if tentativeUtterance == utterance {
+            tentative = ""
+            tentativeUtterance = nil
+          }
+          return []
         } else if capture == .listening || capture == .muted {
           return transportFailed(failure)
         }

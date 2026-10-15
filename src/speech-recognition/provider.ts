@@ -50,7 +50,19 @@ export const RecognitionEvent = Schema.Union([
   }).check(Schema.makeFilter((event) => Schema.is(Final)(event)))
 ])
 export type RecognitionEvent = typeof RecognitionEvent.Type
+export const RecognitionFailureReason = Schema.Literals([
+  "Request",
+  "Process",
+  "File",
+  "Json",
+  "Result",
+  "DetectedLanguage",
+  "Final",
+  "Deadline",
+  "Other"
+])
 export class RecognitionFailed extends Schema.TaggedError<RecognitionFailed>()("RecognitionFailed", {
+  reason: Schema.optionalKey(RecognitionFailureReason),
   message: Schema.String
 }) {}
 export const RecognitionCapabilities = Schema.Struct({

@@ -2,8 +2,12 @@ import { randomUUID, randomBytes } from "node:crypto"
 import type { Scope } from "effect"
 import { Effect, Fiber, Schema, Stream, Redacted } from "effect"
 import type { Message, Conversation } from "../conversation/index.ts"
-import type { SpeechRecognition } from "../speech-recognition/index.ts"
-import { RecognitionEvent } from "../speech-recognition/index.ts"
+import {
+  RecognitionEvent,
+  RecognitionFailed,
+  type RecognitionFailureReason,
+  type SpeechRecognition
+} from "../speech-recognition/index.ts"
 import { VoiceFrame, VoiceEvent, VoiceFailed, failed, sameDetectedLanguage } from "./contracts.ts"
 import type { VoiceSnapshot, MediaConnection, PendingVoiceInput } from "./contracts.ts"
 import type { LanguageSpan } from "../language/index.ts"
@@ -11,6 +15,8 @@ import type { ReplyAudio } from "./output.ts"
 import type { VoiceAdmissions } from "./admissions.ts"
 import type { ActivityStream, ActivityWindow } from "./activity.ts"
 import { Segmenter } from "./segmentation.ts"
+import { disabledVoiceDiagnostics, recordVoiceDiagnostic, diagnosticErrorCode } from "./diagnostics.ts"
+import type { VoiceDiagnostics, VoiceDiagnosticInput } from "./diagnostics.ts"
 const datagramPublishMillis = 250
 const capabilityBytes = 32
 const maximumEvents = 100
@@ -62,15 +68,37 @@ export class Session {
     readonly startRequestId: string,
     readonly initialMuted: boolean,
     readonly allowedLanguages: readonly string[],
-    readonly activity: ActivityStream
+    readonly activity: ActivityStream,
+    readonly diagnostics: VoiceDiagnostics["Service"] = disabledVoiceDiagnostics
   ) {
     this.muted = initialMuted
   }
   get backendIncarnationId() {
     return this.admissionStore.backendIncarnationId
   }
-  emit(input: EventInput) {
+  trace(
+    cause: VoiceDiagnosticInput["cause"],
+    code?: string,
+    reason?: typeof RecognitionFailureReason.Type,
+    sampleFrames?: number
+  ) {
+    recordVoiceDiagnostic(this.diagnostics, {
+      cause,
+      sessionId: this.id,
+      applied: true,
+      generation: this.generation,
+      ...(code === undefined ? {} : { errorCode: diagnosticErrorCode(code) }),
+      ...(reason === undefined ? {} : { recognitionReason: reason }),
+      ...(sampleFrames === undefined ? {} : { sampleFrames })
+    })
+  }
+  #traceEvent(input: EventInput, recognitionReason?: typeof RecognitionFailureReason.Type) {
+    if (input.kind === "Error") this.trace("sessionError", input.code, recognitionReason)
+    if (input.kind === "Discarded") this.trace("recognitionDiscarded")
+  }
+  emit(input: EventInput, recognitionReason?: typeof RecognitionFailureReason.Type) {
     return Effect.gen({ self: this }, function* () {
+      this.#traceEvent(input, recognitionReason)
       const event = yield* Schema.decodeUnknownEffect(VoiceEvent)({
         ...input,
         sessionId: this.id,
@@ -200,6 +228,7 @@ export class Session {
                 return Effect.fail(failed("InvalidRecognition", "Detected language is outside the configured set"))
               if (event.kind === "Interim") return this.emit({ kind: "Interim", utteranceId, text: event.text })
               final = true
+              this.trace("recognitionSucceeded")
               return event.text.trim().length === 0
                 ? this.emit({ kind: "Discarded", utteranceId, reason: "Empty" })
                 : this.admit(utteranceId, event.text, event.spans, event.detectedLanguage ?? null)
@@ -207,12 +236,15 @@ export class Session {
           )
         ),
         Effect.catch((error) =>
-          this.emit({
-            kind: "Error",
-            utteranceId,
-            code: error instanceof VoiceFailed ? error.code : error._tag,
-            message: error.message
-          })
+          this.emit(
+            {
+              kind: "Error",
+              utteranceId,
+              code: error instanceof VoiceFailed ? error.code : error._tag,
+              message: error.message
+            },
+            error instanceof RecognitionFailed ? (error.reason ?? "Other") : undefined
+          )
         ),
         Effect.ensuring(
           Effect.sync(() => {
@@ -278,6 +310,7 @@ export class Session {
       if (this.pending + this.admissions >= maximumPending || this.unresolved.size >= maximumPending)
         return yield* failed("Overloaded", "Recognition capacity exceeded; repeat this utterance")
       this.pending += 1
+      this.trace("recognitionStarted", undefined, undefined, bytes.length / bytesPerSample)
       const fiber = yield* this.recognize(bytes).pipe(Effect.forkIn(this.scope))
       this.recognition.add(fiber)
       yield* Fiber.await(fiber).pipe(

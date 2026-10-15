@@ -15,6 +15,12 @@
           Text("Voice conversation").font(.caption).foregroundStyle(.secondary)
             .accessibilityIdentifier("voice-conversation")
         }
+        if model.state.unrecognizedUtterance != nil,
+          model.state.capture == .listening || model.state.capture == .muted
+        {
+          Text("Couldn’t recognize that. Please repeat.").font(.caption)
+            .accessibilityIdentifier("voice-recognition-repeat")
+        }
         if model.state.admissionFailure != nil && model.state.hasPendingAdmission {
           Text("Saved speech check unavailable").font(.caption)
             .accessibilityIdentifier("voice-admission-unavailable")

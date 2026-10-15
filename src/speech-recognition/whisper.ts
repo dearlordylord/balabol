@@ -1,6 +1,12 @@
 import { Effect, Layer, Schema, Semaphore, Stream } from "effect"
 import { LanguageTag } from "../language/index.ts"
-import { RecognitionEvent, RecognitionFailed, RecognitionRequest, SpeechRecognition } from "./provider.ts"
+import {
+  RecognitionEvent,
+  RecognitionFailed,
+  type RecognitionFailureReason,
+  RecognitionRequest,
+  SpeechRecognition
+} from "./provider.ts"
 import { WhisperSettings, whisperNative } from "./whisper-native.ts"
 import type { WhisperNative } from "./whisper-native.ts"
 export { WhisperSettings, whisperModelBytes, whisperModelSha256, whisperNative } from "./whisper-native.ts"
@@ -18,7 +24,8 @@ const WhisperResult = Schema.Struct({
   result: Schema.Struct({ language: Schema.NullOr(LanguageTag) }),
   transcription: Schema.Array(Segment).check(Schema.isMaxLength(maximumSegments))
 })
-const failed = (message: string) => new RecognitionFailed({ message })
+const failed = (message: string, reason: typeof RecognitionFailureReason.Type) =>
+  new RecognitionFailed({ message, reason })
 const headerBytes = 44
 const bytesPerSample = 2
 const sampleRateHz = 16000
@@ -70,13 +77,14 @@ const captionOnly = (text: string): boolean => {
 }
 const parseFinal = (json: string, request: RecognitionRequest) =>
   Effect.gen(function* () {
-    if (Buffer.byteLength(json, "utf8") > maximumJsonBytes) return yield* failed("Recognition JSON exceeded its limit")
+    if (Buffer.byteLength(json, "utf8") > maximumJsonBytes)
+      return yield* failed("Recognition JSON exceeded its limit", "Json")
     const raw = yield* Effect.try({
       try: (): unknown => JSON.parse(json),
-      catch: () => failed("Invalid recognition JSON")
+      catch: () => failed("Invalid recognition JSON", "Json")
     })
     const result = yield* Schema.decodeUnknownEffect(WhisperResult)(raw).pipe(
-      Effect.mapError(() => failed("Invalid recognition result"))
+      Effect.mapError(() => failed("Invalid recognition result", "Result"))
     )
     const text = result.transcription
       .filter((segment) => !captionOnly(segment.text))
@@ -85,14 +93,14 @@ const parseFinal = (json: string, request: RecognitionRequest) =>
       .trim()
     const detectedLanguage = text.length === 0 ? null : result.result.language
     if (detectedLanguage !== null && !request.allowedLanguages.includes(detectedLanguage))
-      return yield* failed("Detected recognition language is outside the allowed set")
+      return yield* failed("Detected recognition language is outside the allowed set", "DetectedLanguage")
     return yield* Schema.decodeUnknownEffect(RecognitionEvent)({
       kind: "Final",
       utteranceId: request.utteranceId,
       text,
       detectedLanguage,
       spans: []
-    }).pipe(Effect.mapError(() => failed("Invalid recognition final")))
+    }).pipe(Effect.mapError(() => failed("Invalid recognition final", "Final")))
   })
 // One process per completed utterance; model load/warm-up belongs to the same bounded request.
 // Cancellation closes the scope, reaps the process and deletes its private audio before releasing the permit.
@@ -101,11 +109,15 @@ export const whisperRecognitionLayer = (settings: WhisperSettings, native: Whisp
     SpeechRecognition,
     Effect.gen(function* () {
       const config = yield* Schema.decodeUnknownEffect(WhisperSettings)(settings).pipe(
-        Effect.mapError(() => failed("Invalid local recognition configuration"))
+        Effect.mapError(() => failed("Invalid local recognition configuration", "Request"))
       )
       yield* native.prepare(config).pipe(
         Effect.timeout(preparationMillis),
-        Effect.mapError(() => failed("Local recognition preparation failed or timed out"))
+        Effect.mapError((error) =>
+          error._tag === "TimeoutError"
+            ? failed("Local recognition preparation exceeded its deadline", "Deadline")
+            : error
+        )
       )
       const serial = yield* Semaphore.make(1)
       return SpeechRecognition.of({
@@ -121,10 +133,10 @@ export const whisperRecognitionLayer = (settings: WhisperSettings, native: Whisp
           Stream.fromEffect(
             Effect.gen(function* () {
               const request = yield* Schema.decodeUnknownEffect(RecognitionRequest)(raw).pipe(
-                Effect.mapError(() => failed("Invalid supplied recognition audio or request"))
+                Effect.mapError(() => failed("Invalid supplied recognition audio or request", "Request"))
               )
               if (!request.allowedLanguages.every((language) => supportedLanguages.includes(language)))
-                return yield* failed("Unsupported recognition language")
+                return yield* failed("Unsupported recognition language", "Request")
               if (request.audio.sampleFrames === 0)
                 return yield* parseFinal('{"result":{"language":null},"transcription":[]}', request)
               const json = yield* native.transcribe(config, encodeWav(request.audio))
@@ -133,7 +145,9 @@ export const whisperRecognitionLayer = (settings: WhisperSettings, native: Whisp
               Effect.scoped,
               serial.withPermits(1),
               Effect.timeout(deadlineMillis),
-              Effect.mapError(() => failed("Local recognition failed or exceeded its deadline"))
+              Effect.mapError((error) =>
+                error._tag === "TimeoutError" ? failed("Local recognition exceeded its deadline", "Deadline") : error
+              )
             )
           )
       })

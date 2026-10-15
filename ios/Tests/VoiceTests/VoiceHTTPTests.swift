@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import os
 
 @testable import Voice
 
@@ -107,4 +108,82 @@ import XCTest
     }
   }
 
+}
+
+// An injected URLSession transport serves captured synthetic wire bytes; the
+// production HTTPVoiceControl still owns Join and snapshot decoding/validation.
+private final class SnapshotReplayProtocol: URLProtocol, @unchecked Sendable {
+  static let replies = OSAllocatedUnfairLock(initialState: [String: [Data]]())
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host?.hasSuffix(".snapshot.invalid") == true
+  }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func startLoading() {
+    guard let url = request.url, let host = url.host else { return }
+    let data = Self.replies.withLock { values -> Data? in
+      guard var remaining = values[host], !remaining.isEmpty else { return nil }
+      let first = remaining.removeFirst()
+      values[host] = remaining
+      return first
+    }
+    guard let data,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
+    else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+      return
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: data)
+    client?.urlProtocolDidFinishLoading(self)
+  }
+  override func stopLoading() {}
+}
+
+extension VoiceHTTPTests {
+  func testCapturedSyntheticBackendSnapshotsThroughProductionHTTPDecoder() async throws {
+    guard let path = ProcessInfo.processInfo.environment["BALABOL_TEST_VOICE_SNAPSHOTS"] else {
+      throw XCTSkip("Set BALABOL_TEST_VOICE_SNAPSHOTS to synthetic backend wire evidence.")
+    }
+    let file = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+    defer { try? file.close() }
+    let data = try file.read(upToCount: 2_097_153) ?? Data()
+    XCTAssertLessThanOrEqual(data.count, 2_097_152)
+    let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    var join = try XCTUnwrap(envelope["join"] as? [String: Any])
+    let snapshots = try XCTUnwrap(envelope["snapshots"] as? [[String: Any]])
+    XCTAssertFalse(snapshots.isEmpty)
+    XCTAssertLessThanOrEqual(snapshots.count, 240)
+    // Synthetic Join leases keep the offline replay independent of capture time.
+    let deadline = Date().timeIntervalSince1970 * 1000 + 60_000
+    join["expiresAt"] = deadline
+    join["joinDeadlineAt"] = deadline
+    join["controlDeadlineAt"] = deadline
+    let request = try XCTUnwrap(UUID(uuidString: XCTUnwrap(join["startRequestId"] as? String)))
+    let host = UUID().uuidString.lowercased() + ".snapshot.invalid"
+    let replies =
+      try [JSONSerialization.data(withJSONObject: join)]
+      + snapshots.map { try JSONSerialization.data(withJSONObject: XCTUnwrap($0["snapshot"])) }
+    SnapshotReplayProtocol.replies.withLock { $0[host] = replies }
+    defer { SnapshotReplayProtocol.replies.withLock { $0.removeValue(forKey: host) } }
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [SnapshotReplayProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let control = try HTTPVoiceControl(
+      baseURL: XCTUnwrap(URL(string: "http://" + host)), session: session)
+    let joined = try await control.start(requestId: request, muted: false)
+    for (index, snapshot) in snapshots.enumerated() {
+      let stage = try XCTUnwrap(snapshot["stage"] as? String)
+      let after = try XCTUnwrap(snapshot["after"] as? Int)
+      do {
+        _ = try await control.snapshot(sessionId: joined.sessionId, after: after)
+      } catch {
+        XCTFail(
+          "Synthetic snapshot index=\(index) stage=\(stage) failed production validation: \(error is VoiceFailure ? "VoiceFailure" : "Other")"
+        )
+        throw error
+      }
+    }
+  }
 }

@@ -19,7 +19,7 @@ export const whisperModelSha256 = "1be3a9b2063867b937e64e2ec7483364a79917e157fa9
 const maximumResultBytes = 1024 * 1024
 const privateDirectoryMode = 0o700
 const privateFileMode = 0o600
-const failed = (message: string) => new RecognitionFailed({ message })
+const failed = (message: string) => new RecognitionFailed({ message, reason: "File" })
 const io = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({ try: operation, catch: () => failed("Local recognition file operation failed") })
 // Ports describe Effect-owned resources; byte/JSON boundaries are parsed by the adapter.
@@ -64,7 +64,10 @@ export const whisperNative: WhisperNative = {
     Effect.gen(function* () {
       const version = yield* runWhisperProcess(settings.executable, ["--version"])
       if (version.trim() !== "whisper.cpp version: 1.9.5")
-        return yield* failed("Local recognition requires whisper.cpp 1.9.5")
+        return yield* new RecognitionFailed({
+          message: "Local recognition requires whisper.cpp 1.9.5",
+          reason: "Process"
+        })
       yield* verifyModel(settings.modelPath)
     }),
   transcribe: (settings, wav) =>

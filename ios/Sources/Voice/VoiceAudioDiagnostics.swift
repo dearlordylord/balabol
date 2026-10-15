@@ -20,6 +20,30 @@ import os
 #endif
 
 #if DEBUG
+  extension VoiceFailure {
+    var traceKind: String {
+      switch self {
+      case .permissionDenied: "PermissionDenied"
+      case .capture: "Capture"
+      case .connection: "Connection"
+      case .invalidResponse: "InvalidResponse"
+      case .checkpointUnavailable: "CheckpointUnavailable"
+      case .backend: "Backend"
+      }
+    }
+    var traceBackendCode: String? {
+      guard case .backend(let code, _) = self else { return nil }
+      switch code {
+      case "SessionNotFound", "StartExpired", "VoiceBusy", "Unavailable", "StorageUnavailable",
+        "Unauthorized", "InvalidRequest", "RecognitionFailed", "InvalidRecognition",
+        "SynthesisFailed",
+        "AudioUnavailable",
+        "ActivityFailed", "VoiceActivityFailed", "AdmissionFailed", "ConversationFailed":
+        return code
+      default: return "OtherBackendCode"
+      }
+    }
+  }
   extension VoiceActivityError {
     var traceStatus: String {
       switch self {
@@ -45,16 +69,20 @@ import os
   internal enum VoiceTraceCause: String, Codable, Sendable {
     case enabled, speech, input, platform, captureFailure, cut, end, shutdown
     case output, localStop, localStopped, interruptDispatch, interruptReturned, interruptFailed
+    case failure, observationFailed, wireError, transportFailed
     case onset, onsetAccepted, onsetRejected, audioReceived, playoutPrepared
   }
   internal struct VoiceTraceRecord: Codable, Sendable {
     let cause: VoiceTraceCause
     let uptime: Double
+    let session: String?
     let response: String?
     let input: String?
     let outputEpoch: String?
     let microphoneEpoch: String?
     let status: String?
+    let failureKind: String?
+    let backendCode: String?
     let capturedAt: Double?
     let classifiedAt: Double?
   }
@@ -88,14 +116,17 @@ import os
     func record(
       _ cause: VoiceTraceCause, target: VoiceOutputIdentity? = nil,
       microphone: UUID? = nil, status: String? = nil,
-      capturedAt: Double? = nil, classifiedAt: Double? = nil
+      capturedAt: Double? = nil, classifiedAt: Double? = nil,
+      failure: VoiceFailure? = nil, session: UUID? = nil
     ) {
       let event = VoiceTraceRecord(
         cause: cause, uptime: ProcessInfo.processInfo.systemUptime,
+        session: session.map(Self.hash),
         response: target.map { Self.hash($0.responseId) },
         input: target.map { Self.hash($0.inputDeliveryId) },
         outputEpoch: target.map { Self.hash($0.outputEpoch) },
         microphoneEpoch: microphone.map(Self.hash), status: status.map { String($0.prefix(32)) },
+        failureKind: failure?.traceKind, backendCode: failure?.traceBackendCode,
         capturedAt: capturedAt, classifiedAt: classifiedAt)
       let schedule = state.withLock { value in
         guard value.destination != nil else { return false }

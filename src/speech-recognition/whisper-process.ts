@@ -5,7 +5,7 @@ import { RecognitionFailed } from "./provider.ts"
 const maximumOutputBytes = 1024 * 1024
 const terminationGraceMillis = 250
 const killAcknowledgementMillis = 1000
-const failed = () => new RecognitionFailed({ message: "Local recognition process failed" })
+const failed = () => new RecognitionFailed({ message: "Local recognition process failed", reason: "Process" })
 // Internal process handle: Node owns this in-memory lifecycle, not a serialized boundary.
 const start = (executable: string, args: readonly string[]) => {
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], shell: false })
