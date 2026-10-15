@@ -5,6 +5,7 @@ import { Conversation } from "../src/conversation/index.ts"
 import { SpeechRecognition, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { SpeechSynthesis, fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice } from "../src/voice/index.ts"
+import { waitForReply } from "./reply-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { withVoiceOutput, waitForOutput } from "./voice-output-fixture.ts"
 
@@ -186,7 +187,11 @@ it("keeps playing audio through sparse clicks and fences it on genuine new speec
         const interrupted = yield* waitForOutput(voice, join.sessionId, "Interrupted")
         expect(interrupted.output?.status).toBe("Interrupted")
         expect(transport.publications[0]?.invalidated).toBe(true)
-        expect((yield* conversation.reply(input.deliveryId)).receipt?.outcome).toBe("interrupted")
+        // Publication fencing is synchronous; the interrupted receipt follows
+        // the Conversation's asynchronous durable append.
+        const saved = yield* waitForReply(conversation, input.deliveryId)
+        expect(saved.state).toBe("Interrupted")
+        expect(saved.receipt?.outcome).toBe("interrupted")
         yield* voice.end(join.sessionId)
       }),
     synthesis,

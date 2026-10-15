@@ -28,3 +28,9 @@ export {
   defaultVoiceOutputSettings,
   localSpeechVoiceOutputSettings
 } from "./output-configuration.ts"
+
+export { SpeechActivity, SpeechActivitySettings, ActivityWindow, fakeSpeechActivityLayer } from "./activity.ts"
+export type { ActivityStream } from "./activity.ts"
+export { sileroSpeechActivityLayer } from "./activity-silero.ts"
+export { speechActivityModel, activityProcessRuntime } from "./activity-runtime.ts"
+export type { ActivityRuntime, ActivityModelRunner } from "./activity-runtime.ts"

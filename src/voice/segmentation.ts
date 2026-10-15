@@ -1,48 +1,45 @@
-import type { VoiceFrame } from "./contracts.ts"
-const normalizedVoiceThreshold = 0.006
-const pcmScale = 32768
-const onsetFrames = 3
-const silenceFrames = 50
-const maximumFrames = 500
-const frameBytes = 640
+import type { ActivityWindow } from "./activity.ts"
+const onsetSamples = 960
+const silenceSamples = 16000
+const maximumSamples = 160000
 const sampleBytes = 2
-// One turn policy for fixed 20 ms PCM frames: 60 ms qualified onset,
-// 1000 ms continuous quiet to finish, and a hard 10 s utterance bound.
-// Frame RMS admits sustained soft speech without treating an isolated peak as voice.
-const voicedFrame = (data: Int16Array) =>
-  Math.sqrt(data.reduce((energy, sample) => energy + sample * sample, 0) / data.length) / pcmScale >=
-  normalizedVoiceThreshold
+/** Classification belongs to SpeechActivity. Timing counts actual PCM samples,
+ * including partial classified windows at quiet/max-duration boundaries. */
 export class Segmenter {
   #frames: Int16Array[] = []
   #onset: Int16Array[] = []
+  #onsetSamples = 0
+  #samples = 0
   #quiet = 0
   clear() {
     this.#onset = []
     this.#frames = []
+    this.#onsetSamples = 0
+    this.#samples = 0
     this.#quiet = 0
   }
-  #collect(frame: VoiceFrame, voiced: boolean) {
-    if (this.#frames.length > 0) {
-      this.#frames.push(frame.data.slice())
+  #collect(data: Int16Array, speech: boolean) {
+    if (this.#samples > 0) {
+      this.#frames.push(data)
+      this.#samples += data.length
       return false
     }
-    if (!voiced) {
+    if (!speech) {
       this.#onset = []
+      this.#onsetSamples = 0
       return false
     }
-    this.#onset.push(frame.data.slice())
-    if (this.#onset.length < onsetFrames) return false
+    this.#onset.push(data)
+    this.#onsetSamples += data.length
+    if (this.#onsetSamples < onsetSamples) return false
     this.#frames = this.#onset
+    this.#samples = this.#onsetSamples
     this.#onset = []
+    this.#onsetSamples = 0
     return true
   }
-  push(frame: VoiceFrame): { speechStarted: boolean; bytes?: Uint8Array } {
-    const voiced = voicedFrame(frame.data)
-    const speechStarted = this.#collect(frame, voiced)
-    if (this.#frames.length === 0) return { speechStarted }
-    this.#quiet = voiced ? 0 : this.#quiet + 1
-    if (this.#quiet < silenceFrames && this.#frames.length < maximumFrames) return { speechStarted }
-    const bytes = new Uint8Array(this.#frames.length * frameBytes)
+  #finish() {
+    const bytes = new Uint8Array(this.#samples * sampleBytes)
     const view = new DataView(bytes.buffer)
     let offset = 0
     for (const data of this.#frames)
@@ -51,6 +48,31 @@ export class Segmenter {
         offset += sampleBytes
       }
     this.clear()
-    return { speechStarted, bytes }
+    return bytes
+  }
+  #takeLength(window: ActivityWindow, offset: number): number {
+    const available = window.samples.length - offset
+    if (this.#samples === 0) return available
+    return Math.min(
+      available,
+      maximumSamples - this.#samples,
+      window.speech ? maximumSamples : silenceSamples - this.#quiet
+    )
+  }
+  push(window: ActivityWindow): readonly { speechStarted: boolean; bytes?: Uint8Array }[] {
+    const events: { speechStarted: boolean; bytes?: Uint8Array }[] = []
+    let offset = 0
+    while (offset < window.samples.length) {
+      const length = this.#takeLength(window, offset)
+      const data = window.samples.slice(offset, offset + length)
+      offset += length
+      const speechStarted = this.#collect(data, window.speech)
+      if (this.#samples === 0) continue
+      this.#quiet = window.speech ? 0 : this.#quiet + data.length
+      if (this.#quiet >= silenceSamples || this.#samples >= maximumSamples)
+        events.push({ speechStarted, bytes: this.#finish() })
+      else if (speechStarted) events.push({ speechStarted })
+    }
+    return events
   }
 }

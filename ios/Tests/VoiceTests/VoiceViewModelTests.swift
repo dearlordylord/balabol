@@ -1182,7 +1182,7 @@ import XCTest
     await model.shutdown()
   }
 
-  func testSparseLowEnergyCapturePeaksDoNotInterruptAnAnswerStillPreparing() async throws {
+  func testClassifiedNonSpeechPreservesWaitingReplyAndQualifiedSpeechInterrupts() async throws {
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)
     let model = VoiceViewModel(control: control, media: media) { _ in
@@ -1205,45 +1205,44 @@ import XCTest
     XCTAssertFalse(model.output.receivedAudio)
     XCTAssertEqual(media.preparedOutputs, 0)
 
-    // Six 10ms buffers contain one isolated sample each, not sustained speech.
-    // Use the same complete-buffer measurement as the native renderer.
-    var samples = [Float](repeating: 0, count: 480)
-    samples[0] = 0.03
-    var measurement = VoiceOnsetTracker()
-    let energy = try XCTUnwrap(
-      measurement.processCapture(
-        frameCount: samples.count, channelCount: 1, sampleRate: 48000,
-        sample: { frame, _ in samples[frame] })?.energy)
-    XCTAssertGreaterThan(energy.peak, 0.025)
-    XCTAssertLessThan(energy.rms, 0.002)
-    var onset = VoiceOnsetTracker()
-    for _ in 0..<6 {
-      if onset.processCapture(
-        frameCount: samples.count, channelCount: 1, sampleRate: 48000,
-        sample: { frame, _ in samples[frame] })?.onset != nil
-      {
+    // Exercise the production capture/qualification path through an injected
+    // classifier. These probabilities test admission, not acoustic accuracy.
+    let classifier = PendingReplyActivityClassifier()
+    let notices = AsyncStream<UUID>.makeStream(bufferingPolicy: .bufferingNewest(8))
+    let capture = VoiceActivityCapture(
+      classifier: classifier,
+      started: { epoch, _ in notices.continuation.yield(epoch) },
+      failed: { _ in
+        XCTFail("Valid fixture classification must not fail")
+      })
+    let projection = Task { @MainActor in
+      for await epoch in notices.stream {
+        guard capture.accepts(epoch) else { continue }
         media.speech?()
       }
     }
-    for _ in 0..<20 { await Task.yield() }
+    XCTAssertTrue(
+      capture.capture(
+        frameCount: 1024, channels: 1, sampleRate: 16000,
+        sample: { _, _ in 0.9 }))
+    await classifier.waitForCalls(2)
     let interruptions = await control.interruptCalls()
     XCTAssertFalse(
       model.output.locallyInterrupted,
-      "Sparse low-RMS peaks must not retire a pending answer before text or audio exists")
-    XCTAssertEqual(interruptions, 0, "Noise must not request backend answer interruption")
+      "Classified non-speech must not retire a pending answer before text or audio exists")
+    XCTAssertEqual(interruptions, 0)
     XCTAssertEqual(model.output.current?.status, .preparing)
 
-    // Genuine sustained energy must still interrupt immediately while waiting.
-    let speech: Float = 0.01
-    for _ in 0..<6 {
-      if onset.processCapture(
-        frameCount: 480, channelCount: 1, sampleRate: 48000,
-        sample: { _, _ in speech })?.onset != nil
-      {
-        media.speech?()
-      }
-    }
+    await classifier.setSpeech()
+    XCTAssertTrue(
+      capture.capture(
+        frameCount: 1024, channels: 1, sampleRate: 16000,
+        sample: { _, _ in 0.0001 }))
+    await settle { model.output.locallyInterrupted }
     XCTAssertTrue(model.output.locallyInterrupted)
+    await capture.stop()
+    notices.continuation.finish()
+    await projection.value
     await model.shutdown()
   }
 
@@ -1800,5 +1799,28 @@ extension VoiceViewModelTests {
     XCTAssertTrue(receipts.isEmpty)
     model.end()
     await model.shutdown()
+  }
+}
+
+private actor PendingReplyActivityClassifier: VoiceActivityClassifier {
+  private var probability: Float = 0.01
+  private var calls = 0
+  private var waiter: CheckedContinuation<Void, Never>?
+  private var target = 0
+  func probability(_ frame: [Float]) throws -> Float {
+    guard frame.count == 512 else { throw VoiceActivityError.invalidFrame }
+    calls += 1
+    if calls >= target {
+      waiter?.resume()
+      waiter = nil
+    }
+    return probability
+  }
+  func reset() {}
+  func setSpeech() { probability = 0.9 }
+  func waitForCalls(_ count: Int) async {
+    if calls >= count { return }
+    target = count
+    await withCheckedContinuation { waiter = $0 }
   }
 }

@@ -21,7 +21,7 @@
     "typecheck:effect": "node scripts/quality/cli.mjs effect",
     "test": "node scripts/quality/cli.mjs behavior",
     "test:coverage": "node scripts/quality/cli.mjs behavior",
-    "test:harness": "node --test scripts/quality/cli.test.mjs scripts/dev-voice.test.mjs",
+    "test:harness": "node --test scripts/quality/cli.test.mjs scripts/dev-voice.test.mjs scripts/prepare-vad.test.mjs",
     "lint": "node scripts/quality/cli.mjs lint && node scripts/quality/cli.mjs duplication",
     "circular": "node scripts/quality/cli.mjs architecture && node scripts/quality/cli.mjs cycles",
     "complexity": "node scripts/quality/cli.mjs complexity",
@@ -30,7 +30,8 @@
     "start": "node dist/bootstrap/main.js",
     "dev:voice": "node scripts/dev-voice.mjs",
     "subscription": "pnpm build && node dist/bootstrap/subscription-main.js",
-    "build:speech": "node scripts/build-apple-speech.mjs"
+    "build:speech": "node scripts/build-apple-speech.mjs",
+    "prepare:vad": "node scripts/prepare-vad.mjs"
   },
   "lint-staged": {
     "*.{md,json,yaml,yml}": "prettier --write",
@@ -76,6 +77,7 @@
     "@firfi/unii": "0.1.0",
     "@livekit/rtc-node": "1.1.0",
     "jose": "6.2.12",
-    "livekit-server-sdk": "2.19.1"
+    "livekit-server-sdk": "2.19.1",
+    "onnxruntime-node": "1.24.2"
   }
 }

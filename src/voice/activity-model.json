@@ -1,0 +1,12 @@
+{
+  "version": "v6.2.3",
+  "revision": "5cd7945676eb32225748052e2e6a0580e4686a08",
+  "url": "https://raw.githubusercontent.com/snakers4/silero-vad/5cd7945676eb32225748052e2e6a0580e4686a08/src/silero_vad/data/silero_vad.onnx",
+  "filename": "silero-v6.2.3.onnx",
+  "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+  "bytes": 2327524,
+  "sampleRateHz": 16000,
+  "windowSamples": 512,
+  "contextSamples": 64,
+  "speechThreshold": 0.5
+}

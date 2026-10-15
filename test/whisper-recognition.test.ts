@@ -153,3 +153,44 @@ it.effect("startup failure is typed and never substitutes fake recognition", () 
     expect(result._tag).toBe("Failure")
   })
 )
+
+it.effect("discards only observed standalone non-speech caption segments and retains actual speech", () =>
+  Effect.gen(function* () {
+    const cases = [
+      { segments: [" [BLANK_AUDIO] "], expected: "" },
+      { segments: ["[BLANK AUDIO]"], expected: "" },
+      { segments: [" (keyboard tapping) "], expected: "" },
+      { segments: ["[BLANK_AUDIO] (keyboard tapping)"], expected: "" },
+      { segments: ["Bonjour ", "(keyboard tapping)", " Hello Привет"], expected: "Bonjour  Hello Привет" },
+      { segments: ["keyboard tapping"], expected: "keyboard tapping" },
+      { segments: ["Please say [BLANK_AUDIO] literally."], expected: "Please say [BLANK_AUDIO] literally." },
+      {
+        segments: ["This is (keyboard tapping) as a quoted label."],
+        expected: "This is (keyboard tapping) as a quoted label."
+      },
+      {
+        segments: ["(this is a genuine parenthetical sentence)"],
+        expected: "(this is a genuine parenthetical sentence)"
+      }
+    ]
+    for (const item of cases) {
+      const native = fixture(() =>
+        Effect.succeed(
+          JSON.stringify({ result: { language: "en" }, transcription: item.segments.map((text) => ({ text })) })
+        )
+      )
+      const events = yield* Effect.gen(function* () {
+        return yield* collect(yield* SpeechRecognition)
+      }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)))
+      expect(events).toEqual([
+        {
+          kind: "Final",
+          utteranceId: request.utteranceId,
+          text: item.expected,
+          spans: [],
+          detectedLanguage: item.expected.length === 0 ? null : "en"
+        }
+      ])
+    }
+  })
+)

@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultModelPath } from "./prepare-vad.mjs";
 
 const image = "livekit/livekit-server@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154";
 const ports = { control: 8444, media: 8443, backend: 8787, rtcTcp: 7881, rtcUdp: 7882 };
@@ -20,6 +21,7 @@ export const providerEnvironment = (args, environment) => {
     BALABOL_SUMMARY_PROVIDER: environment.BALABOL_SUMMARY_PROVIDER ?? "subscription",
     BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "whisper",
     BALABOL_SYNTHESIS_PROVIDER: environment.BALABOL_SYNTHESIS_PROVIDER ?? "apple",
+    BALABOL_ACTIVITY_PROVIDER: environment.BALABOL_ACTIVITY_PROVIDER ?? "silero",
   };
   if (selected.BALABOL_ANSWER_PROVIDER === "subscription")
     selected.BALABOL_ANSWER_MODEL = environment.BALABOL_ANSWER_MODEL ?? "gpt-6.1-sol";
@@ -29,7 +31,7 @@ export const providerEnvironment = (args, environment) => {
 };
 
 export const providerDescription = (environment) =>
-  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}`;
+  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}, speech activity=${environment.BALABOL_ACTIVITY_PROVIDER ?? (environment.BALABOL_RECOGNITION_PROVIDER === "whisper" ? "silero" : "fake")}`;
 
 // Existence/permissions only: provider acquisition owns engine and weight validation.
 export const localRequirements = (environment, includeHelper = true) => {
@@ -64,6 +66,15 @@ export const localRequirements = (environment, includeHelper = true) => {
         mode: constants.X_OK,
       });
   }
+  if (
+    (environment.BALABOL_ACTIVITY_PROVIDER ??
+      (environment.BALABOL_RECOGNITION_PROVIDER === "whisper" ? "silero" : "fake")) === "silero"
+  )
+    requirements.push({
+      label: "Silero VAD weights (run pnpm prepare:vad)",
+      path: environment.BALABOL_VAD_MODEL ?? defaultModelPath,
+      mode: constants.R_OK,
+    });
   return requirements;
 };
 export const checkLocalResources = (environment, includeHelper = true) => {

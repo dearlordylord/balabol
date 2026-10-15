@@ -11,7 +11,10 @@ test("ordinary launch preserves fake defaults and does not acquire any local spe
   assert.deepEqual(selected, source);
   assert.notEqual(selected, source);
   assert.deepEqual(localRequirements(selected), []);
-  assert.equal(providerDescription(selected), "answers=fake, memory summaries=fake, recognition=fake, synthesis=fake");
+  assert.equal(
+    providerDescription(selected),
+    "answers=fake, memory summaries=fake, recognition=fake, synthesis=fake, speech activity=fake",
+  );
 });
 
 test("real opt-in selects subscription models and local speech while check preserves the same selection", () => {
@@ -21,15 +24,16 @@ test("real opt-in selects subscription models and local speech while check prese
     BALABOL_SUMMARY_PROVIDER: "subscription",
     BALABOL_RECOGNITION_PROVIDER: "whisper",
     BALABOL_SYNTHESIS_PROVIDER: "apple",
+    BALABOL_ACTIVITY_PROVIDER: "silero",
     BALABOL_ANSWER_MODEL: "gpt-6.1-sol",
     BALABOL_SUMMARY_MODEL: "gpt-6-luna",
   });
   assert.deepEqual(providerEnvironment(["--real", "--check"], {}), selected);
   assert.deepEqual(
     localRequirements(selected).map((item) => item.mode),
-    [constants.X_OK, constants.R_OK, constants.X_OK, constants.X_OK],
+    [constants.X_OK, constants.R_OK, constants.X_OK, constants.X_OK, constants.R_OK],
   );
-  assert.equal(localRequirements(selected, false).length, 3);
+  assert.equal(localRequirements(selected, false).length, 4);
 });
 
 test("explicit provider, model and local executable overrides survive real opt-in without mutating the caller", () => {
@@ -40,6 +44,7 @@ test("explicit provider, model and local executable overrides survive real opt-i
     BALABOL_WHISPER_MODEL: "/local/small.bin",
     BALABOL_APPLE_SPEECH_EXECUTABLE: "/local/apple",
     BALABOL_FFMPEG_EXECUTABLE: "/local/ffmpeg",
+    BALABOL_VAD_MODEL: "/local/vad.onnx",
   };
   const selected = providerEnvironment(["--real"], source);
   assert.equal(selected.BALABOL_ANSWER_PROVIDER, "fake");
@@ -47,7 +52,7 @@ test("explicit provider, model and local executable overrides survive real opt-i
   assert.equal(selected.BALABOL_SUMMARY_MODEL, "custom-luna");
   assert.deepEqual(
     localRequirements(selected).map((item) => item.path),
-    ["/local/whisper", "/local/small.bin", "/local/ffmpeg", "/local/apple"],
+    ["/local/whisper", "/local/small.bin", "/local/ffmpeg", "/local/apple", "/local/vad.onnx"],
   );
   assert.match(providerDescription(selected), /^answers=fake, memory summaries=subscription/);
   assert.equal(source.BALABOL_SUMMARY_PROVIDER, undefined);
@@ -69,6 +74,7 @@ test("read-only speech checks require readable files and executables without inv
       BALABOL_WHISPER_MODEL: model,
       BALABOL_APPLE_SPEECH_EXECUTABLE: executable,
       BALABOL_FFMPEG_EXECUTABLE: executable,
+      BALABOL_VAD_MODEL: model,
     });
     assert.doesNotThrow(() => checkLocalResources(environment));
     assert.throws(() => checkLocalResources({ ...environment, BALABOL_WHISPER_MODEL: directory }), /whisper weights/);

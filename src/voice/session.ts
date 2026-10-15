@@ -9,6 +9,7 @@ import type { VoiceSnapshot, MediaConnection, PendingVoiceInput } from "./contra
 import type { LanguageSpan } from "../language/index.ts"
 import type { ReplyAudio } from "./output.ts"
 import type { VoiceAdmissions } from "./admissions.ts"
+import type { ActivityStream, ActivityWindow } from "./activity.ts"
 import { Segmenter } from "./segmentation.ts"
 const datagramPublishMillis = 250
 const capabilityBytes = 32
@@ -60,7 +61,8 @@ export class Session {
     readonly admissionStore: VoiceAdmissions["Service"],
     readonly startRequestId: string,
     readonly initialMuted: boolean,
-    readonly allowedLanguages: readonly string[]
+    readonly allowedLanguages: readonly string[],
+    readonly activity: ActivityStream
   ) {
     this.muted = initialMuted
   }
@@ -224,6 +226,7 @@ export class Session {
     if (this.track === track) return
     if (this.track !== undefined) this.generation += 1
     this.segmenter.clear()
+    this.activity.reset()
     this.track = track
   }
   interruptOnSpeech() {
@@ -244,9 +247,33 @@ export class Session {
       this.audioFramesReceived += 1
       this.sampleFramesReceived += frame.samplesPerChannel
       this.selectTrack(track)
-      const { bytes, speechStarted } = this.segmenter.push(frame)
-      if (speechStarted) yield* this.interruptOnSpeech()
-      if (bytes === undefined) return
+      const generation = this.generation
+      const windows = yield* this.activity.push(frame)
+      yield* this.classified(windows, generation)
+    }).pipe(
+      Effect.catch((error) => {
+        this.fenceInput()
+        return this.emit({ kind: "Error", utteranceId: null, code: error.code, message: error.message })
+      })
+    )
+  }
+  classified(windows: readonly ActivityWindow[], generation: number) {
+    return Effect.gen({ self: this }, function* () {
+      if (generation !== this.generation || this.muted || this.status !== "active") return
+      for (const window of windows)
+        for (const event of this.segmenter.push(window)) {
+          if (event.speechStarted) yield* this.interruptOnSpeech()
+          if (event.bytes !== undefined) yield* this.recognizeSegment(event.bytes)
+        }
+    })
+  }
+  fenceInput() {
+    this.generation += 1
+    this.segmenter.clear()
+    this.activity.reset()
+  }
+  recognizeSegment(bytes: Uint8Array) {
+    return Effect.gen({ self: this }, function* () {
       if (this.pending + this.admissions >= maximumPending || this.unresolved.size >= maximumPending)
         return yield* failed("Overloaded", "Recognition capacity exceeded; repeat this utterance")
       this.pending += 1
@@ -256,14 +283,11 @@ export class Session {
         Effect.andThen(Effect.sync(() => this.recognition.delete(fiber))),
         Effect.forkIn(this.scope)
       )
-    }).pipe(
-      Effect.catch((error) => this.emit({ kind: "Error", utteranceId: null, code: error.code, message: error.message }))
-    )
+    })
   }
   stop() {
     return Effect.gen({ self: this }, function* () {
-      this.generation += 1
-      this.segmenter.clear()
+      this.fenceInput()
       for (const fiber of this.recognition) yield* Fiber.interrupt(fiber)
       this.recognition.clear()
     })

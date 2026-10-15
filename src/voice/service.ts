@@ -11,6 +11,7 @@ import { VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration, validate
 import type { VoiceLanguageCapabilities } from "./languages.ts"
 import { Session } from "./session.ts"
 import { VoiceOutputSettings, VoiceOutputConfiguration, defaultVoiceOutputSettings } from "./output-configuration.ts"
+import { SpeechActivity, fakeSpeechActivityLayer } from "./activity.ts"
 import { ReplyAudio } from "./output.ts"
 const maximumSessions = 2
 const disconnectPollMillis = 20
@@ -40,6 +41,7 @@ export class Voice extends Context.Service<
       const admissions = yield* VoiceAdmissions
       const conversation = yield* Conversation
       const provider = yield* SpeechRecognition
+      const activity = yield* SpeechActivity
       const synthesis = yield* SpeechSynthesis
       const languages = yield* validateVoiceLanguages(
         languageSettings,
@@ -129,6 +131,8 @@ export class Voice extends Context.Service<
               if (ended === undefined) return yield* failed("VoiceBusy", "Previous acceptance is still pending")
               sessions.delete(ended.session.id)
             }
+            const sessionScope = yield* Scope.fork(scope)
+            const activityStream = yield* activity.open().pipe(Scope.provide(sessionScope))
             const session = new Session(
               conversation,
               provider,
@@ -136,12 +140,12 @@ export class Voice extends Context.Service<
               admissions,
               request.startRequestId,
               request.muted,
-              languages.allowedLanguages
+              languages.allowedLanguages,
+              activityStream
             )
             const startedAt = yield* Clock.currentTimeMillis
             session.joinDeadlineAt = startedAt + joinMillis
             session.controlDeadlineAt = startedAt + controlMillis
-            const sessionScope = yield* Scope.fork(scope)
             session.release = Scope.close(sessionScope, Exit.void)
             const frames = yield* Queue.make<{ track: string; raw: unknown; generation: number }>({ capacity: 8 })
             let disconnected: string | undefined
@@ -156,8 +160,11 @@ export class Voice extends Context.Service<
               .open(
                 { sessionId: session.id, roomName: session.roomName, participantIdentity: session.participantIdentity },
                 (track, raw) => {
-                  if (!Queue.offerUnsafe(frames, { track, raw, generation: session.generation }))
+                  if (disconnected !== undefined) return
+                  if (!Queue.offerUnsafe(frames, { track, raw, generation: session.generation })) {
+                    session.fenceInput()
                     disconnected = "Overloaded"
+                  }
                 },
                 () => {
                   disconnected = "MediaDisconnected"
@@ -293,7 +300,8 @@ export class Voice extends Context.Service<
   )
   static readonly layer = Voice.configuredLayer.pipe(
     Layer.provide(
-      Layer.merge(
+      Layer.mergeAll(
+        fakeSpeechActivityLayer,
         Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
         Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings)
       )

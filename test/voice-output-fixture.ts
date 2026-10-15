@@ -4,11 +4,14 @@ import type { AnswerGeneration, AnswerFailed } from "../src/answer-generation/in
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import {
   Voice,
+  type SpeechActivity,
+  fakeSpeechActivityLayer,
   VoiceOutputConfiguration,
   defaultVoiceOutputSettings,
   VoiceLanguageConfiguration,
   defaultVoiceLanguageConfiguration,
   type VoiceLanguageSettings,
+  type VoiceFailed,
   type VoiceOutputSettings,
   type VoiceAdmissions
 } from "../src/voice/index.ts"
@@ -27,13 +30,15 @@ export const voiceOutputLayer = (
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
   recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer(),
   settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration,
-  outputSettings: VoiceOutputSettings = defaultVoiceOutputSettings
+  outputSettings: VoiceOutputSettings = defaultVoiceOutputSettings,
+  activity: Layer.Layer<SpeechActivity, VoiceFailed> = fakeSpeechActivityLayer
 ) => {
   const conversation = replyLayer(path, answer, { attachmentMillis: 10 })
   const admissions = voiceAdmissionsFixture().pipe(Layer.provide(conversation))
   const voice = Voice.configuredLayer.pipe(
     Layer.provide(
-      Layer.merge(
+      Layer.mergeAll(
+        activity,
         Layer.succeed(VoiceLanguageConfiguration, settings),
         Layer.succeed(VoiceOutputConfiguration, outputSettings)
       )
@@ -50,7 +55,8 @@ export const withVoiceOutput = async (
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
   recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer(),
   settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration,
-  outputSettings: VoiceOutputSettings = defaultVoiceOutputSettings
+  outputSettings: VoiceOutputSettings = defaultVoiceOutputSettings,
+  activity: Layer.Layer<SpeechActivity, VoiceFailed> = fakeSpeechActivityLayer
 ) => {
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
@@ -61,7 +67,8 @@ export const withVoiceOutput = async (
     answer,
     recognition,
     settings,
-    outputSettings
+    outputSettings,
+    activity
   )
   try {
     await Effect.runPromise(Effect.scoped(program(transport)).pipe(Effect.provide(application)))

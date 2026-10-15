@@ -14,6 +14,7 @@ private struct ClientLocalState {
   let defaults: UserDefaults
   let testNamespace: String?
   let launchControlURL: String?
+  let voiceDiagnostics: Bool
 
   static func currentLaunch() -> ClientLocalState {
     #if DEBUG
@@ -23,10 +24,17 @@ private struct ClientLocalState {
         else { preconditionFailure("The UI test namespace must be a UUID.") }
         return ClientLocalState(
           defaults: defaults, testNamespace: namespace,
-          launchControlURL: ProcessInfo.processInfo.environment["BALABOL_UI_TEST_CONTROL_URL"])
+          launchControlURL: ProcessInfo.processInfo.environment["BALABOL_UI_TEST_CONTROL_URL"],
+          voiceDiagnostics: true)
       }
     #endif
-    return ClientLocalState(defaults: .standard, testNamespace: nil, launchControlURL: nil)
+    #if DEBUG
+      let voiceDiagnostics = ProcessInfo.processInfo.environment["BALABOL_VOICE_DIAGNOSTICS"] == "1"
+    #else
+      let voiceDiagnostics = false
+    #endif
+    return ClientLocalState(defaults: .standard, testNamespace: nil, launchControlURL: nil,
+                            voiceDiagnostics: voiceDiagnostics)
   }
 
   func draftURL(in applicationSupport: URL) -> URL {
@@ -160,7 +168,7 @@ private struct ConversationRoot: View {
         controlOrigin: url)
       voice = VoiceViewModel(
         control: control,
-        media: LiveKitVoiceMedia(evidenceEnabled: localState.testNamespace != nil),
+        media: LiveKitVoiceMedia(evidenceEnabled: localState.voiceDiagnostics),
         checkpoint: checkpoint,
         refreshConversation: { [weak conversation] in
           conversation?.refreshReconnectDisplay()

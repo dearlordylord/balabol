@@ -57,6 +57,17 @@ const encodeWav = (audio: RecognitionRequest["audio"]) => {
   wav.set(audio.bytes, headerBytes)
   return wav
 }
+// Whisper's non-speech annotations are decoder text, not spoken content:
+// https://github.com/openai/whisper/blob/main/whisper/tokenizer.py#L228-L237
+// Keep this guard limited to observed complete caption segments. Ordinary words,
+// quoted/inline mentions, and other parenthetical speech remain untouched.
+const observedCaptions = ["[blank_audio]", "[blank audio]", "(keyboard tapping)"]
+const captionOnly = (text: string): boolean => {
+  const candidate = text.trim().toLowerCase()
+  if (candidate.length === 0) return false
+  const remainder = observedCaptions.reduce((value, caption) => value.replaceAll(caption, ""), candidate)
+  return remainder.trim().length === 0
+}
 const parseFinal = (json: string, request: RecognitionRequest) =>
   Effect.gen(function* () {
     if (Buffer.byteLength(json, "utf8") > maximumJsonBytes) return yield* failed("Recognition JSON exceeded its limit")
@@ -68,6 +79,7 @@ const parseFinal = (json: string, request: RecognitionRequest) =>
       Effect.mapError(() => failed("Invalid recognition result"))
     )
     const text = result.transcription
+      .filter((segment) => !captionOnly(segment.text))
       .map((segment) => segment.text)
       .join("")
       .trim()

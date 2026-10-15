@@ -44,7 +44,11 @@ import {
   VoiceOutputConfiguration,
   VoiceOutputSettings,
   defaultVoiceOutputSettings,
-  localSpeechVoiceOutputSettings
+  localSpeechVoiceOutputSettings,
+  SpeechActivitySettings,
+  fakeSpeechActivityLayer,
+  sileroSpeechActivityLayer,
+  speechActivityModel
 } from "../voice/index.ts"
 import { subscriptionLayer, subscriptionInferenceLayer } from "../subscription/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
@@ -101,6 +105,7 @@ export const ServerConfig = Schema.Struct({
   voice: Schema.optionalKey(LiveKitSettings),
   voiceLanguages: Schema.optionalKey(LanguageTags),
   recognition: Schema.optionalKey(WhisperSettings),
+  activity: Schema.optionalKey(SpeechActivitySettings),
   synthesis: Schema.optionalKey(AppleSynthesisSettings),
   voiceOutput: Schema.optionalKey(VoiceOutputSettings),
   tailnetOwner: Schema.optionalKey(
@@ -174,6 +179,16 @@ const outputSelection = (environment: NodeJS.ProcessEnv) => ({
     )
   }
 })
+const activitySelection = (environment: NodeJS.ProcessEnv) => ({
+  activity: {
+    provider:
+      environment.BALABOL_ACTIVITY_PROVIDER ??
+      (environment.BALABOL_RECOGNITION_PROVIDER === "whisper" ? "silero" : "fake"),
+    modelPath:
+      environment.BALABOL_VAD_MODEL ??
+      join(homedir(), ".local", "share", "balabol", "models", "vad", speechActivityModel.filename)
+  }
+})
 const speechSelection = (environment: NodeJS.ProcessEnv) => ({
   recognition: {
     provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
@@ -205,6 +220,7 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     reply: { ...providerSelection(environment), ...replyTiming(environment) },
     ...languageSelection(environment),
     ...speechSelection(environment),
+    ...activitySelection(environment),
     ...outputSelection(environment),
     ...voiceSelection(environment),
     ...tailnetSelection(environment)
@@ -213,6 +229,16 @@ const selectedSynthesis = (config: ServerConfig) =>
   config.synthesis?.provider === "apple"
     ? appleSynthesisLayer(config.synthesis, config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages)
     : fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })
+const selectedSpeechActivity = (config: ServerConfig) => {
+  const provider = config.activity?.provider ?? (config.recognition?.provider === "whisper" ? "silero" : "fake")
+  return provider === "silero"
+    ? sileroSpeechActivityLayer({
+        modelPath:
+          config.activity?.modelPath ??
+          join(homedir(), ".local", "share", "balabol", "models", "vad", speechActivityModel.filename)
+      })
+    : fakeSpeechActivityLayer
+}
 export const serverLayer = (config: ServerConfig) => {
   const conversation = conversationLayer(
     config.database,
@@ -251,6 +277,7 @@ export const serverLayer = (config: ServerConfig) => {
       config.recognition?.provider === "whisper" ? whisperRecognitionLayer(config.recognition) : fakeRecognitionLayer()
     ),
     Layer.provide(selectedSynthesis(config)),
+    Layer.provide(selectedSpeechActivity(config)),
     Layer.provide(Layer.succeed(VoiceOutputConfiguration, config.voiceOutput ?? defaultVoiceOutputSettings)),
     Layer.provide(liveKitLayer(config.voice)),
     Layer.provide(admissions),
