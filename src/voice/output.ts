@@ -14,13 +14,12 @@ import type {
   MediaConnection
 } from "./contracts.ts"
 import type { Phrase } from "./phrases.ts"
+import type { VoiceOutputSettings } from "./output-configuration.ts"
 import { Phrases } from "./phrases.ts"
 const sampleRate = 24000
-const completionMillis = 30000
 const readinessMillis = 5000
 const pollMillis = 20
 const maximumError = 1000
-const maximumPhraseAudio = 240000
 const invalidationMessage = (target: ResponseInvalidation, previous: { message: string } | null) =>
   target.reason === "Deadline"
     ? "Reply audio delivery exceeded its deadline"
@@ -40,7 +39,8 @@ export class ReplyAudio {
     readonly synthesis: SpeechSynthesis["Service"],
     readonly connection: MediaConnection,
     readonly scope: Scope.Scope,
-    readonly emit: (output: VoiceOutput) => Effect.Effect<void>
+    readonly emit: (output: VoiceOutput) => Effect.Effect<void>,
+    readonly settings: VoiceOutputSettings
   ) {}
   get snapshot() {
     return this.#state
@@ -54,6 +54,7 @@ export class ReplyAudio {
   #invalidated(target: ResponseInvalidation) {
     if (this.#state?.responseId !== target.responseId) return
     this.#fenced = true
+    this.#publication?.invalidate()
     if (["Deadline", "Failed"].includes(target.reason)) {
       this.#state = {
         ...this.#state,
@@ -69,14 +70,14 @@ export class ReplyAudio {
         Effect.mapError(() => failed("AudioUnavailable", "Incompatible speech synthesis capabilities"))
       )
       if (!this.synthesis.capabilities.languages.includes("en"))
-        return yield* failed("AudioUnavailable", "English fixture synthesis is unavailable")
+        return yield* failed("AudioUnavailable", "English speech synthesis is unavailable")
       this.#notices = yield* Queue.make<boolean>({ capacity: 1 })
       yield* Effect.forever(Queue.take(this.#notices).pipe(Effect.andThen(this.#changed()))).pipe(
         Effect.forkIn(this.scope)
       )
       const registration = yield* this.conversation
         .registerReplyDelivery({
-          completionMillis,
+          completionMillis: this.settings.completionMillis,
           started: (ticket) => {
             this.#ticket = ticket
             this.#fenced = false
@@ -121,6 +122,7 @@ export class ReplyAudio {
   #failure(ticket: DeliveryTicket, message: string) {
     return Effect.gen({ self: this }, function* () {
       if (!this.#active(ticket) || this.#state === null) return
+      this.#publication?.invalidate()
       this.#state = {
         ...this.#state,
         status: "Failed",
@@ -174,7 +176,7 @@ export class ReplyAudio {
               }
               sequence += 1
               frames += event.audio.sampleFrames
-              return frames > maximumPhraseAudio
+              return frames > this.synthesis.capabilities.maxAudioFrames
                 ? Effect.fail(failed("AudioUnavailable", "Phrase audio exceeds capacity"))
                 : publication.capture(event.audio)
             })
@@ -196,7 +198,7 @@ export class ReplyAudio {
       while (this.#active(ticket)) {
         const reply = yield* this.#reply(ticket)
         if (!phrases.append(reply.text, reply.languageSpans, reply.responseLanguage))
-          return yield* failed("AudioUnavailable", "Reply phrase buffer exceeded capacity")
+          return yield* failed("AudioUnavailable", "Reply text or language annotations changed during playback")
         const flush = reply.state === "Delivering"
         let phrase = phrases.next(flush)
         while (phrase !== undefined) {

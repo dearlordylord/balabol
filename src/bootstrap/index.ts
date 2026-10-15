@@ -32,7 +32,7 @@ import {
   subscriptionSummaryLayer
 } from "../summary-generation/index.ts"
 import { fakeRecognitionLayer, whisperRecognitionLayer, WhisperSettings } from "../speech-recognition/index.ts"
-import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
+import { fakeSynthesisLayer, appleSynthesisLayer, AppleSynthesisSettings } from "../speech-synthesis/index.ts"
 import {
   LiveKitSettings,
   liveKitLayer,
@@ -40,7 +40,11 @@ import {
   voiceRoutes,
   sqliteVoiceAdmissions,
   VoiceLanguageConfiguration,
-  defaultVoiceLanguageConfiguration
+  defaultVoiceLanguageConfiguration,
+  VoiceOutputConfiguration,
+  VoiceOutputSettings,
+  defaultVoiceOutputSettings,
+  localSpeechVoiceOutputSettings
 } from "../voice/index.ts"
 import { subscriptionLayer, subscriptionInferenceLayer } from "../subscription/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
@@ -97,6 +101,8 @@ export const ServerConfig = Schema.Struct({
   voice: Schema.optionalKey(LiveKitSettings),
   voiceLanguages: Schema.optionalKey(LanguageTags),
   recognition: Schema.optionalKey(WhisperSettings),
+  synthesis: Schema.optionalKey(AppleSynthesisSettings),
+  voiceOutput: Schema.optionalKey(VoiceOutputSettings),
   tailnetOwner: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumOwnerIdentityLength))
   )
@@ -155,6 +161,35 @@ const subscriptionSelection = (environment: NodeJS.ProcessEnv) => ({
   subscriptionDirectory:
     environment.BALABOL_SUBSCRIPTION_DIRECTORY ?? join(homedir(), ".local", "share", "balabol", "subscription")
 })
+const outputSelection = (environment: NodeJS.ProcessEnv) => ({
+  voiceOutput: {
+    completionMillis: Number(
+      environment.BALABOL_VOICE_COMPLETION_MILLIS ??
+        String(
+          (environment.BALABOL_SYNTHESIS_PROVIDER === "apple"
+            ? localSpeechVoiceOutputSettings
+            : defaultVoiceOutputSettings
+          ).completionMillis
+        )
+    )
+  }
+})
+const speechSelection = (environment: NodeJS.ProcessEnv) => ({
+  recognition: {
+    provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
+    executable: environment.BALABOL_WHISPER_EXECUTABLE ?? "/opt/homebrew/bin/whisper-cli",
+    modelPath:
+      environment.BALABOL_WHISPER_MODEL ??
+      join(homedir(), ".local", "share", "balabol", "models", "whisper", "ggml-small.bin")
+  },
+  synthesis: {
+    provider: environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake",
+    helperExecutable:
+      environment.BALABOL_APPLE_SPEECH_EXECUTABLE ??
+      join(homedir(), ".local", "share", "balabol", "tools", "apple-speech", "apple-speech"),
+    ffmpegExecutable: environment.BALABOL_FFMPEG_EXECUTABLE ?? "/opt/homebrew/bin/ffmpeg"
+  }
+})
 export const parseConfig = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(ServerConfig)({
     host: environment.BALABOL_HOST ?? "127.0.0.1",
@@ -169,16 +204,15 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     },
     reply: { ...providerSelection(environment), ...replyTiming(environment) },
     ...languageSelection(environment),
-    recognition: {
-      provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
-      executable: environment.BALABOL_WHISPER_EXECUTABLE ?? "/opt/homebrew/bin/whisper-cli",
-      modelPath:
-        environment.BALABOL_WHISPER_MODEL ??
-        join(homedir(), ".local", "share", "balabol", "models", "whisper", "ggml-small.bin")
-    },
+    ...speechSelection(environment),
+    ...outputSelection(environment),
     ...voiceSelection(environment),
     ...tailnetSelection(environment)
   })
+const selectedSynthesis = (config: ServerConfig) =>
+  config.synthesis?.provider === "apple"
+    ? appleSynthesisLayer(config.synthesis, config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages)
+    : fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })
 export const serverLayer = (config: ServerConfig) => {
   const conversation = conversationLayer(
     config.database,
@@ -216,7 +250,8 @@ export const serverLayer = (config: ServerConfig) => {
     Layer.provide(
       config.recognition?.provider === "whisper" ? whisperRecognitionLayer(config.recognition) : fakeRecognitionLayer()
     ),
-    Layer.provide(fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })),
+    Layer.provide(selectedSynthesis(config)),
+    Layer.provide(Layer.succeed(VoiceOutputConfiguration, config.voiceOutput ?? defaultVoiceOutputSettings)),
     Layer.provide(liveKitLayer(config.voice)),
     Layer.provide(admissions),
     Layer.provideMerge(sharedConversation),

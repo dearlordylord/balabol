@@ -212,7 +212,8 @@ it("ignores wrong-utterance and post-Final recognition events without another ap
     recognition
   )
 })
-it("fails an oversized collected reply before audio and retains its complete interrupted text", () => {
+it("drains a collected reply larger than the staging window without truncation or duplicate speech", () => {
+  const requests: { language: string; text: string }[] = []
   const text = "Bounded reply ".repeat(130)
   const answer = Layer.succeed(AnswerGeneration, {
     capabilities: { languages: ["ru", "fr", "en", "ja"], output: "text-deltas" },
@@ -236,14 +237,25 @@ it("fails an oversized collected reply before audio and retains its complete int
           outputEpoch: waiting.outputEpoch,
           trackSid: waiting.manifest.trackSid
         })
-        expect((yield* waitForOutput(voice, join.sessionId, "Failed")).output?.error?.code).toBe("AudioUnavailable")
+        expect((yield* waitForOutput(voice, join.sessionId, "Delivered")).output?.status).toBe("Delivered")
         const turn = yield* conversation.currentTurn()
-        expect(turn?.reply.state).toBe("Interrupted")
+        expect(turn?.reply.state).toBe("Completed")
         expect(turn?.reply.text).toBe(text)
         expect(turn?.reply.receipt?.text).toBe(text)
-        expect(transport.captured).toEqual([])
+        expect(turn?.reply.receipt?.outcome).toBe("completed")
+        expect(requests.length).toBeGreaterThan(2)
+        expect(requests.every((request) => request.language === "en" && request.text.length <= 800)).toBe(true)
+        expect(
+          requests
+            .map((request) => request.text)
+            .join(" ")
+            .trim()
+            .split(/\s+/u)
+        ).toEqual(text.trim().split(/\s+/u))
+        expect(transport.captured.length).toBeGreaterThan(0)
+        expect((yield* conversation.page({ limit: 100 })).messages).toHaveLength(2)
       }),
-    fakeSynthesisLayer({ delayMillis: 0 }),
+    recordingSynthesis(requests),
     answer
   )
 })

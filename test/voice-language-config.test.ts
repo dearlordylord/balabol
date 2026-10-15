@@ -47,3 +47,23 @@ it("composes the Japanese fake-provider extension and rejects an uninstalled val
     await fixture.close()
   }
 })
+
+it("selects validated local synthesis and independent bounded playback policy without acquiring native resources", async () => {
+  const config = await Effect.runPromise(parseConfig({ BALABOL_SYNTHESIS_PROVIDER: "apple" }))
+  expect(config.synthesis).toMatchObject({ provider: "apple", ffmpegExecutable: "/opt/homebrew/bin/ffmpeg" })
+  expect(config.voiceOutput).toEqual({ completionMillis: 300000 })
+  expect((await Effect.runPromise(parseConfig({}))).voiceOutput).toEqual({ completionMillis: 30000 })
+  expect(
+    (
+      await Effect.runPromise(
+        parseConfig({ BALABOL_SYNTHESIS_PROVIDER: "apple", BALABOL_VOICE_COMPLETION_MILLIS: "90000" })
+      )
+    ).voiceOutput
+  ).toEqual({ completionMillis: 90000 })
+  for (const environment of [
+    { BALABOL_SYNTHESIS_PROVIDER: "unknown" },
+    { BALABOL_VOICE_COMPLETION_MILLIS: "300001" },
+    { BALABOL_APPLE_SPEECH_EXECUTABLE: "" }
+  ])
+    expect(await Effect.runPromise(parseConfig(environment).pipe(Effect.isFailure))).toBe(true)
+})

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { Clock, Effect, Schema } from "effect"
 import { DeliveryId } from "../memory/index.ts"
 import { InvalidInput, ReplyBusy } from "./contracts.ts"
-const maximumDeadlineMillis = 60000
+const maximumDeadlineMillis = 300000
 const Timing = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(maximumDeadlineMillis))
 export const ResponseTarget = Schema.Struct({ responseId: DeliveryId, inputDeliveryId: DeliveryId })
 export type ResponseTarget = typeof ResponseTarget.Type

@@ -189,3 +189,83 @@ it("joining voice never attaches audio to a reply that already started", () =>
       expect(transport.captured).toEqual([])
     })
   ))
+
+it("speaks every bounded phrase of a fast long mixed reply while synthesis is slower than generation", () => {
+  const english = `${"x".repeat(799)}😀finish.`
+  const french = "Bonjour!".repeat(130)
+  const russian = "Привет!".repeat(130)
+  const text = english + french + russian
+  const spans = [
+    { language: "en", start: 0, end: english.length },
+    { language: "fr", start: english.length, end: english.length + french.length },
+    { language: "ru", start: english.length + french.length, end: text.length }
+  ]
+  const phrases: { text: string; language: string }[] = []
+  let inFlight = 0
+  let maximumInFlight = 0
+  const synthesis = Layer.effect(
+    SpeechSynthesis,
+    Effect.gen(function* () {
+      const provider = yield* SpeechSynthesis
+      return SpeechSynthesis.of({
+        capabilities: provider.capabilities,
+        synthesize: (request) =>
+          Stream.unwrap(
+            Effect.sync(() => {
+              phrases.push({ text: request.text, language: request.language })
+              inFlight += 1
+              maximumInFlight = Math.max(maximumInFlight, inFlight)
+              return provider.synthesize(request).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    inFlight -= 1
+                  })
+                )
+              )
+            })
+          )
+      })
+    })
+  ).pipe(Layer.provide(fakeSynthesisLayer({ delayMillis: 2, sampleFrames: 1200 })))
+  const answer = Layer.succeed(AnswerGeneration, {
+    capabilities: { languages: ["en", "fr", "ru"], output: "text-deltas" },
+    generate: () => Stream.make({ kind: "Delta", text, languageSpans: spans }, { kind: "Completed" })
+  })
+  return withVoiceOutput(
+    () =>
+      Effect.gen(function* () {
+        const voice = yield* Voice
+        const conversation = yield* Conversation
+        const join = yield* voice.start(startVoiceRequest())
+        yield* conversation.send(outputInput)
+        const waiting = yield* waitForOutput(voice, join.sessionId, "AwaitingReady")
+        const output = waiting.output
+        if (output?.manifest == null) throw new Error("Missing publication")
+        yield* voice.ready(join.sessionId, {
+          responseId: output.responseId,
+          outputEpoch: output.outputEpoch,
+          trackSid: output.manifest.trackSid
+        })
+        const delivered = yield* waitForOutput(voice, join.sessionId, "Delivered")
+        expect(delivered.output?.status).toBe("Delivered")
+        expect(phrases.map((phrase) => phrase.text).join("")).toBe(text)
+        expect(phrases.every((phrase) => phrase.text.length <= 800 && !/[\uD800-\uDFFF]/u.test(phrase.text))).toBe(true)
+        expect(
+          phrases
+            .filter((phrase) => phrase.language === "fr")
+            .map((phrase) => phrase.text)
+            .join("")
+        ).toBe(french)
+        expect(
+          phrases
+            .filter((phrase) => phrase.language === "ru")
+            .map((phrase) => phrase.text)
+            .join("")
+        ).toBe(russian)
+        expect(maximumInFlight).toBe(1)
+        expect((yield* conversation.reply(outputInput.deliveryId)).receipt?.text).toBe(text)
+      }),
+    synthesis,
+    answer
+  )
+})

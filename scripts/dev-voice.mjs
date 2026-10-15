@@ -1,15 +1,81 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const image = "livekit/livekit-server@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154";
 const ports = { control: 8444, media: 8443, backend: 8787, rtcTcp: 7881, rtcUdp: 7882 };
 const root = fileURLToPath(new URL("../", import.meta.url));
+
+export const providerEnvironment = (args, environment) => {
+  if (args.some((arg) => !["--check", "--real"].includes(arg))) throw new Error("Unknown option; use --help.");
+  if (!args.includes("--real")) return { ...environment };
+  const selected = {
+    ...environment,
+    BALABOL_ANSWER_PROVIDER: environment.BALABOL_ANSWER_PROVIDER ?? "subscription",
+    BALABOL_SUMMARY_PROVIDER: environment.BALABOL_SUMMARY_PROVIDER ?? "subscription",
+    BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "whisper",
+    BALABOL_SYNTHESIS_PROVIDER: environment.BALABOL_SYNTHESIS_PROVIDER ?? "apple",
+  };
+  if (selected.BALABOL_ANSWER_PROVIDER === "subscription")
+    selected.BALABOL_ANSWER_MODEL = environment.BALABOL_ANSWER_MODEL ?? "gpt-6.1-sol";
+  if (selected.BALABOL_SUMMARY_PROVIDER === "subscription")
+    selected.BALABOL_SUMMARY_MODEL = environment.BALABOL_SUMMARY_MODEL ?? "gpt-6-luna";
+  return selected;
+};
+
+export const providerDescription = (environment) =>
+  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}`;
+
+// Existence/permissions only: provider acquisition owns engine and weight validation.
+export const localRequirements = (environment, includeHelper = true) => {
+  const requirements = [];
+  if (environment.BALABOL_RECOGNITION_PROVIDER === "whisper") {
+    requirements.push(
+      {
+        label: "whisper executable",
+        path: environment.BALABOL_WHISPER_EXECUTABLE ?? "/opt/homebrew/bin/whisper-cli",
+        mode: constants.X_OK,
+      },
+      {
+        label: "whisper weights",
+        path:
+          environment.BALABOL_WHISPER_MODEL ?? join(homedir(), ".local/share/balabol/models/whisper/ggml-small.bin"),
+        mode: constants.R_OK,
+      },
+    );
+  }
+  if (environment.BALABOL_SYNTHESIS_PROVIDER === "apple") {
+    requirements.push({
+      label: "ffmpeg executable",
+      path: environment.BALABOL_FFMPEG_EXECUTABLE ?? "/opt/homebrew/bin/ffmpeg",
+      mode: constants.X_OK,
+    });
+    if (includeHelper)
+      requirements.push({
+        label: "Apple speech helper (run pnpm build:speech)",
+        path:
+          environment.BALABOL_APPLE_SPEECH_EXECUTABLE ??
+          join(homedir(), ".local/share/balabol/tools/apple-speech/apple-speech"),
+        mode: constants.X_OK,
+      });
+  }
+  return requirements;
+};
+export const checkLocalResources = (environment, includeHelper = true) => {
+  for (const requirement of localRequirements(environment, includeHelper)) {
+    try {
+      if (!statSync(requirement.path).isFile()) throw new Error("Not a file");
+      accessSync(requirement.path, requirement.mode);
+    } catch {
+      throw new Error(`Missing or inaccessible ${requirement.label}: ${requirement.path}`);
+    }
+  }
+};
 
 export const tailnetIdentity = (status) => {
   const self = status.Self;
@@ -84,11 +150,13 @@ export const ready = async (url, alive) => {
 export const main = async (args) => {
   if (args.includes("--help")) {
     console.log(
-      "pnpm dev:voice [--check]\nStarts the fake-provider voice backend and private Tailscale media/control routes. --check performs read-only prerequisite checks.",
+      "pnpm dev:voice [--real] [--check]\nDefaults to fake providers. --real selects subscription Sol/Luna, local whisper and Apple speech; explicit BALABOL_* overrides win. Private Tailscale media/control routes only. --check checks prerequisites without compiling, starting services or inference.",
     );
     return;
   }
-  if (args.some((arg) => arg !== "--check")) throw new Error("Unknown option; use --help.");
+  const environment = providerEnvironment(args, process.env);
+  const check = args.includes("--check");
+  checkLocalResources(environment, check);
   if (Number(process.versions.node.split(".")[0]) !== 24)
     throw new Error("Use Node 24 and the repository's pinned pnpm.");
   command("docker", ["info", "--format", "{{.ServerVersion}}"]);
@@ -101,12 +169,13 @@ export const main = async (args) => {
       );
   }
   await Promise.all([tcpAvailable(ports.backend), tcpAvailable(ports.rtcTcp, "0.0.0.0"), udpAvailable(ports.rtcUdp)]);
-  if (args.includes("--check")) {
+  if (check) {
     console.log(
-      "Voice prerequisites are ready. Existing Tailscale Serve configuration and processes were not changed.",
+      `Voice prerequisites are ready (${providerDescription(environment)}). Existing Tailscale Serve configuration and processes were not changed. No compilation or inference ran.`,
     );
     return;
   }
+  if (environment.BALABOL_SYNTHESIS_PROVIDER === "apple") command("pnpm", ["build:speech"], 60000);
   command("pnpm", ["build"], 60000);
   const signalPort = await tcpAvailable(0);
   const directory = mkdtempSync(join(tmpdir(), "balabol-voice-"));
@@ -208,10 +277,10 @@ export const main = async (args) => {
       cwd: root,
       stdio: "ignore",
       env: {
-        ...process.env,
+        ...environment,
         BALABOL_HOST: "127.0.0.1",
         BALABOL_PORT: String(ports.backend),
-        BALABOL_DATABASE: process.env.BALABOL_DATABASE ?? ".data/conversation.sqlite",
+        BALABOL_DATABASE: environment.BALABOL_DATABASE ?? ".data/conversation.sqlite",
         BALABOL_TAILNET_OWNER: tailnet.owner,
         BALABOL_LIVEKIT_URL: `ws://127.0.0.1:${signalPort}`,
         BALABOL_LIVEKIT_MEDIA_URL: `wss://${tailnet.hostname}:${ports.media}`,
@@ -244,7 +313,7 @@ export const main = async (args) => {
     }
     ensureRunning();
     console.log(
-      `Voice is ready with fake recognition.\nSimulator: http://127.0.0.1:${ports.backend}\niPhone control: https://${tailnet.hostname}:${ports.control}\nMedia: wss://${tailnet.hostname}:${ports.media}\nKeep this Terminal open. Ctrl-C stops only this launch; the saved conversation remains.`,
+      `Voice is ready (${providerDescription(environment)}).\nSimulator: http://127.0.0.1:${ports.backend}\niPhone control: https://${tailnet.hostname}:${ports.control}\nMedia: wss://${tailnet.hostname}:${ports.media}\nKeep this Terminal open. Ctrl-C stops only this launch; the saved conversation remains.`,
     );
     await lifetime;
   } catch (error) {

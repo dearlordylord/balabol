@@ -12,6 +12,7 @@ export const voiceTransportFixture = (joinImmediately = true) => {
   let markJoined: (() => void) | undefined
   let opens = 0
   let disconnect: (() => void) | undefined
+  const publications: { outputEpoch: string; invalidated: boolean; closed: boolean }[] = []
   const captured: { outputEpoch: string; frames: number }[] = []
   const backendParticipantIdentity = randomUUID()
   const published: VoiceEvent[] = []
@@ -37,15 +38,19 @@ export const voiceTransportFixture = (joinImmediately = true) => {
             openOutput: (outputEpoch) =>
               Effect.sync(() => {
                 let valid = true
+                const lifecycle = { outputEpoch, invalidated: false, closed: false }
+                publications.push(lifecycle)
                 return {
                   publisherIdentity: backendParticipantIdentity,
                   trackSid: `TR_${randomUUID()}`,
                   invalidate: () => {
                     valid = false
+                    lifecycle.invalidated = true
                   },
                   close: () =>
                     Effect.sync(() => {
                       valid = false
+                      lifecycle.closed = true
                     }),
                   drain: () => Effect.void,
                   capture: (audio: SynthesisAudio) =>
@@ -85,6 +90,7 @@ export const voiceTransportFixture = (joinImmediately = true) => {
     segment,
     published,
     captured,
+    publications,
     joined: () => markJoined?.(),
     opens: () => opens,
     disconnect: () => disconnect?.(),

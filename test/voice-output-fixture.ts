@@ -4,9 +4,12 @@ import type { AnswerGeneration, AnswerFailed } from "../src/answer-generation/in
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import {
   Voice,
+  VoiceOutputConfiguration,
+  defaultVoiceOutputSettings,
   VoiceLanguageConfiguration,
   defaultVoiceLanguageConfiguration,
   type VoiceLanguageSettings,
+  type VoiceOutputSettings,
   type VoiceAdmissions
 } from "../src/voice/index.ts"
 import type { Conversation } from "../src/conversation/index.ts"
@@ -23,12 +26,18 @@ export const voiceOutputLayer = (
   synthesis: Layer.Layer<SpeechSynthesis, SpeechSynthesisFailed> = fakeSynthesisLayer(),
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
   recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer(),
-  settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration
+  settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration,
+  outputSettings: VoiceOutputSettings = defaultVoiceOutputSettings
 ) => {
   const conversation = replyLayer(path, answer, { attachmentMillis: 10 })
   const admissions = voiceAdmissionsFixture().pipe(Layer.provide(conversation))
   const voice = Voice.configuredLayer.pipe(
-    Layer.provide(Layer.succeed(VoiceLanguageConfiguration, settings)),
+    Layer.provide(
+      Layer.merge(
+        Layer.succeed(VoiceLanguageConfiguration, settings),
+        Layer.succeed(VoiceOutputConfiguration, outputSettings)
+      )
+    ),
     Layer.provide(Layer.mergeAll(conversation, transport.layer, synthesis, recognition, admissions))
   )
   return Layer.mergeAll(voice, conversation, admissions)
@@ -40,11 +49,20 @@ export const withVoiceOutput = async (
   synthesis: Layer.Layer<SpeechSynthesis, SpeechSynthesisFailed> = fakeSynthesisLayer(),
   answer: Layer.Layer<AnswerGeneration, AnswerFailed> = fakeAnswerLayer(0),
   recognition: Layer.Layer<SpeechRecognition, RecognitionFailed> = fakeRecognitionLayer(),
-  settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration
+  settings: VoiceLanguageSettings = defaultVoiceLanguageConfiguration,
+  outputSettings: VoiceOutputSettings = defaultVoiceOutputSettings
 ) => {
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
-  const application = voiceOutputLayer(database.path, transport, synthesis, answer, recognition, settings)
+  const application = voiceOutputLayer(
+    database.path,
+    transport,
+    synthesis,
+    answer,
+    recognition,
+    settings,
+    outputSettings
+  )
   try {
     await Effect.runPromise(Effect.scoped(program(transport)).pipe(Effect.provide(application)))
   } finally {

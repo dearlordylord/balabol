@@ -1,12 +1,12 @@
 # Balabol
 
 **Purpose:** Describe the repository and its current development state.
-**Status:** Durable text conversation with opt-in subscription Sol replies, and LiveKit microphone input with fake recognition; physical-device qualification remains separate.
+**Status:** Durable conversation with opt-in subscription Sol/Luna, local whisper.cpp recognition and Apple speech synthesis; physical-device qualification remains separate.
 **Authority:** Product requirements live in the published prototype issue; engineering guidance lives in AGENTS.md.
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
 
-An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; recognition can opt into pinned local whisper.cpp. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
+An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; recognition can opt into pinned local whisper.cpp and synthesis into installed Apple voices. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
 
 - [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
 - [Synchronized local specification](docs/product/prototype-spec.md)
@@ -45,6 +45,22 @@ Tap **Start voice**, allow microphone access, speak and pause, then check the ac
 
 LiveKit ICE advertises the Mac's Tailscale IPv4 address on UDP 7882 with TCP 7881 fallback. Those Docker media ports bind host interfaces so the tailnet can reach them; LiveKit requires scoped join tokens. HTTPS signaling alone does not qualify media reachability, locked-screen behavior or physical iPhone audio. Those require the corresponding device checks.
 
+## Use all real providers
+
+With local resources provisioned and the ChatGPT subscription connected, run:
+
+```sh
+pnpm dev:voice --real
+```
+
+This selects subscription Sol replies, subscription Luna summaries, local whisper.cpp recognition and installed Apple synthesis. Explicit provider environment overrides still apply. The launcher builds the native speech helper and backend before starting private services; it does not download weights or install voices. `pnpm dev:voice --real --check` remains read-only. Default `pnpm dev:voice` retains deterministic fixtures.
+
+Apple synthesis requires macOS and Xcode Command Line Tools. `pnpm build:speech` builds the Swift 6 helper outside the checkout at `~/.local/share/balabol/tools/apple-speech/apple-speech`. `BALABOL_APPLE_SPEECH_EXECUTABLE` and `BALABOL_FFMPEG_EXECUTABLE` override its executable and ffmpeg paths. `BALABOL_SYNTHESIS_PROVIDER=apple` selects synthesis independently. Startup enumerates actual installed voices and rejects missing configured languages. Apple voice locale is separate from detected input language and requested response language; no extra detector guesses language inside a phrase.
+
+Each complete phrase has at most 800 UTF-16 units and 60 seconds of audio. AVSpeechSynthesizer writes a protected temporary file, then ffmpeg converts complete audio to mono PCM16LE at 24 kHz. Validated chunks contain at most 1,200 frames; completion requires native end-of-stream and delegate completion, not truncation. Phrase generation precedes the first chunk, so this adapter is replaceable rather than a claim of incremental native streaming. Cancellation stops the owned process, fences late audio and removes temporary files. Speech failure retains useful conversation text and allows a subsequent reply.
+
+Voice owns the overall response/playback deadline: fixtures default to 30 seconds, local synthesis to five minutes, covering prior-memory wait, inference and playback. `BALABOL_VOICE_COMPLETION_MILLIS` explicitly overrides it up to five minutes. Control keepalive remains independent. Physical iPhone media, locked-screen and interruption checks remain [issue #29](https://github.com/dearlordylord/balabol/issues/29).
+
 ## Enable local recognition
 
 The initial local recognition adapter uses whisper.cpp **1.9.5** and multilingual **small** weights. Setup never downloads or installs them. Provision them explicitly using the reviewed bounded runbook in [issue #27](https://github.com/dearlordylord/balabol/issues/27). The default executable is `/opt/homebrew/bin/whisper-cli`; the model is `~/.local/share/balabol/models/whisper/ggml-small.bin`. Startup requires exactly 487,601,967 bytes and SHA-256 `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`, from `ggerganov/whisper.cpp` at revision `5359861c739e955e79d9a303bcbc70fb988958b1`.
@@ -76,7 +92,7 @@ pnpm build
 BALABOL_ANSWER_PROVIDER=subscription pnpm start
 ```
 
-The same environment setting applies to `pnpm dev:voice`. Subscription mode defaults to the qualified exact `gpt-6.1-sol`; `BALABOL_ANSWER_MODEL`, if provided, must match it. Unset `BALABOL_ANSWER_PROVIDER` (or set `fake`) to keep deterministic fake replies without acquiring subscription credentials. Summaries remain fake unless enabled independently below; speech providers remain fake.
+The same environment setting applies to `pnpm dev:voice`. Subscription mode defaults to the qualified exact `gpt-6.1-sol`; `BALABOL_ANSWER_MODEL`, if provided, must match it. Unset `BALABOL_ANSWER_PROVIDER` (or set `fake`) to keep deterministic fake replies without acquiring subscription credentials. Summaries remain fake unless enabled independently below; speech providers remain independently configurable.
 
 Real requests contain only the explicit prior unii memory, current input and requested response language, with no tools or inherited agent context. Text deltas carry no guessed language spans. Each request has a 60-second total deadline, 100,000 UTF-16 output limit, 64 KiB SSE-frame limit and 2 MiB body limit. Only a valid completed terminal succeeds; incomplete, failed, authentication and quota outcomes remain recoverable errors. Interruption cancels the request and releases its reader without disconnecting the subscription or canceling independent memory work. There is no automatic retry or model/API-key fallback. Keep paid credit fallback disabled in the connected account.
 

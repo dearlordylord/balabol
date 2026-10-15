@@ -21,3 +21,10 @@ export {
   VoiceLanguageCapabilities,
   defaultVoiceLanguageConfiguration
 } from "./languages.ts"
+
+export {
+  VoiceOutputSettings,
+  VoiceOutputConfiguration,
+  defaultVoiceOutputSettings,
+  localSpeechVoiceOutputSettings
+} from "./output-configuration.ts"

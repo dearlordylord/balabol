@@ -10,6 +10,7 @@ import { VoiceAdmissions, speechPayloadHash, speechAnnotationsHash, speechDetect
 import { VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration, validateVoiceLanguages } from "./languages.ts"
 import type { VoiceLanguageCapabilities } from "./languages.ts"
 import { Session } from "./session.ts"
+import { VoiceOutputSettings, VoiceOutputConfiguration, defaultVoiceOutputSettings } from "./output-configuration.ts"
 import { ReplyAudio } from "./output.ts"
 const maximumSessions = 2
 const disconnectPollMillis = 20
@@ -33,6 +34,9 @@ export class Voice extends Context.Service<
     Voice,
     Effect.gen(function* () {
       const languageSettings = yield* VoiceLanguageConfiguration
+      const outputSettings = yield* Schema.decodeUnknownEffect(VoiceOutputSettings)(
+        yield* VoiceOutputConfiguration
+      ).pipe(Effect.mapError(() => failed("InvalidInput", "Invalid reply audio completion deadline")))
       const admissions = yield* VoiceAdmissions
       const conversation = yield* Conversation
       const provider = yield* SpeechRecognition
@@ -187,7 +191,8 @@ export class Voice extends Context.Service<
               synthesis,
               opened.connection,
               sessionScope,
-              (output) => session.emit({ kind: "Output", output })
+              (output) => session.emit({ kind: "Output", output }),
+              outputSettings
             )
             yield* session.audio.attach().pipe(
               Effect.onError(() =>
@@ -287,6 +292,11 @@ export class Voice extends Context.Service<
     })
   )
   static readonly layer = Voice.configuredLayer.pipe(
-    Layer.provide(Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration))
+    Layer.provide(
+      Layer.merge(
+        Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
+        Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings)
+      )
+    )
   )
 }

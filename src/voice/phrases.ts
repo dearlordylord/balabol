@@ -32,26 +32,27 @@ const languageRun = (spans: readonly LanguageSpan[], start: number, end: number,
   return { language: first.language, boundary }
 }
 export class Phrases {
+  #source = ""
   #cursor = 0
   #offset = 0
   #buffer = ""
   #spans: readonly LanguageSpan[] = []
   #fallback = "en"
   append(text: string, spans: readonly LanguageSpan[] = [], fallback = "en") {
-    const tail = text.slice(this.#cursor)
-    if (
-      text.length < this.#cursor ||
-      this.#buffer.length + tail.length > maximumBuffered ||
-      !validLanguageSpans(text, spans)
-    )
-      return false
-    this.#buffer += tail
-    this.#cursor = text.length
+    if (!text.startsWith(this.#source) || !validLanguageSpans(text, spans)) return false
+    this.#source = text
     this.#spans = spans
     this.#fallback = fallback
     return true
   }
+  #stage(): void {
+    let end = Math.min(this.#source.length, this.#cursor + maximumBuffered - this.#buffer.length)
+    if (!isScalarBoundary(this.#source, end)) end -= 1
+    this.#buffer += this.#source.slice(this.#cursor, end)
+    this.#cursor = end
+  }
   next(flush: boolean): Phrase | undefined {
+    this.#stage()
     const run = languageRun(this.#spans, this.#offset, this.#cursor, this.#fallback)
     const available = this.#buffer.slice(0, run.boundary - this.#offset)
     const length = phraseLength(available, flush || available.length < this.#buffer.length)
@@ -62,6 +63,6 @@ export class Phrases {
     return text.length === 0 ? this.next(flush) : { text, language: run.language }
   }
   get empty() {
-    return this.#buffer.length === 0
+    return this.#buffer.length === 0 && this.#cursor === this.#source.length
   }
 }

@@ -21,7 +21,7 @@
     "typecheck:effect": "node scripts/quality/cli.mjs effect",
     "test": "node scripts/quality/cli.mjs behavior",
     "test:coverage": "node scripts/quality/cli.mjs behavior",
-    "test:harness": "node --test scripts/quality/cli.test.mjs",
+    "test:harness": "node --test scripts/quality/cli.test.mjs scripts/dev-voice.test.mjs",
     "lint": "node scripts/quality/cli.mjs lint && node scripts/quality/cli.mjs duplication",
     "circular": "node scripts/quality/cli.mjs architecture && node scripts/quality/cli.mjs cycles",
     "complexity": "node scripts/quality/cli.mjs complexity",
@@ -29,7 +29,8 @@
     "verify:effect-cohort": "node scripts/quality/cli.mjs cohort",
     "start": "node dist/bootstrap/main.js",
     "dev:voice": "node scripts/dev-voice.mjs",
-    "subscription": "pnpm build && node dist/bootstrap/subscription-main.js"
+    "subscription": "pnpm build && node dist/bootstrap/subscription-main.js",
+    "build:speech": "node scripts/build-apple-speech.mjs"
   },
   "lint-staged": {
     "*.{md,json,yaml,yml}": "prettier --write",

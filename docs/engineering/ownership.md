@@ -9,7 +9,7 @@
 
 ## Authority
 
-`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory, answer generation, summary generation and Bootstrap implement the durable text slice. Voice and speech recognition implement microphone delivery and supplied-audio recognition. Speech synthesis accepts a complete bounded phrase and emits validated fixture audio; it does not accept appended text or install an inference engine.
+`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory, answer generation, summary generation and Bootstrap implement the durable text slice. Voice and speech recognition implement microphone delivery and supplied-audio recognition. Speech synthesis accepts a complete bounded phrase and emits validated audio through fake or installed Apple implementations; it does not accept appended text or install voices.
 
 Each entrypoint hides sequencing, state coordination and implementation files. Cross-owner callers may import only the declared entrypoint; local implementation imports remain local. A dependency permission is an upper bound, not an instruction to create an interface or import it prematurely. Keep types with the concept they describe.
 
@@ -21,7 +21,7 @@ Each entrypoint hides sequencing, state coordination and implementation files. C
 | Answer generation  | Parsed reply requests, prompt mapping and typed streaming/cancellation outcomes; fake and subscription adapters                          | Language, Subscription                                       |
 | Summary generation | Parsed summary requests, provenance and typed completion/cancellation outcomes; fake and subscription adapters                           | Subscription                                                 |
 | Speech recognition | Bounded audio recognition and validated partial/final outcomes; fake and pinned local whisper.cpp implementations                        | Language                                                     |
-| Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake synthesis implementation                                              | Language                                                     |
+| Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake and native Apple implementations                                      | Language                                                     |
 | Voice              | Temporary voice-session delivery, transport and stale-media rejection                                                                    | Conversation, speech recognition, speech synthesis, Language |
 | Subscription       | Backend-only ChatGPT authorization, protected credentials, refresh, catalog and bounded direct inference; no conversation or agent state | None                                                         |
 | Bootstrap          | Configuration parsing and resource acquisition/release, assembling Layers and adapters                                                   | The owners above, Subscription                               |
@@ -69,3 +69,5 @@ Subscription owns its OAuth attempt, validated account connection, protected cre
 Real summary requests carry trusted source record kinds from unii rather than inferring provenance from quoted text. Memory preserves typed summary failures across its Promise boundary and supplies unii a plain retry classifier: non-retryable real-provider failures stop the job; completed-summary size refinement remains unii policy. Bootstrap merges provider consumers before supplying a single shared subscription/inference Layer.
 
 Speech recognition owns the local CLI lifecycle, exact engine/model checks, private bounded WAV/result files and JSON parsing. Its explicit native port supports fixture qualification; each utterance owns one scoped process and serialization permit. Bootstrap selects the provider and paths without owning transcript admission or language policy.
+
+Speech synthesis owns installed voice enumeration, actual locale selection, private temporary files, native process cancellation and complete-audio conversion. Voice owns bounded incremental phrase staging and response/playback deadlines, independent of the control lease. Bootstrap only selects explicit provider and output settings; it does not infer domain policy from audio capabilities.
