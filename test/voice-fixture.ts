@@ -5,7 +5,7 @@ import { VoiceTransport } from "../src/voice/index.ts"
 import type { VoiceFrame, VoiceEvent } from "../src/voice/index.ts"
 const frameSamples = 320
 const speechSample = 1200
-const silenceFrames = 20
+const silenceFrames = 50
 const onsetFrames = 3
 export const voiceTransportFixture = (joinImmediately = true) => {
   let receive: ((track: string, raw: unknown) => void) | undefined

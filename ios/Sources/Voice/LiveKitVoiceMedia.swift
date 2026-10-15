@@ -237,7 +237,7 @@
             for await value in evidence.stream {
               guard !Task.isCancelled, self?.generation == expected else { return }
               logger.notice(
-                "capture callbacks=\(value.callbacks, privacy: .public) frames=\(value.frames, privacy: .public) sampleRate=\(value.sampleRate, privacy: .public) format=\(value.format, privacy: .public) channels=\(value.channels, privacy: .public) interleaved=\(value.interleaved, privacy: .public) readable=\(value.readable, privacy: .public) peak=\(value.peak, privacy: .public) voiced=\(value.voiced, privacy: .public) onset=\(value.onset, privacy: .public)"
+                "capture callbacks=\(value.callbacks, privacy: .public) frames=\(value.frames, privacy: .public) sampleRate=\(value.sampleRate, privacy: .public) format=\(value.format, privacy: .public) channels=\(value.channels, privacy: .public) interleaved=\(value.interleaved, privacy: .public) readable=\(value.readable, privacy: .public) peak=\(value.peak, privacy: .public) rms=\(value.rms, privacy: .public) voiced=\(value.voiced, privacy: .public) onset=\(value.onset, privacy: .public)"
               )
             }
           }
@@ -463,7 +463,7 @@
       #if DEBUG
         if evidenceEnabled {
           let logger = os.Logger(subsystem: "app.balabol.voice.evidence", category: "playback")
-          logger.notice("remote fixture audio received nonzero samples=\(count, privacy: .public)")
+          logger.notice("remote audio received nonzero samples=\(count, privacy: .public)")
         }
       #endif
     }
@@ -479,6 +479,7 @@
       let interleaved: Bool
       let readable: Bool
       let peak: Float
+      let rms: Float
       let voiced: Bool
       let onset: Bool
     }
@@ -494,6 +495,7 @@
         var callbacks = 0
         var frames = 0
         var peak: Float = 0
+        var rms: Float = 0
         var voiced = false
         var onset = false
         var reports = 0
@@ -533,23 +535,48 @@
       state.withLock { $0.onsetTracker.isCurrent(notice) }
     }
     func render(pcmBuffer: AVAudioPCMBuffer) {
-      let count = min(Int(pcmBuffer.frameLength), 2048)
-      guard count > 0 else { return }
-      var peak: Float = 0
-      if let data = pcmBuffer.floatChannelData?[0] {
-        for i in 0..<count { peak = max(peak, abs(data[i])) }
-      } else if let data = pcmBuffer.int16ChannelData?[0] {
-        for i in 0..<count { peak = max(peak, abs(Float(data[i])) / 32768) }
+      let count = Int(pcmBuffer.frameLength)
+      let channels = Int(pcmBuffer.format.channelCount)
+      guard count > 0, count <= Int(pcmBuffer.frameCapacity),
+        (1...2).contains(channels), pcmBuffer.format.sampleRate.isFinite,
+        pcmBuffer.format.sampleRate > 0
+      else { return }
+      let interleaved = pcmBuffer.format.isInterleaved
+      // The SDK lends these PCM pointers only for this render callback. This
+      // synchronous nonescaping lock body reads them without transferring or
+      // storing them; only scalar energy and an epoch notice leave the lock.
+      let result: (energy: VoiceCaptureEnergy, onset: VoiceOnsetNotice?)?
+      if pcmBuffer.format.commonFormat == .pcmFormatFloat32,
+        let data = pcmBuffer.floatChannelData
+      {
+        result = state.withLockUnchecked { value in
+          let result = value.onsetTracker.processCapture(
+            frameCount: count, channelCount: channels, sampleRate: pcmBuffer.format.sampleRate
+          ) { frame, channel in
+            interleaved ? data[0][frame * channels + channel] : data[channel][frame]
+          }
+          value.readableCapture = value.readableCapture || result != nil
+          return result
+        }
+      } else if pcmBuffer.format.commonFormat == .pcmFormatInt16,
+        let data = pcmBuffer.int16ChannelData
+      {
+        result = state.withLockUnchecked { value in
+          let result = value.onsetTracker.processCapture(
+            frameCount: count, channelCount: channels, sampleRate: pcmBuffer.format.sampleRate
+          ) { frame, channel in
+            let sample = interleaved ? data[0][frame * channels + channel] : data[channel][frame]
+            return Float(sample) / 32768
+          }
+          value.readableCapture = value.readableCapture || result != nil
+          return result
+        }
+      } else {
+        return
       }
-      let energy = peak
-      let onset = state.withLock { value in
-        value.readableCapture =
-          value.readableCapture || pcmBuffer.floatChannelData != nil
-          || pcmBuffer.int16ChannelData != nil
-        return value.onsetTracker.process(
-          peak: energy, frameCount: Int(pcmBuffer.frameLength),
-          sampleRate: pcmBuffer.format.sampleRate)
-      }
+      guard let result else { return }
+      let energy = result.energy
+      let onset = result.onset
       if let onset { started(onset) }
       #if DEBUG
         if let diagnostic {
@@ -563,17 +590,20 @@
             guard value.reports < Self.maxCaptureEvidenceReports else { return nil }
             value.callbacks += 1
             value.frames += frames
-            value.peak = max(value.peak, energy)
-            value.voiced = value.voiced || energy >= 0.025
+            value.peak = max(value.peak, energy.peak)
+            value.rms = max(value.rms, energy.rms)
+            value.voiced = value.voiced || energy.rms >= VoiceOnsetTracker.rmsThreshold
             value.onset = value.onset || onset != nil
             guard value.callbacks == 1 || Double(value.frames) >= sampleRate * 2 else { return nil }
             value.reports += 1
             let report = VoiceCaptureEvidence(
               callbacks: value.callbacks, frames: value.frames,
               sampleRate: sampleRate, format: format, channels: channels, interleaved: interleaved,
-              readable: readable, peak: value.peak, voiced: value.voiced, onset: value.onset)
+              readable: readable, peak: value.peak, rms: value.rms, voiced: value.voiced,
+              onset: value.onset)
             value.frames = 0
             value.peak = 0
+            value.rms = 0
             value.voiced = false
             value.onset = false
             return report

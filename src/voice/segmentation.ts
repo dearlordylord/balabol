@@ -1,11 +1,17 @@
 import type { VoiceFrame } from "./contracts.ts"
-const voiceThreshold = 600
+const normalizedVoiceThreshold = 0.006
+const pcmScale = 32768
 const onsetFrames = 3
-const silenceFrames = 20
+const silenceFrames = 50
 const maximumFrames = 500
 const frameBytes = 640
 const sampleBytes = 2
-// Demo energy gate: 60 ms sustained onset, 400 ms quiet end, 10 s maximum.
+// One turn policy for fixed 20 ms PCM frames: 60 ms qualified onset,
+// 1000 ms continuous quiet to finish, and a hard 10 s utterance bound.
+// Frame RMS admits sustained soft speech without treating an isolated peak as voice.
+const voicedFrame = (data: Int16Array) =>
+  Math.sqrt(data.reduce((energy, sample) => energy + sample * sample, 0) / data.length) / pcmScale >=
+  normalizedVoiceThreshold
 export class Segmenter {
   #frames: Int16Array[] = []
   #onset: Int16Array[] = []
@@ -31,7 +37,7 @@ export class Segmenter {
     return true
   }
   push(frame: VoiceFrame): { speechStarted: boolean; bytes?: Uint8Array } {
-    const voiced = frame.data.some((sample) => Math.abs(sample) >= voiceThreshold)
+    const voiced = voicedFrame(frame.data)
     const speechStarted = this.#collect(frame, voiced)
     if (this.#frames.length === 0) return { speechStarted }
     this.#quiet = voiced ? 0 : this.#quiet + 1

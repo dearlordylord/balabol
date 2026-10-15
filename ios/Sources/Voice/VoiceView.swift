@@ -12,8 +12,8 @@
         HStack(alignment: .firstTextBaseline) {
           Text(status).accessibilityIdentifier("voice-status")
           Spacer()
-          Text("Scripted transcription").font(.caption).foregroundStyle(.secondary)
-            .accessibilityIdentifier("scripted-transcription")
+          Text("Voice conversation").font(.caption).foregroundStyle(.secondary)
+            .accessibilityIdentifier("voice-conversation")
         }
         if model.state.admissionFailure != nil && model.state.hasPendingAdmission {
           Text("Saved speech check unavailable").font(.caption)
@@ -41,7 +41,7 @@
             "voice-output-unavailable")
         } else if let output = model.output.current {
           if output.status == .playing && model.output.receivedAudio {
-            Text("Playing fixture audio").font(.caption).accessibilityIdentifier(
+            Text("Playing audio").font(.caption).accessibilityIdentifier(
               "voice-output-playing")
           } else if [.preparing, .awaitingReady, .playing].contains(output.status) {
             Text("Replying…").font(.caption).accessibilityIdentifier("voice-output-replying")
@@ -132,7 +132,7 @@
           Text("Audio unavailable").accessibilityIdentifier("voice-output-unavailable-detail")
         } else if let output = model.output.current {
           if output.status == .playing && model.output.receivedAudio {
-            Text("Playing fixture audio").accessibilityIdentifier("voice-output-playing-detail")
+            Text("Playing audio").accessibilityIdentifier("voice-output-playing-detail")
           } else if output.status == .preparing || output.status == .awaitingReady
             || output.status == .playing
           {

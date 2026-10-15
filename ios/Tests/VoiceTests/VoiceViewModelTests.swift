@@ -1182,6 +1182,71 @@ import XCTest
     await model.shutdown()
   }
 
+  func testSparseLowEnergyCapturePeaksDoNotInterruptAnAnswerStillPreparing() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in
+      XCTFail("Noise must not create accepted input")
+    }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let session = await control.identity()
+    let response = UUID()
+    let input = UUID()
+    let epoch = UUID()
+    let preparing: [String: Any] = [
+      "responseId": response.uuidString, "inputDeliveryId": input.uuidString,
+      "outputEpoch": epoch.uuidString, "status": "Preparing", "error": NSNull(),
+      "manifest": NSNull(),
+    ]
+    await control.append(
+      try event(session: session, sequence: 1, kind: "Output", fields: ["output": preparing]))
+    await settle { model.output.current?.responseId == response }
+    XCTAssertFalse(model.output.receivedAudio)
+    XCTAssertEqual(media.preparedOutputs, 0)
+
+    // Six 10ms buffers contain one isolated sample each, not sustained speech.
+    // Use the same complete-buffer measurement as the native renderer.
+    var samples = [Float](repeating: 0, count: 480)
+    samples[0] = 0.03
+    var measurement = VoiceOnsetTracker()
+    let energy = try XCTUnwrap(
+      measurement.processCapture(
+        frameCount: samples.count, channelCount: 1, sampleRate: 48000,
+        sample: { frame, _ in samples[frame] })?.energy)
+    XCTAssertGreaterThan(energy.peak, 0.025)
+    XCTAssertLessThan(energy.rms, 0.002)
+    var onset = VoiceOnsetTracker()
+    for _ in 0..<6 {
+      if onset.processCapture(
+        frameCount: samples.count, channelCount: 1, sampleRate: 48000,
+        sample: { frame, _ in samples[frame] })?.onset != nil
+      {
+        media.speech?()
+      }
+    }
+    for _ in 0..<20 { await Task.yield() }
+    let interruptions = await control.interruptCalls()
+    XCTAssertFalse(
+      model.output.locallyInterrupted,
+      "Sparse low-RMS peaks must not retire a pending answer before text or audio exists")
+    XCTAssertEqual(interruptions, 0, "Noise must not request backend answer interruption")
+    XCTAssertEqual(model.output.current?.status, .preparing)
+
+    // Genuine sustained energy must still interrupt immediately while waiting.
+    let speech: Float = 0.01
+    for _ in 0..<6 {
+      if onset.processCapture(
+        frameCount: 480, channelCount: 1, sampleRate: 48000,
+        sample: { _, _ in speech })?.onset != nil
+      {
+        media.speech?()
+      }
+    }
+    XCTAssertTrue(model.output.locallyInterrupted)
+    await model.shutdown()
+  }
+
   private func outputValue(session: UUID, input: UUID, response: UUID, epoch: UUID) -> [String: Any]
   {
     [

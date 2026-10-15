@@ -67,8 +67,9 @@ it("speech onset fences audio before final recognition and empty recognition can
         const stopped = yield* waitForOutput(voice, join.sessionId, "Interrupted")
         expect(stopped.output?.status).toBe("Interrupted")
         const count = transport.captured.length
-        for (let frame = 0; frame < 20; frame++) yield* transport.send(transport.audio(0))
+        for (let frame = 0; frame < 50; frame++) yield* transport.send(transport.audio(0))
         yield* Effect.sleep(150)
+        expect((yield* voice.snapshot(join.sessionId, 0)).events.some((event) => event.kind === "Discarded")).toBe(true)
         expect(transport.captured).toHaveLength(count)
         expect((yield* conversation.reply(outputInput.deliveryId)).state).toBe("Interrupted")
         expect((yield* conversation.page({ limit: 100 })).messages[1]?.outcome).toBe("interrupted")

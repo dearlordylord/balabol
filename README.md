@@ -73,6 +73,8 @@ BALABOL_RECOGNITION_PROVIDER=whisper pnpm dev:voice
 
 Each completed mono PCM16LE 16 kHz utterance (at most 15 seconds) gets one serialized native process. The 30-second deadline includes queueing, model initialization and inference; cancellation terminates and reaps that process and removes private temporary audio. The next utterance starts a fresh process after failure; a failed utterance is never retried automatically. This has a per-utterance model-load cost and does not retain a warm resident model. Native diagnostics and transcripts are not logged.
 
+Voice closes a microphone utterance after one second of continuous quiet, allowing ordinary pauses inside a sentence; continuous input remains capped at ten seconds per segment. Backend and native barge-in qualify 60 ms of sustained normalized RMS energy instead of isolated sample peaks. This is an energy heuristic, not semantic speech/noise classification; sustained noise, echo and pauses longer than the endpoint remain physical qualification concerns. Native barge-in rearm is independent of turn endpointing.
+
 Automatic language detection preserves mixed transcript text and emits nullable whole-result `detectedLanguage` with empty exact spans. Empty text has no detected language and creates no message. Russian, French and English are the initial scope; Japanese is a future configured capability, not a quality claim. Advertised support is separate from measured language accuracy and latency; qualification evidence belongs in issue #27.
 
 ## Connect the ChatGPT subscription

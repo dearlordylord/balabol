@@ -627,7 +627,7 @@ final class VoiceCaptureUITests: XCTestCase {
   app.launchEnvironment["BALABOL_UI_TEST_CONTROL_URL"] = controlURL.absoluteString
   app.launch()
   XCTAssertTrue(app.buttons["start-voice"].waitForExistence(timeout: 5))
-  XCTAssertTrue(app.staticTexts["scripted-transcription"].exists)
+  XCTAssertTrue(app.staticTexts["voice-conversation"].exists)
   return app
 }
 
