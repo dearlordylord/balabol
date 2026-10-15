@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Redacted, Schema } from "effect";
 
@@ -16,7 +16,31 @@ const Completed = Schema.Struct({
   type: Schema.Literal("response.completed"),
   response: Schema.Struct({ status: Schema.Literal("completed") }),
 });
+const JsonError = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
 const decode = Schema.decodeUnknownSync;
+const knownProviderCodes = new Set([
+  "insufficient_quota",
+  "rate_limit_exceeded",
+  "usage_limit_reached",
+  "quota_exceeded",
+  "invalid_api_key",
+  "invalid_token",
+  "model_not_found",
+  "permission_denied",
+]);
+function nonStream(text) {
+  let code = "non-sse-body";
+  if (text.trimStart().startsWith("{")) {
+    try {
+      const candidate = decode(JsonError)(JSON.parse(text)).error.code;
+      if (knownProviderCodes.has(candidate)) code = `provider-${candidate}`;
+    } catch {
+      /* Never expose raw JSON/schema errors. */
+    }
+  }
+  failureObservation = { ...failureObservation, code };
+  throw new Error("qualification-stopped");
+}
 const failureCodes = new Set([
   "premature-eof",
   "total-byte-cap",
@@ -62,7 +86,10 @@ async function consume(body, controller, cancel, deadline, started = performance
   try {
     while (!completed) {
       const { done, value } = await reader.read();
-      if (done) fail("premature-eof");
+      if (done) {
+        if (pending.trim()) nonStream(pending);
+        fail("premature-eof");
+      }
       bytes += value.byteLength;
       if (bytes > 1048576) fail("total-byte-cap");
       pending += decoder.decode(value, { stream: true });
@@ -142,6 +169,21 @@ function bounded(operation, milliseconds, controller) {
   return Promise.race([operation, timeout]).finally(() => clearTimeout(timer));
 }
 
+async function consumeResponse(response, controller, cancel, deadline, started) {
+  const declared = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  const mime = ["text/event-stream", "application/json", "text/plain", "text/html"].includes(declared)
+    ? declared
+    : "other-or-missing";
+  failureObservation = { code: "qualification-or-setup-failed", status: response.status, mime };
+  if (!response.ok) {
+    const code = response.status === 401 ? "http-auth" : response.status === 429 ? "http-quota" : "http-provider";
+    failureObservation = { code, status: response.status, mime };
+    throw new Error("qualification-stopped");
+  }
+  if (!response.body) fail("content-type");
+  return consume(response.body, controller, cancel, deadline, started);
+}
+
 async function experiment(models, token, signal) {
   if (!models.includes(answerModel) || !models.includes(summaryModel)) fail("required-model-absent");
   const started = performance.now();
@@ -170,15 +212,7 @@ async function experiment(models, token, signal) {
             },
             body: JSON.stringify(requestBody(model, prompt)),
           });
-          if (!response.ok) {
-            const code =
-              response.status === 401 ? "http-auth" : response.status === 429 ? "http-quota" : "http-provider";
-            failureObservation = { code, status: response.status };
-            throw new Error("qualification-stopped");
-          }
-          if (!response.headers.get("content-type")?.includes("text/event-stream") || !response.body)
-            fail("content-type");
-          return consume(response.body, controller, cancel, deadline, requestStarted);
+          return consumeResponse(response, controller, cancel, deadline, requestStarted);
         })(),
         30000,
         controller,
@@ -250,6 +284,20 @@ async function selfTest() {
   const read = (text, cancel = false) =>
     consume(fixture(text), new AbortController(), cancel, performance.now() + 1000);
   assert.equal((await read(delta + complete)).text, "hello");
+  const wrongMime = new Response(delta + complete, { headers: { "content-type": "application/json" } });
+  assert.equal(
+    (await consumeResponse(wrongMime, new AbortController(), false, performance.now() + 1000, performance.now())).text,
+    "hello",
+  );
+  const jsonQuota = new Response(
+    JSON.stringify({ error: { code: "insufficient_quota", message: "SECRET_NOT_LOGGED" } }),
+    { headers: { "content-type": "application/json" } },
+  );
+  await assert.rejects(
+    consumeResponse(jsonQuota, new AbortController(), false, performance.now() + 1000, performance.now()),
+  );
+  assert.equal(failureObservation.code, "provider-insufficient_quota");
+  assert.ok(!JSON.stringify(failureObservation).includes("SECRET_NOT_LOGGED"));
   assert.equal((await read(delta, true)).terminal, "locally-aborted");
   await assert.rejects(read(complete, true));
   const origin = performance.now() - 1234;
@@ -300,7 +348,11 @@ try {
         catch: () => new Error("qualification-failed"),
       });
     }).pipe(
-      Effect.provide(subscriptionLayer(process.env.BALABOL_SUBSCRIPTION_DIRECTORY ?? ".data/subscription")),
+      Effect.provide(
+        subscriptionLayer(
+          process.env.BALABOL_SUBSCRIPTION_DIRECTORY ?? join(homedir(), ".local", "share", "balabol", "subscription"),
+        ),
+      ),
       Effect.timeout(600000),
     );
     await Effect.runPromise(program);
