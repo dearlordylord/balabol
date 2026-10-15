@@ -27,7 +27,55 @@ const knownProviderCodes = new Set([
   "invalid_token",
   "model_not_found",
   "permission_denied",
+  "invalid_request_error",
+  "unsupported_parameter",
+  "invalid_value",
+  "unsupported_value",
+  "server_error",
+  "access_denied",
+  "subscription_sharing_user_not_eligible",
+  "subscription_sharing_usage_limit_exceeded",
+  "subscription_sharing_usage_unavailable",
+  "subscription_sharing_unsupported_capability",
+  "subscription_sharing_route_not_supported",
+  "subscription_sharing_invalid_user",
+  "subscription_sharing_user_unavailable",
+  "chatpass_v2_scope_not_authorized",
+  "chatpass_v2_invalid_authorization_context",
 ]);
+const ProviderError = Schema.Struct({ code: Schema.optional(Schema.String), param: Schema.optional(Schema.String) });
+const FailedEvent = Schema.Struct({ response: Schema.Struct({ error: ProviderError }) });
+const IncompleteEvent = Schema.Struct({
+  response: Schema.Struct({ incomplete_details: Schema.Struct({ reason: Schema.String }) }),
+});
+const parameterNames = new Set([
+  "model",
+  "input",
+  "instructions",
+  "store",
+  "stream",
+  "temperature",
+  "max_output_tokens",
+  "tools",
+  "previous_response_id",
+]);
+function terminalFailure(type, parsed) {
+  failureObservation = { code: type };
+  try {
+    if (type === "response.incomplete") {
+      const reason = decode(IncompleteEvent)(parsed).response.incomplete_details.reason;
+      if (["max_output_tokens", "content_filter"].includes(reason)) failureObservation.reason = reason;
+    } else {
+      const error =
+        type === "response.failed" ? decode(FailedEvent)(parsed).response.error : decode(ProviderError)(parsed);
+      if (knownProviderCodes.has(error.code)) failureObservation.providerCode = error.code;
+      if (parameterNames.has(error.param)) failureObservation.parameter = error.param;
+    }
+  } catch {
+    /* Invalid or unexpected terminal details remain undisclosed. */
+  }
+  throw new Error("qualification-stopped");
+}
 function nonStream(text) {
   let code = "non-sse-body";
   if (text.trimStart().startsWith("{")) {
@@ -133,12 +181,10 @@ async function consume(body, controller, cancel, deadline, started = performance
           decode(Completed)(parsed);
           completed = true;
           break;
-        } else if (
-          ["response.failed", "response.incomplete", "error"].includes(event.type) ||
-          event.type.includes("tool") ||
-          event.type.includes("function_call")
-        ) {
-          fail("provider-terminal-or-tool");
+        } else if (["response.failed", "response.incomplete", "error"].includes(event.type)) {
+          terminalFailure(event.type, parsed);
+        } else if (event.type.includes("tool") || event.type.includes("function_call")) {
+          fail("unexpected-output-item");
         }
       }
       if (Buffer.byteLength(pending) > 65536) fail("frame-byte-cap");
@@ -184,13 +230,14 @@ async function consumeResponse(response, controller, cancel, deadline, started) 
   return consume(response.body, controller, cancel, deadline, started);
 }
 
-async function experiment(models, token, signal) {
+const requestLimits = { "--execute-approved": 7, "--diagnose-approved": 1, "--remaining-approved": 6 };
+async function experiment(models, token, signal, mode) {
   if (!models.includes(answerModel) || !models.includes(summaryModel)) fail("required-model-absent");
   const started = performance.now();
   const controllers = new Set();
   let requests = 0;
   const invoke = async (label, model, prompt, cancel = false) => {
-    if (++requests > 8 || performance.now() - started > 600000) fail("experiment-cap");
+    if (++requests > requestLimits[mode] || performance.now() - started > 600000) fail("experiment-cap");
     const controller = new AbortController();
     controllers.add(controller);
     const abort = () => controller.abort();
@@ -235,7 +282,11 @@ async function experiment(models, token, signal) {
       signal.removeEventListener("abort", abort);
     }
   };
-  await invoke("answer", answerModel, "Reply with one short greeting.");
+  if (mode !== "--remaining-approved") await invoke("answer", answerModel, "Reply with one short greeting.");
+  if (mode === "--diagnose-approved") {
+    console.log(JSON.stringify({ outcome: "DIAGNOSTIC_COMPLETED", requests, qualification: "NOT_PROVEN" }));
+    return;
+  }
   await invoke("summary", summaryModel, "Summarize in one sentence: Alex likes quiet mornings and tea.");
   await invoke("interrupt", answerModel, "Write a detailed, lengthy description of a peaceful garden.", true);
   await invoke("fresh-answer", answerModel, "Reply with one short greeting.");
@@ -261,6 +312,7 @@ async function experiment(models, token, signal) {
   console.log(
     JSON.stringify({
       outcome: "PASS",
+      answerPreviouslyObserved: mode === "--remaining-approved",
       requests,
       elapsedMs: Math.round(performance.now() - started),
       remoteComputeCessation: "NOT_PROVEN",
@@ -279,6 +331,7 @@ function fixture(text) {
   });
 }
 async function selfTest() {
+  assert.deepEqual(requestLimits, { "--execute-approved": 7, "--diagnose-approved": 1, "--remaining-approved": 6 });
   const delta = frame({ type: "response.output_text.delta", delta: "hello" });
   const complete = frame({ type: "response.completed", response: { status: "completed" } });
   const read = (text, cancel = false) =>
@@ -298,6 +351,26 @@ async function selfTest() {
   );
   assert.equal(failureObservation.code, "provider-insufficient_quota");
   assert.ok(!JSON.stringify(failureObservation).includes("SECRET_NOT_LOGGED"));
+  await assert.rejects(
+    read(
+      frame({
+        type: "response.failed",
+        response: { error: { code: "invalid_request_error", param: "store", message: "PRIVATE" } },
+      }),
+    ),
+  );
+  assert.equal(failureObservation.code, "response.failed");
+  assert.equal(failureObservation.providerCode, "invalid_request_error");
+  assert.equal(failureObservation.parameter, "store");
+  assert.ok(!JSON.stringify(failureObservation).includes("PRIVATE"));
+  await assert.rejects(read(frame({ type: "error", code: "SECRET", param: "PRIVATE" })));
+  assert.equal(failureObservation.code, "error");
+  assert.equal(failureObservation.providerCode, undefined);
+  assert.equal(failureObservation.parameter, undefined);
+  await assert.rejects(
+    read(frame({ type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } })),
+  );
+  assert.equal(failureObservation.reason, "max_output_tokens");
   assert.equal((await read(delta, true)).terminal, "locally-aborted");
   await assert.rejects(read(complete, true));
   const origin = performance.now() - 1234;
@@ -337,14 +410,14 @@ async function selfTest() {
 try {
   if (process.argv[2] === "--self-test" && process.argv.length === 3) {
     await selfTest();
-  } else if (process.argv[2] === "--execute-approved" && process.argv.length === 3) {
+  } else if (Object.hasOwn(requestLimits, process.argv[2]) && process.argv.length === 3) {
     const { Subscription, subscriptionLayer } = await import("../dist/subscription/index.js");
     const program = Effect.gen(function* () {
       const subscription = yield* Subscription;
       const models = yield* subscription.models().pipe(Effect.timeout(30000));
       const token = yield* subscription.accessToken();
       yield* Effect.tryPromise({
-        try: (signal) => experiment(models, token, signal),
+        try: (signal) => experiment(models, token, signal, process.argv[2]),
         catch: () => new Error("qualification-failed"),
       });
     }).pipe(
@@ -357,7 +430,9 @@ try {
     );
     await Effect.runPromise(program);
   } else {
-    fail("Use --self-test, or --execute-approved only after runbook approval and subscription-only cost confirmation.");
+    fail(
+      "Use --self-test, or an approved --execute-approved/--diagnose-approved/--remaining-approved after subscription-only cost confirmation.",
+    );
   }
 } catch {
   console.error(JSON.stringify({ outcome: "FAIL", ...failureObservation, retries: 0 }));
