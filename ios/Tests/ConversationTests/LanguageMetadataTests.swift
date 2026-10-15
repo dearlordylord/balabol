@@ -10,6 +10,35 @@ import XCTest
       try JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any]
     XCTAssertEqual((encoded?["languageSpans"] as? [[String: Any]])?.count, 0)
   }
+  func testNullableWholeInputDetectionAndRequestedLanguageRemainIndependent() throws {
+    let legacy = try decodeMessage(text: "Привет", spans: [])
+    XCTAssertNil(legacy.detectedLanguage)
+    XCTAssertNil(legacy.responseLanguage)
+    var object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+    object["detectedLanguage"] = "ru"
+    object["responseLanguage"] = "en"
+    let detected = try JSONDecoder().decode(
+      ConversationMessage.self, from: JSONSerialization.data(withJSONObject: object))
+    XCTAssertEqual(detected.detectedLanguage, "ru")
+    XCTAssertEqual(detected.responseLanguage, "en")
+    XCTAssertTrue(detected.languageSpans.isEmpty)
+    XCTAssertNotEqual(detected, legacy)
+    XCTAssertEqual(
+      try JSONDecoder().decode(
+        ConversationMessage.self,
+        from: JSONEncoder().encode(detected)), detected)
+    object["detectedLanguage"] = "bad_tag"
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(
+        ConversationMessage.self, from: JSONSerialization.data(withJSONObject: object)))
+    object["detectedLanguage"] = NSNull()
+    object["responseLanguage"] = NSNull()
+    XCTAssertEqual(
+      try JSONDecoder().decode(
+        ConversationMessage.self,
+        from: JSONSerialization.data(withJSONObject: object)), legacy)
+  }
   func testMixedReceiptRoundTripsSparseUTF16Annotations() throws {
     let spans: [[String: Any]] = [
       ["language": "ru", "start": 0, "end": 6],

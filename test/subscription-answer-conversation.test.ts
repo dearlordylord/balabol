@@ -1,0 +1,110 @@
+import { Effect, Layer, Redacted } from "effect"
+import { expect, it } from "vitest"
+import { subscriptionAnswerLayer } from "../src/answer-generation/index.ts"
+import { Subscription, subscriptionInferenceLayer } from "../src/subscription/index.ts"
+import type { InferenceTransport } from "../src/subscription/index.ts"
+import { Conversation } from "../src/conversation/index.ts"
+import { temporaryDatabase } from "./memory-fixture.ts"
+import { replyLayer, waitForReply } from "./reply-fixture.ts"
+const input = { deliveryId: "11111111-1111-4111-8111-111111111111", text: "synthetic input" }
+const later = { deliveryId: "22222222-2222-4222-8222-222222222222", text: "synthetic followup" }
+const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
+const success =
+  event({ type: "response.output_text.delta", delta: "synthetic answer" }) +
+  event({ type: "response.completed", response: { status: "completed" } })
+function answerLayer(transport: InferenceTransport) {
+  return subscriptionAnswerLayer().pipe(
+    Layer.provide(subscriptionInferenceLayer(transport)),
+    Layer.provide(
+      Layer.succeed(Subscription, {
+        accessToken: () => Effect.succeed(Redacted.make("fixture")),
+        begin: () => Effect.die("unused"),
+        complete: () => Effect.die("unused"),
+        status: () => Effect.succeed({ kind: "Disconnected" }),
+        models: () => Effect.succeed([]),
+        disconnect: () => Effect.succeed({ revocation: "NotNeeded" })
+      })
+    )
+  )
+}
+it("durably streams real-adapter output once across duplicate delivery and reconnect", async () => {
+  const database = await temporaryDatabase()
+  let calls = 0
+  const answer = answerLayer(async () => {
+    calls++
+    return new Response(success)
+  })
+  const application = replyLayer(database.path, answer, { answerProvider: "subscription", answerModel: "gpt-6.1-sol" })
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          yield* conversation.send(input)
+          const receipt = yield* conversation.send(input)
+          const completed = yield* waitForReply(conversation, input.deliveryId)
+          expect(completed.state).toBe("Completed")
+          expect(completed.text).toBe("synthetic answer")
+          expect(completed.languageSpans).toEqual([])
+          expect((yield* conversation.send(input)).position).toBe(receipt.position)
+        })
+      ).pipe(Effect.provide(application))
+    )
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          yield* conversation.send(input)
+          expect((yield* conversation.reply(input.deliveryId)).state).toBe("Completed")
+          expect((yield* conversation.page({ limit: 100 })).messages).toHaveLength(2)
+        })
+      ).pipe(Effect.provide(application))
+    )
+    expect(calls).toBe(1)
+  } finally {
+    await database.close()
+  }
+})
+it("a quota failure leaves accepted memory and permits the next real-adapter answer without restart", async () => {
+  const database = await temporaryDatabase()
+  let calls = 0
+  const answer = answerLayer(async (request) => {
+    if (calls++ === 0)
+      return new Response(
+        event({ type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } })
+      )
+    expect(request.input).toContain("synthetic input")
+    return new Response(success)
+  })
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          yield* conversation.send(input)
+          expect((yield* waitForReply(conversation, input.deliveryId)).state).toBe("Failed")
+          yield* conversation.send(later)
+          expect((yield* waitForReply(conversation, later.deliveryId)).state).toBe("Completed")
+          expect((yield* conversation.page({ limit: 100 })).messages).toHaveLength(3)
+        })
+      ).pipe(
+        Effect.provide(
+          replyLayer(database.path, answer, { answerProvider: "subscription", answerModel: "gpt-6.1-sol" })
+        )
+      )
+    )
+  } finally {
+    await database.close()
+  }
+})
+it("selects the exact qualified model only after explicit opt-in and rejects unsupported configuration", async () => {
+  const { parseConfig } = await import("../src/bootstrap/index.ts")
+  const enabled = await Effect.runPromise(parseConfig({ BALABOL_ANSWER_PROVIDER: "subscription" }))
+  expect(enabled.reply?.answerModel).toBe("gpt-6.1-sol")
+  const defaults = await Effect.runPromise(parseConfig({}))
+  expect(defaults.reply?.answerProvider).toBe("fake")
+  const invalid = await Effect.runPromise(
+    parseConfig({ BALABOL_ANSWER_PROVIDER: "subscription", BALABOL_ANSWER_MODEL: "unqualified" }).pipe(Effect.result)
+  )
+  expect(invalid._tag).toBe("Failure")
+})

@@ -55,6 +55,8 @@ export const durableMemoryLayer = Layer.effect(
           deliveryId: row.deliveryId,
           text: row.text,
           languageSpans: row.languageSpans,
+          detectedLanguage: row.detectedLanguage,
+          responseLanguage: row.responseLanguage,
           role: row.role,
           ...(row.inputDeliveryId === null ? {} : { inputDeliveryId: row.inputDeliveryId }),
           ...(row.responseId === null ? {} : { responseId: row.responseId }),

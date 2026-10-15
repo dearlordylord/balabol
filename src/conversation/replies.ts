@@ -18,6 +18,7 @@ import type { ReplySettings } from "./reply-configuration.ts"
 import { Reply, ReplyNotFound } from "./contracts.ts"
 
 const maximumReplyLength = 100_000
+const languageField = (language: string | null | undefined) => (language == null ? {} : { responseLanguage: language })
 const replySpans = (reply: Reply) => reply.languageSpans ?? []
 const completeAnswer = (completed: boolean, text: string) => completed && text.length > 0
 /** Conversation owns responses; observers never launch generation or own Memory. */
@@ -50,6 +51,7 @@ export class Replies {
           inputDeliveryId: state.inputDeliveryId,
           role: "assistant",
           outcome: "interrupted",
+          ...languageField(state.responseLanguage),
           languageSpans: replySpans(state),
           text: state.text
         }
@@ -122,6 +124,7 @@ export class Replies {
       if (input?.state !== "Accepted" || input.receipt.role === "assistant")
         return yield* new ReplyNotFound({ message: "Unknown accepted input" })
       return {
+        ...languageField(input.receipt.responseLanguage),
         responseId: responseIdentity(inputDeliveryId),
         inputDeliveryId,
         sequence: 0,
@@ -138,6 +141,7 @@ export class Replies {
   }
   #restored(receipt: Receipt, inputDeliveryId: string): Reply {
     return Schema.decodeUnknownSync(Reply)({
+      ...languageField(receipt.responseLanguage),
       responseId: receipt.deliveryId,
       inputDeliveryId,
       sequence: maximumReplyLength + 1,
@@ -171,14 +175,16 @@ export class Replies {
       return yield* this.current(input.deliveryId)
     })
   }
+  // Conversation serializes new input admission and returns duplicates before starting a reply.
   start(input: Receipt, retry = false): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
-      if (!retry && this.#state?.inputDeliveryId === input.deliveryId) return
       const responseId = retry ? randomUUID() : responseIdentity(input.deliveryId)
       const base = {
         responseId,
         inputDeliveryId: input.deliveryId,
-        responseLanguage: selectResponseLanguage(input.languageSpans)
+        responseLanguage:
+          input.responseLanguage ??
+          selectResponseLanguage(input.languageSpans, input.detectedLanguage, this.answer.capabilities.languages)
       }
       this.#phase = "Generating"
       this.#observer = undefined
@@ -319,6 +325,7 @@ export class Replies {
         role: "assistant",
         outcome: "completed",
         text,
+        responseLanguage: base.responseLanguage,
         languageSpans
       }
       yield* Effect.gen({ self: this }, function* () {
@@ -329,6 +336,7 @@ export class Replies {
           inputDeliveryId: input.deliveryId,
           responseId: base.responseId,
           text,
+          responseLanguage: base.responseLanguage,
           languageSpans
         })
         this.#pendingCompletion = undefined
@@ -364,6 +372,7 @@ export class Replies {
         inputDeliveryId: state.inputDeliveryId,
         role: "assistant",
         outcome: "completed",
+        ...languageField(state.responseLanguage),
         languageSpans: replySpans(state),
         text: state.text
       }

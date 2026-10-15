@@ -22,10 +22,10 @@ li { margin: .75rem 0; }
 <li>Keep the backend running in Terminal: use Node 24, then <code>pnpm build</code> and <code>pnpm start</code>.</li>
 <li>Open <code>ios/Balabol.xcodeproj</code> in Xcode. Select the <strong>Balabol</strong> scheme and an iOS 17+ Simulator, then press Run.</li>
 <li>Simulator opens the conversation automatically using <code>http://127.0.0.1:8787</code> on first launch. No URL entry or Connect tap is required. A saved server takes precedence; use <strong>Server</strong> only to change it.</li>
-<li>Write in the <strong>Message</strong> field and tap <strong>Send</strong>. The current prototype saves text; replies and voice are not implemented yet.</li>
+<li>Write in the <strong>Message</strong> field and tap <strong>Send</strong>. The conversation saves accepted messages and streams replies. Replies use the configured fake or subscription provider.</li>
 </ol>
 <h2>Run on iPhone</h2>
-<p>Choose your local signing team in Xcode and run the app on the device. Keep Tailscale connected on the Mac and iPhone. Start the backend with <code>BALABOL_HOST=&lt;Mac Tailscale IP&gt; pnpm start</code>, then enter <code>http://&lt;Mac Tailscale IP&gt;:8787</code> in the app and tap <strong>Connect</strong>.</p>
+<p>Choose your local signing team in Xcode and run the app on the device. Keep Tailscale connected on the Mac and iPhone. Run <code>pnpm dev:voice</code>, then select <strong>Server</strong> in the app and use the private HTTPS control URL printed by the launcher.</p>
 <p>The Terminal backend and native app are separate processes; both must stay running while you send messages. Custom ports must match the URL entered in the app.</p>
 </main>
 </body>

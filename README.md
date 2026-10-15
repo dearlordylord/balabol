@@ -1,12 +1,12 @@
 # Balabol
 
 **Purpose:** Describe the repository and its current development state.
-**Status:** Durable text conversation, fake replies, and LiveKit microphone input with fake recognition; physical-device qualification remains separate.
+**Status:** Durable text conversation with opt-in subscription Sol replies, and LiveKit microphone input with fake recognition; physical-device qualification remains separate.
 **Authority:** Product requirements live in the published prototype issue; engineering guidance lives in AGENTS.md.
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
 
-An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Initial speech, answer and summary providers are deterministic fakes; local speech and subscription model integration are deferred.
+An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech and summary providers remain deterministic fakes. Answers default to a fake, with an explicit opt-in for the qualified ChatGPT subscription model.
 
 - [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
 - [Synchronized local specification](docs/product/prototype-spec.md)
@@ -49,9 +49,22 @@ LiveKit ICE advertises the Mac's Tailscale IPv4 address on UDP 7882 with TCP 788
 
 `pnpm subscription` builds and opens a separate setup page on this Mac. Choose **Continue with ChatGPT** and authorize Balabol with the existing account. This does not reuse or modify the Codex login. The listener binds only to `127.0.0.1`, defaults to port 8788 and is not exposed through iPhone/Tailscale routes. `BALABOL_SUBSCRIPTION_PORT` overrides that local port; `BALABOL_SUBSCRIPTION_DIRECTORY` selects the private credential directory (default `~/.local/share/balabol/subscription`, outside the checkout).
 
-Credentials stay in a private local directory with owner-only files and atomic replacement. The setup process holds an exclusive writer lease; stop it before starting another process that uses the same subscription directory. **Disconnect Balabol** attempts bounded remote revocation and removes the locally saved tokens. If remote revocation cannot be confirmed, the page says so and points to ChatGPT access settings. The app registration is retained for reconnecting the same account; account switching is outside this prototype.
+Credentials stay in a private local directory with owner-only files and atomic replacement. The setup process holds an exclusive writer lease; stop it before starting another process that uses the same subscription directory. **Disconnect Balabol** attempts bounded remote revocation and removes the locally saved tokens. If remote revocation cannot be confirmed, the page says so and points to ChatGPT access settings. The app registration is retained for reconnecting the same account. The separate change-account flow clears that registration while retaining the host identity; only one account is active.
 
-Connecting an account does not prove model entitlement or select real providers automatically. Real Sol/Luna requests require the separate bounded qualification task. No API-key fallback is configured.
+Connecting an account does not prove model entitlement or select real providers automatically. The exact `gpt-6.1-sol` and `gpt-6-luna` models have passed the separate subscription qualification task. No API-key fallback is configured.
+
+## Enable real answers
+
+Connect the subscription first, then stop the setup process so the backend can acquire its credential-writer lease. Start the text backend with:
+
+```sh
+pnpm build
+BALABOL_ANSWER_PROVIDER=subscription pnpm start
+```
+
+The same environment setting applies to `pnpm dev:voice`. Subscription mode defaults to the qualified exact `gpt-6.1-sol`; `BALABOL_ANSWER_MODEL`, if provided, must match it. Unset `BALABOL_ANSWER_PROVIDER` (or set `fake`) to keep deterministic fake replies without acquiring subscription credentials. Summary and speech providers remain fake in this step.
+
+Real requests contain only the explicit prior unii memory, current input and requested response language, with no tools or inherited agent context. Text deltas carry no guessed language spans. Each request has a 60-second total deadline, 100,000 UTF-16 output limit, 64 KiB SSE-frame limit and 2 MiB body limit. Only a valid completed terminal succeeds; incomplete, failed, authentication and quota outcomes remain recoverable errors. Interruption cancels the request and releases its reader without disconnecting the subscription or canceling independent memory work. There is no automatic retry or model/API-key fallback. Keep paid credit fallback disabled in the connected account.
 
 ## Repository tooling
 

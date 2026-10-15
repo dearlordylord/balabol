@@ -5,7 +5,8 @@ export { StorageUnavailable, WriterUnavailable } from "../memory/index.ts"
 export const SendMessage = Schema.Struct({
   deliveryId: DeliveryId,
   text: MessageText,
-  languageSpans: Schema.optionalKey(LanguageSpans)
+  languageSpans: Schema.optionalKey(LanguageSpans),
+  detectedLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag))
 }).check(Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans ?? [])))
 export type SendMessage = typeof SendMessage.Type
 export const Message = Receipt

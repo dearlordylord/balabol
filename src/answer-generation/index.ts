@@ -1,8 +1,7 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
-import { LanguageTag, LanguageTags, LanguageSpans, validLanguageSpans } from "../language/index.ts"
-const modelNameLimit = 200
-const priorContextLimit = 1000000
-const answerTextLimit = 100000
+import { AnswerGeneration, AnswerRequest, AnswerFailed } from "./contracts.ts"
+import { Effect, Layer, Schema, Stream } from "effect"
+import { LanguageTags } from "../language/index.ts"
+export { AnswerGeneration, AnswerRequest, AnswerFailed, AnswerCapabilities, AnswerEvent } from "./contracts.ts"
 const maximumDelayMillis = 60000
 const defaultDelayMillis = 80
 const deltaCharacters = 24
@@ -13,32 +12,6 @@ const localizedReplies: Readonly<Record<string, string>> = {
   en: "This is a fixture reply.",
   ja: "これはデモの返答です。"
 }
-export const AnswerCapabilities = Schema.Struct({ languages: LanguageTags, output: Schema.Literal("text-deltas") })
-export type AnswerCapabilities = typeof AnswerCapabilities.Type
-// Complete current input remains separate from exclusive prior memory context.
-export const AnswerRequest = Schema.Struct({
-  model: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(modelNameLimit)),
-  prior: Schema.String.check(Schema.isMaxLength(priorContextLimit)),
-  input: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(answerTextLimit)),
-  inputLanguageSpans: LanguageSpans,
-  responseLanguage: LanguageTag,
-  capabilities: Schema.Array(Schema.Literal("memory.context")).check(Schema.isMaxLength(1))
-}).check(Schema.makeFilter((request) => validLanguageSpans(request.input, request.inputLanguageSpans)))
-export type AnswerRequest = typeof AnswerRequest.Type
-export const AnswerEvent = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("Delta"),
-    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(answerTextLimit)),
-    languageSpans: LanguageSpans
-  }).check(Schema.makeFilter((event) => validLanguageSpans(event.text, event.languageSpans))),
-  Schema.Struct({ kind: Schema.Literal("Completed") })
-])
-export type AnswerEvent = typeof AnswerEvent.Type
-export class AnswerFailed extends Schema.TaggedError<AnswerFailed>()("AnswerFailed", { message: Schema.String }) {}
-export class AnswerGeneration extends Context.Service<
-  AnswerGeneration,
-  { capabilities: AnswerCapabilities; generate: (request: AnswerRequest) => Stream.Stream<AnswerEvent, AnswerFailed> }
->()("balabol/answer-generation") {}
 const Configuration = Schema.Struct({
   delayMillis: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(maximumDelayMillis)),
   languages: LanguageTags
@@ -94,3 +67,5 @@ export const fakeAnswerLayer = (
       )
     )
   )
+
+export { subscriptionAnswerLayer } from "./subscription.ts"

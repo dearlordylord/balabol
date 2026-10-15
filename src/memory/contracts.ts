@@ -1,6 +1,6 @@
 import { Effect, Schema, SchemaGetter } from "effect"
 
-import { LanguageSpans, validLanguageSpans } from "../language/index.ts"
+import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 
 export const StoredLanguageSpans = LanguageSpans.pipe(Schema.withDecodingDefaultKey(Effect.succeed([])))
 
@@ -39,6 +39,8 @@ export const DeliveryPayload = Schema.Struct({
   deliveryId: DeliveryId,
   text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
   languageSpans: StoredLanguageSpans,
+  detectedLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag)),
+  responseLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag)),
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
   responseId: Schema.optionalKey(DeliveryId),
@@ -54,6 +56,8 @@ export const Receipt = Schema.Struct({
   position: Position,
   text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
   languageSpans: StoredLanguageSpans,
+  detectedLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag)),
+  responseLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag)),
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
   responseId: Schema.optionalKey(DeliveryId),
@@ -99,13 +103,14 @@ export const defaultMemorySettings: MemorySettings = {
 const payloadDefaults = (value: DeliveryPayload) => ({
   ...value,
   role: value.role ?? "user",
+  detectedLanguage: value.detectedLanguage ?? null,
   outcome: value.role === "assistant" ? (value.outcome ?? "completed") : undefined
 })
 export const samePayload = (left: DeliveryPayload, right: DeliveryPayload): boolean => {
   const first = payloadDefaults(left)
   const second = payloadDefaults(right)
   if (JSON.stringify(first.languageSpans ?? []) !== JSON.stringify(second.languageSpans ?? [])) return false
-  return (["deliveryId", "text", "role", "inputDeliveryId", "responseId", "outcome"] as const).every(
-    (key) => first[key] === second[key]
-  )
+  return (
+    ["deliveryId", "text", "detectedLanguage", "role", "inputDeliveryId", "responseId", "outcome"] as const
+  ).every((key) => first[key] === second[key])
 }

@@ -1,28 +1,19 @@
-import { Context, Effect, Layer } from "effect"
+import { Subscription } from "./service.ts"
+import { Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
 import { connection } from "./connection.ts"
-import type { Redacted } from "effect"
-import type { ConnectionStatus, DisconnectMode, DisconnectOutcome, SubscriptionFailed } from "./model.ts"
 import type { SubscriptionPorts } from "./ports.ts"
 import { livePorts } from "./protocol.ts"
 import { protectedStore } from "./store.ts"
+export { Subscription } from "./service.ts"
+export { SubscriptionInference, InferenceRequest, InferenceEvent, InferenceFailed } from "./inference-model.ts"
+export { subscriptionInferenceLayer, inferenceHttpTransport } from "./inference.ts"
+export type { InferenceTransport } from "./inference.ts"
 export { ConnectionStatus, DisconnectMode, DisconnectOutcome, SubscriptionFailed } from "./model.ts"
 export { subscriptionHttpRequest } from "./protocol.ts"
 export { subscriptionIdentityVerifier } from "./identity.ts"
 export type { PersistentState } from "./model.ts"
 export type { SubscriptionPorts } from "./ports.ts"
-/** Owns one app-specific connection, OAuth attempts and rotating credentials. Tokens never cross HTTP/UI boundaries. */
-export class Subscription extends Context.Service<
-  Subscription,
-  {
-    readonly begin: (redirectUri: string) => Effect.Effect<{ readonly authorizationUrl: string }, SubscriptionFailed>
-    readonly complete: (callbackUrl: string) => Effect.Effect<ConnectionStatus, SubscriptionFailed>
-    readonly status: () => Effect.Effect<ConnectionStatus, SubscriptionFailed>
-    readonly accessToken: () => Effect.Effect<Redacted.Redacted<string>, SubscriptionFailed>
-    readonly models: () => Effect.Effect<readonly string[], SubscriptionFailed>
-    readonly disconnect: (mode?: DisconnectMode) => Effect.Effect<DisconnectOutcome, SubscriptionFailed>
-  }
->()("balabol/subscription") {}
 const make = (ports: SubscriptionPorts) =>
   Effect.gen(function* () {
     const state = yield* ports.load()

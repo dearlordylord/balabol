@@ -1,6 +1,7 @@
 import { createServer } from "node:http"
 import { mkdir } from "node:fs/promises"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
+import { homedir } from "node:os"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Effect, Layer, Redacted, Schema } from "effect"
 import { HttpRouter } from "effect/http"
@@ -24,7 +25,7 @@ import {
   defaultMemorySettings
 } from "../memory/index.ts"
 
-import { fakeAnswerLayer } from "../answer-generation/index.ts"
+import { fakeAnswerLayer, subscriptionAnswerLayer } from "../answer-generation/index.ts"
 import { FakeSummarySettings, configurableFakeSummaryLayer } from "../summary-generation/index.ts"
 import { fakeRecognitionLayer } from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
@@ -37,16 +38,23 @@ import {
   VoiceLanguageConfiguration,
   defaultVoiceLanguageConfiguration
 } from "../voice/index.ts"
+import { subscriptionLayer, subscriptionInferenceLayer } from "../subscription/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
 const configuredConversationLayer = (
   settings: ReplySettings = defaultReplySettings,
   memorySettings: MemorySettings = defaultMemorySettings,
-  summarySettings?: FakeSummarySettings
+  summarySettings?: FakeSummarySettings,
+  subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
 ) =>
   Conversation.configuredLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
-        fakeAnswerLayer(settings.deltaMillis),
+        settings.answerProvider === "subscription"
+          ? subscriptionAnswerLayer().pipe(
+              Layer.provide(subscriptionInferenceLayer()),
+              Layer.provide(subscriptionLayer(subscriptionDirectory))
+            )
+          : fakeAnswerLayer(settings.deltaMillis),
         Layer.succeed(ReplyConfiguration, settings),
         configuredUniiLayer(memorySettings).pipe(Layer.provide(configurableFakeSummaryLayer(summarySettings)))
       )
@@ -56,8 +64,12 @@ export const conversationLayer = (
   path: string,
   settings: ReplySettings = defaultReplySettings,
   memorySettings: MemorySettings = defaultMemorySettings,
-  summarySettings?: FakeSummarySettings
-) => configuredConversationLayer(settings, memorySettings, summarySettings).pipe(Layer.provide(sqliteLayer(path)))
+  summarySettings?: FakeSummarySettings,
+  subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
+) =>
+  configuredConversationLayer(settings, memorySettings, summarySettings, subscriptionDirectory).pipe(
+    Layer.provide(sqliteLayer(path))
+  )
 const maximumPort = 65_535
 const maximumOwnerIdentityLength = 254
 // Four seconds of fixture audio makes interruption observable without inference.
@@ -66,6 +78,7 @@ export const ServerConfig = Schema.Struct({
   host: Schema.String.check(Schema.isMinLength(1)),
   port: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(maximumPort)),
   database: Schema.String.check(Schema.isMinLength(1)),
+  subscriptionDirectory: Schema.optionalKey(Schema.NonEmptyString),
   memory: Schema.optionalKey(MemorySettings),
   fakeSummary: Schema.optionalKey(FakeSummarySettings),
   reply: Schema.optionalKey(ReplySettings),
@@ -80,7 +93,8 @@ export const ServerConfig = Schema.Struct({
 export type ServerConfig = typeof ServerConfig.Type
 const providerSelection = (environment: NodeJS.ProcessEnv) => ({
   answerProvider: environment.BALABOL_ANSWER_PROVIDER ?? "fake",
-  answerModel: environment.BALABOL_ANSWER_MODEL ?? "sol"
+  answerModel:
+    environment.BALABOL_ANSWER_MODEL ?? (environment.BALABOL_ANSWER_PROVIDER === "subscription" ? "gpt-6.1-sol" : "sol")
 })
 const replyTiming = (environment: NodeJS.ProcessEnv) => ({
   deltaMillis: Number(environment.BALABOL_FAKE_DELTA_MILLIS ?? "80"),
@@ -111,11 +125,16 @@ const languageSelection = (environment: NodeJS.ProcessEnv) => ({
     environment.BALABOL_VOICE_LANGUAGES?.split(",").map((tag) => tag.trim()) ??
     defaultVoiceLanguageConfiguration.allowedLanguages
 })
+const subscriptionSelection = (environment: NodeJS.ProcessEnv) => ({
+  subscriptionDirectory:
+    environment.BALABOL_SUBSCRIPTION_DIRECTORY ?? join(homedir(), ".local", "share", "balabol", "subscription")
+})
 export const parseConfig = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(ServerConfig)({
     host: environment.BALABOL_HOST ?? "127.0.0.1",
     port: Number(environment.BALABOL_PORT ?? "8787"),
     database: environment.BALABOL_DATABASE ?? ".data/conversation.sqlite",
+    ...subscriptionSelection(environment),
     memory: {
       summaryProvider: environment.BALABOL_SUMMARY_PROVIDER ?? "fake",
       summaryModel: environment.BALABOL_SUMMARY_MODEL ?? "luna",
@@ -132,7 +151,13 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     ...tailnetSelection(environment)
   })
 export const serverLayer = (config: ServerConfig) => {
-  const conversation = conversationLayer(config.database, config.reply, config.memory, config.fakeSummary)
+  const conversation = conversationLayer(
+    config.database,
+    config.reply,
+    config.memory,
+    config.fakeSummary,
+    config.subscriptionDirectory
+  )
   const http = NodeHttpServer.layer(createServer, { host: config.host, port: config.port })
   if (config.voice === undefined)
     return HttpRouter.serve(
@@ -141,9 +166,12 @@ export const serverLayer = (config: ServerConfig) => {
   const routes = Layer.mergeAll(conversationRoutes, welcomeRoutes, voiceRoutes)
   // One scoped writer lease protects both memory and speech-admission facts.
   const storage = sqliteStorageLayer(config.database)
-  const sharedConversation = configuredConversationLayer(config.reply, config.memory, config.fakeSummary).pipe(
-    Layer.provide(durableMemoryLayer)
-  )
+  const sharedConversation = configuredConversationLayer(
+    config.reply,
+    config.memory,
+    config.fakeSummary,
+    config.subscriptionDirectory
+  ).pipe(Layer.provide(durableMemoryLayer))
   const admissions = Layer.unwrap(
     Effect.gen(function* () {
       const resource = yield* SqliteMemoryStorage

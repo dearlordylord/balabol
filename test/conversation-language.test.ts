@@ -238,3 +238,80 @@ it("retries a failed answer with the durable original input annotations", async 
     await fixture.close()
   }
 })
+
+it("persists whole-input detection separately from spans and freezes the accepted reply language", async () => {
+  const fixture = await temporaryDatabase()
+  const input = { deliveryId: randomUUID(), text: "Привет", detectedLanguage: "ru", languageSpans: [] }
+  const requests: AnswerRequest[] = []
+  const provider = (languages: readonly string[]) =>
+    Layer.succeed(AnswerGeneration, {
+      capabilities: { languages, output: "text-deltas" },
+      generate: (request) => {
+        requests.push(request)
+        return Stream.fail(new AnswerFailed({ message: "fixture failure" }))
+      }
+    })
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          const receipt = yield* conversation.send(input)
+          expect(receipt.detectedLanguage).toBe("ru")
+          expect(receipt.languageSpans).toEqual([])
+          expect(receipt.responseLanguage).toBe("ru")
+          yield* waitForReply(conversation, input.deliveryId)
+          const conflict = yield* Effect.flip(conversation.send({ ...input, detectedLanguage: "fr" }))
+          expect(conflict._tag).toBe("DeliveryConflict")
+        })
+      ).pipe(Effect.provide(replyLayer(fixture.path, provider(["ru", "en"]))))
+    )
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          const restored = yield* conversation.currentTurn()
+          expect(restored?.input.detectedLanguage).toBe("ru")
+          expect(restored?.input.responseLanguage).toBe("ru")
+          expect(yield* conversation.send(input)).toEqual(restored?.input)
+          yield* conversation.retryReply(input.deliveryId)
+          const result = yield* waitForReply(conversation, input.deliveryId)
+          expect(result.responseLanguage).toBe("ru")
+          expect(result.state).toBe("Failed")
+          expect(requests).toHaveLength(1)
+        })
+      ).pipe(Effect.provide(replyLayer(fixture.path, provider(["en"]))))
+    )
+  } finally {
+    await fixture.close()
+  }
+})
+
+it("validates detection tags and keeps unknown or unsupported detection honest", async () => {
+  const fixture = await temporaryDatabase()
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          const invalid = yield* Effect.flip(
+            conversation.send({ deliveryId: randomUUID(), text: "hello", detectedLanguage: "bad_tag" })
+          )
+          expect(invalid._tag).toBe("InvalidInput")
+          for (const detectedLanguage of [null, "de", "RU"]) {
+            const receipt = yield* conversation.send({ deliveryId: randomUUID(), text: "hello", detectedLanguage })
+            const reply = yield* waitForReply(conversation, receipt.deliveryId)
+            expect(receipt.detectedLanguage).toBe(detectedLanguage === "RU" ? "ru" : detectedLanguage)
+            expect(receipt.languageSpans).toEqual([])
+            expect(reply.responseLanguage).toBe(detectedLanguage === "RU" ? "ru" : "en")
+          }
+          const input = { deliveryId: randomUUID(), text: "legacy" }
+          const accepted = yield* conversation.send(input)
+          expect(yield* conversation.send({ ...input, detectedLanguage: null })).toEqual(accepted)
+        })
+      ).pipe(Effect.provide(replyLayer(fixture.path, fakeAnswerLayer())))
+    )
+  } finally {
+    await fixture.close()
+  }
+})

@@ -26,18 +26,36 @@ it("upgrades the previous durable schema without losing user identities or posit
         Effect.gen(function* () {
           const conversation = yield* Conversation
           expect((yield* conversation.page({ limit: 100 })).messages).toEqual([
-            { deliveryId: id, recordId: 0, position: 0, text: "old message", role: "user", languageSpans: [] }
+            {
+              deliveryId: id,
+              recordId: 0,
+              position: 0,
+              text: "old message",
+              role: "user",
+              languageSpans: [],
+              detectedLanguage: null,
+              responseLanguage: null
+            }
           ])
           const restarted = yield* conversation.reply(id)
           expect(restarted.error?.code).toBe("Restarted")
           expect(restarted.responseId).not.toBe(id)
           expect((yield* conversation.reply(id)).responseId).toBe(restarted.responseId)
           expect((yield* conversation.send({ deliveryId: id, text: "old message" })).recordId).toBe(0)
+          // Legacy accepted inputs have no persisted preference; retry must recover the
+          // historical annotation/English fallback without inventing detected language.
+          yield* conversation.retryReply(id)
+          const recovered = yield* waitForReply(conversation, id)
+          expect(recovered.state).toBe("Completed")
+          expect(recovered.responseLanguage).toBe("en")
+          expect(recovered.receipt?.responseLanguage).toBe("en")
+          expect((yield* conversation.receipt(id))?.detectedLanguage).toBeNull()
+          expect((yield* conversation.receipt(id))?.responseLanguage).toBeNull()
           const next = "22222222-2222-4222-8222-222222222222"
-          expect((yield* conversation.send({ deliveryId: next, text: "new message" })).position).toBe(1)
+          expect((yield* conversation.send({ deliveryId: next, text: "new message" })).position).toBe(2)
           expect((yield* waitForReply(conversation, next)).state).toBe("Completed")
           expect((yield* conversation.page({ limit: 100 })).messages.map((message) => message.position)).toEqual([
-            0, 1, 2
+            0, 1, 2, 3
           ])
         })
       ).pipe(Effect.provide(conversationLayer(fixture.path)))

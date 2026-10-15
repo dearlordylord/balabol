@@ -22,7 +22,7 @@
       "name": "answer-generation",
       "root": "src/answer-generation",
       "entry": "index.ts",
-      "dependencies": ["language"]
+      "dependencies": ["language", "subscription"]
     },
     {
       "name": "summary-generation",

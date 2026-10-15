@@ -1,4 +1,5 @@
 import { fakeAnswerLayer, AnswerGeneration, AnswerCapabilities, AnswerFailed } from "../answer-generation/index.ts"
+import { selectResponseLanguage } from "./response-language.ts"
 import { Replies } from "./replies.ts"
 import { defaultReplySettings, ReplyConfiguration } from "./reply-configuration.ts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
@@ -40,6 +41,13 @@ const assertIdentity = (payload: Message | DeliveryPayload | undefined, message:
   payload !== undefined && (!samePayload(payload, { ...message, role: "user" }) || payload.role === "assistant")
     ? Effect.fail(new DeliveryConflict({ message: "Delivery identity already belongs to another payload" }))
     : Effect.void
+// Accepted response preference belongs to the durable input, not a later provider configuration.
+const acceptedResponseLanguage = (
+  payload: DeliveryPayload | undefined,
+  message: SendMessage,
+  languages: readonly string[]
+) =>
+  payload?.responseLanguage ?? selectResponseLanguage(message.languageSpans ?? [], message.detectedLanguage, languages)
 export class Conversation extends Context.Service<
   Conversation,
   {
@@ -89,7 +97,11 @@ export class Conversation extends Context.Service<
           yield* assertIdentity(payload, message)
           if (existing?.state === "Accepted") return existing.receipt
           yield* replies.admit()
-          const receipt = yield* memory.append({ ...message, role: "user" })
+          const receipt = yield* memory.append({
+            ...message,
+            role: "user",
+            responseLanguage: acceptedResponseLanguage(payload, message, answer.capabilities.languages)
+          })
           yield* replies.start(receipt)
           return receipt
         },

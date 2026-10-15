@@ -1,7 +1,17 @@
 import type { LanguageSpan, LanguageTag } from "../language/index.ts"
 
-// Annotation coverage selects the reply preference; text characters never infer language.
-export const selectResponseLanguage = (spans: readonly LanguageSpan[]): LanguageTag => {
+// Whole-input detection is a preference, never fabricated character attribution.
+// Legacy inputs select by annotation coverage; text characters never infer language.
+export const selectResponseLanguage = (
+  spans: readonly LanguageSpan[],
+  detectedLanguage?: LanguageTag | null,
+  supported: readonly string[] = []
+): LanguageTag => {
+  if (detectedLanguage != null && supported.includes(detectedLanguage)) return detectedLanguage
+  return selectAnnotatedLanguage(spans)
+}
+
+const selectAnnotatedLanguage = (spans: readonly LanguageSpan[]): LanguageTag => {
   const coverage = new Map<string, { length: number; last: number }>()
   for (const span of spans)
     coverage.set(span.language, {
