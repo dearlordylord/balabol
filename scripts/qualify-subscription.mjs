@@ -168,7 +168,9 @@ async function consume(body, controller, cancel, deadline, started = performance
           if (cancel && delta.length > 0) {
             const stopping = performance.now();
             controller.abort();
-            await reader.cancel();
+            await reader.cancel().catch((error) => {
+              if (!(error instanceof Error && error.name === "AbortError")) throw error;
+            });
             if (performance.now() > deadline) fail("cleanup-deadline");
             // The reader is detached before a fresh request; no further events are consumed.
             return {
@@ -230,14 +232,22 @@ async function consumeResponse(response, controller, cancel, deadline, started) 
   return consume(response.body, controller, cancel, deadline, started);
 }
 
-const requestLimits = { "--execute-approved": 7, "--diagnose-approved": 1, "--remaining-approved": 6 };
+const requestLimits = {
+  "--execute-approved": 5,
+  "--diagnose-approved": 1,
+  "--remaining-approved": 4,
+  "--after-summary-approved": 4,
+};
 async function experiment(models, token, signal, mode) {
   if (!models.includes(answerModel) || !models.includes(summaryModel)) fail("required-model-absent");
   const started = performance.now();
   const controllers = new Set();
   let requests = 0;
+  let solRequests = 0;
   const invoke = async (label, model, prompt, cancel = false) => {
-    if (++requests > requestLimits[mode] || performance.now() - started > 600000) fail("experiment-cap");
+    requests++;
+    if ((model === answerModel && ++solRequests > requestLimits[mode]) || performance.now() - started > 600000)
+      fail("experiment-cap");
     const controller = new AbortController();
     controllers.add(controller);
     const abort = () => controller.abort();
@@ -282,12 +292,14 @@ async function experiment(models, token, signal, mode) {
       signal.removeEventListener("abort", abort);
     }
   };
-  if (mode !== "--remaining-approved") await invoke("answer", answerModel, "Reply with one short greeting.");
+  if (!["--remaining-approved", "--after-summary-approved"].includes(mode))
+    await invoke("answer", answerModel, "Reply with one short greeting.");
   if (mode === "--diagnose-approved") {
     console.log(JSON.stringify({ outcome: "DIAGNOSTIC_COMPLETED", requests, qualification: "NOT_PROVEN" }));
     return;
   }
-  await invoke("summary", summaryModel, "Summarize in one sentence: Alex likes quiet mornings and tea.");
+  if (mode !== "--after-summary-approved")
+    await invoke("summary", summaryModel, "Summarize in one sentence: Alex likes quiet mornings and tea.");
   await invoke("interrupt", answerModel, "Write a detailed, lengthy description of a peaceful garden.", true);
   await invoke("fresh-answer", answerModel, "Reply with one short greeting.");
   await Promise.all([
@@ -312,7 +324,9 @@ async function experiment(models, token, signal, mode) {
   console.log(
     JSON.stringify({
       outcome: "PASS",
-      answerPreviouslyObserved: mode === "--remaining-approved",
+      answerPreviouslyObserved: ["--remaining-approved", "--after-summary-approved"].includes(mode),
+      summaryPreviouslyObserved: mode === "--after-summary-approved",
+      solRequests,
       requests,
       elapsedMs: Math.round(performance.now() - started),
       remoteComputeCessation: "NOT_PROVEN",
@@ -331,7 +345,12 @@ function fixture(text) {
   });
 }
 async function selfTest() {
-  assert.deepEqual(requestLimits, { "--execute-approved": 7, "--diagnose-approved": 1, "--remaining-approved": 6 });
+  assert.deepEqual(requestLimits, {
+    "--execute-approved": 5,
+    "--diagnose-approved": 1,
+    "--remaining-approved": 4,
+    "--after-summary-approved": 4,
+  });
   const delta = frame({ type: "response.output_text.delta", delta: "hello" });
   const complete = frame({ type: "response.completed", response: { status: "completed" } });
   const read = (text, cancel = false) =>
@@ -371,6 +390,25 @@ async function selfTest() {
     read(frame({ type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } })),
   );
   assert.equal(failureObservation.reason, "max_output_tokens");
+  const abortController = new AbortController();
+  const abortBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(delta));
+      abortController.signal.addEventListener(
+        "abort",
+        () => controller.error(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    },
+  });
+  assert.equal((await consume(abortBody, abortController, true, performance.now() + 1000)).terminal, "locally-aborted");
+  assert.equal(abortBody.locked, false);
+  const brokenBody = new ReadableStream({
+    start(controller) {
+      controller.error(new Error("transport failure"));
+    },
+  });
+  await assert.rejects(consume(brokenBody, new AbortController(), true, performance.now() + 1000));
   assert.equal((await read(delta, true)).terminal, "locally-aborted");
   await assert.rejects(read(complete, true));
   const origin = performance.now() - 1234;
@@ -431,7 +469,7 @@ try {
     await Effect.runPromise(program);
   } else {
     fail(
-      "Use --self-test, or an approved --execute-approved/--diagnose-approved/--remaining-approved after subscription-only cost confirmation.",
+      "Use --self-test, or an approved --execute-approved/--diagnose-approved/--remaining-approved/--after-summary-approved after subscription-only cost confirmation.",
     );
   }
 } catch {
