@@ -76,11 +76,12 @@ it.live("cancellation kills and reaps a SIGTERM-ignoring OS worker before deleti
     const executable = yield* script(
       directory,
       `
-import { writeFileSync } from 'node:fs';
+import { renameSync, writeFileSync } from 'node:fs';
 process.on('SIGTERM', () => {});
 const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
 writeFileSync(arg('-m') + '.pid', String(process.pid));
-writeFileSync(arg('-m'), arg('-f'));
+writeFileSync(arg('-m') + '.pending', arg('-f'));
+renameSync(arg('-m') + '.pending', arg('-m'));
 setInterval(() => {}, 1000);`
     )
     const task = yield* Effect.forkChild(

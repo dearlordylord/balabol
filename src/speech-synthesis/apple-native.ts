@@ -30,6 +30,12 @@ const io = <A>(operation: () => Promise<A>) => Effect.tryPromise({ try: operatio
 // Resource port; serialized native JSON and PCM are parsed in the provider.
 export interface AppleNative {
   readonly voices: (settings: AppleSynthesisSettings) => Effect.Effect<string, SpeechSynthesisFailed>
+  readonly plan: (
+    settings: AppleSynthesisSettings,
+    text: string,
+    voice: AppleVoice,
+    allowedVoices: readonly AppleVoice[]
+  ) => Effect.Effect<string, SpeechSynthesisFailed>
   readonly render: (
     settings: AppleSynthesisSettings,
     text: string,
@@ -49,6 +55,8 @@ const readPcm = (path: string) =>
   })
 export const appleNative: AppleNative = {
   voices: (settings) => runAppleProcess(settings.helperExecutable, ["--voices"]),
+  plan: (settings, text, voice, allowedVoices) =>
+    runAppleProcess(settings.helperExecutable, ["--plan"], JSON.stringify({ text, voiceId: voice.id, allowedVoices })),
   render: (settings, text, voice) =>
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(

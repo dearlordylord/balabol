@@ -17,6 +17,7 @@ const result = spawnSync(
     "-warnings-as-errors",
     "-O",
     "src/speech-synthesis/apple-speech.swift",
+    "src/speech-synthesis/apple-render-plan.swift",
     "-o",
     temporary,
   ],

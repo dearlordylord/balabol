@@ -137,3 +137,42 @@ it.live("bounds child output and PCM files while preserving typed failures", () 
     ).toBe("Failure")
   }).pipe(Effect.scoped)
 )
+
+it.live("plans via the private helper using only supplied voices without rendering or creating audio files", () =>
+  Effect.gen(function* () {
+    const directory = yield* temporary
+    const marker = join(directory, "plan.json")
+    const helper = yield* script(
+      directory,
+      "planner",
+      `
+import {readFileSync,writeFileSync} from 'node:fs';
+const request=JSON.parse(readFileSync(0,'utf8'));
+writeFileSync(${JSON.stringify(marker)},JSON.stringify({args:process.argv.slice(2),request}));
+const selected=request.allowedVoices.find(voice=>voice.id===request.voiceId);
+process.stdout.write(JSON.stringify({runs:[{text:request.text,voiceId:selected.id,actualLocale:selected.actualLocale}]}));`
+    )
+    const settings = {
+      provider: "apple",
+      helperExecutable: helper,
+      ffmpegExecutable: "/must-not-render"
+    } satisfies Parameters<typeof appleNative.plan>[0]
+    const result = yield* appleNative.plan(settings, "Bonjour Привет", voice, [voice])
+    expect(JSON.parse(result)).toEqual({
+      runs: [{ text: "Bonjour Привет", voiceId: voice.id, actualLocale: voice.actualLocale }]
+    })
+    const raw: unknown = JSON.parse(yield* Effect.promise(() => readFile(marker, "utf8")))
+    expect(
+      yield* Schema.decodeUnknownEffect(
+        Schema.Struct({
+          args: Schema.Array(Schema.String),
+          request: Schema.Struct({
+            text: Schema.String,
+            voiceId: Schema.String,
+            allowedVoices: Schema.Array(Schema.Struct({ id: Schema.String, actualLocale: Schema.String }))
+          })
+        })
+      )(raw)
+    ).toEqual({ args: ["--plan"], request: { text: "Bonjour Привет", voiceId: voice.id, allowedVoices: [voice] } })
+  }).pipe(Effect.scoped)
+)

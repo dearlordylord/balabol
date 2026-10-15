@@ -115,7 +115,19 @@ struct Main {
             emit(AVSpeechSynthesisVoice.speechVoices().map { Voice(id: $0.identifier, actualLocale: $0.language) })
             return
         }
-        let data = FileHandle.standardInput.readData(ofLength: 16385)
+        let planning = CommandLine.arguments == [CommandLine.arguments[0], "--plan"]
+        let data = FileHandle.standardInput.readData(ofLength: planning ? 32769 : 16385)
+        if planning {
+            guard data.count <= 32768,
+                  let request = try? JSONDecoder().decode(RenderPlanRequest.self, from: data) else { fail() }
+            do {
+                let planner = try AppleRenderPlanner(request: request, installedLocale: {
+                    AVSpeechSynthesisVoice(identifier: $0)?.language
+                })
+                emit(try planner.plan(request.text))
+            } catch { fail() }
+            return
+        }
         guard data.count <= 16384,
               let request = try? JSONDecoder().decode(Request.self, from: data),
               !request.text.isEmpty, request.text.utf16.count <= 800,

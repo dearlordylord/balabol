@@ -1,9 +1,11 @@
 import { Effect, Layer, Schema, Semaphore, Stream } from "effect"
-import { LanguageTags } from "../language/index.ts"
+import { LanguageTags, isScalarBoundary } from "../language/index.ts"
 import { SpeechSynthesis, SpeechSynthesisFailed, SynthesisEvent, SynthesisRequest } from "./provider.ts"
 import { AppleReceipt, AppleSynthesisSettings, AppleVoice, appleNative } from "./apple-native.ts"
 import type { AppleNative } from "./apple-native.ts"
 const maximumVoices = 1000
+const maximumPhraseChars = 800
+const maximumPlanBytes = 1048576
 const sampleRateHz = 24000
 const resamplingToleranceFrames = 2
 const preparationMillis = 10000
@@ -19,6 +21,38 @@ const parseVoices = (text: string) =>
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(AppleVoice).check(Schema.isMaxLength(maximumVoices)))),
     Effect.mapError(() => failed("Invalid installed Apple voices"))
   )
+const Plan = Schema.Struct({
+  runs: Schema.Array(
+    Schema.Struct({
+      text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumPhraseChars)),
+      voiceId: AppleVoice.fields.id,
+      actualLocale: AppleVoice.fields.actualLocale
+    })
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(maximumPhraseChars))
+})
+const parsePlan = (serialized: string, text: string, voices: readonly AppleVoice[]) =>
+  Effect.gen(function* () {
+    if (Buffer.byteLength(serialized) > maximumPlanBytes)
+      return yield* failed("Apple synthesis plan exceeded its limit")
+    const plan = yield* json(serialized).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Plan)),
+      Effect.mapError(() => failed("Invalid Apple synthesis plan"))
+    )
+    if (plan.runs.map((run) => run.text).join("") !== text)
+      return yield* failed("Apple synthesis plan changed phrase text")
+    if (
+      !plan.runs.every((run) =>
+        voices.some((voice) => voice.id === run.voiceId && voice.actualLocale === run.actualLocale)
+      )
+    )
+      return yield* failed("Apple synthesis plan selected an unconfigured voice")
+    let offset = 0
+    for (const run of plan.runs) {
+      offset += run.text.length
+      if (!isScalarBoundary(text, offset)) return yield* failed("Apple synthesis plan split a Unicode scalar")
+    }
+    return plan.runs
+  })
 const preferredLocales: Readonly<Record<string, string>> = { en: "en-US", ru: "ru-RU", fr: "fr-FR", ja: "ja-JP" }
 const chooseVoice = (voices: readonly AppleVoice[], language: string) =>
   voices
@@ -28,9 +62,9 @@ const chooseVoice = (voices: readonly AppleVoice[], language: string) =>
         Number(b.actualLocale === preferredLocales[language]) - Number(a.actualLocale === preferredLocales[language]) ||
         a.id.localeCompare(b.id)
     )[0]
-const render = (native: AppleNative, config: AppleSynthesisSettings, request: SynthesisRequest, voice: AppleVoice) =>
+const render = (native: AppleNative, config: AppleSynthesisSettings, text: string, voice: AppleVoice) =>
   Effect.gen(function* () {
-    const result = yield* native.render(config, request.text, voice)
+    const result = yield* native.render(config, text, voice)
     const receipt = yield* json(result.receipt).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(AppleReceipt)),
       Effect.mapError(() => failed("Invalid Apple synthesis completion"))
@@ -44,6 +78,33 @@ const render = (native: AppleNative, config: AppleSynthesisSettings, request: Sy
     if (Math.abs(frames - expectedFrames) > resamplingToleranceFrames)
       return yield* failed("Incomplete Apple synthesis conversion")
     return result.pcm
+  })
+const renderPhrase = (
+  native: AppleNative,
+  config: AppleSynthesisSettings,
+  request: SynthesisRequest,
+  voice: AppleVoice,
+  allowed: readonly AppleVoice[]
+) =>
+  Effect.gen(function* () {
+    const runs = yield* native
+      .plan(config, request.text, voice, allowed)
+      .pipe(Effect.flatMap((serialized) => parsePlan(serialized, request.text, allowed)))
+    const parts: Uint8Array[] = []
+    let total = 0
+    for (const run of runs) {
+      const pcm = yield* render(native, config, run.text, { id: run.voiceId, actualLocale: run.actualLocale })
+      total += pcm.byteLength
+      if (total > maximumFrames * bytesPerFrame) return yield* failed("Apple synthesis phrase audio exceeded its limit")
+      parts.push(pcm)
+    }
+    const combined = new Uint8Array(total)
+    let offset = 0
+    for (const part of parts) {
+      combined.set(part, offset)
+      offset += part.byteLength
+    }
+    return combined
   })
 const events = (pcm: Uint8Array, request: SynthesisRequest) => {
   const frames = pcm.byteLength / bytesPerFrame
@@ -91,8 +152,12 @@ export const appleSynthesisLayer = (
         Effect.timeout(preparationMillis),
         Effect.mapError(() => failed("Apple speech helper unavailable; build:speech and installed voices are required"))
       )
-      for (const language of supported)
-        if (!chooseVoice(voices, language)) return yield* failed(`Missing installed Apple voice for ${language}`)
+      const chosen: AppleVoice[] = []
+      for (const language of supported) {
+        const installed = chooseVoice(voices, language)
+        if (!installed) return yield* failed(`Missing installed Apple voice for ${language}`)
+        chosen.push(installed)
+      }
       const serial = yield* Semaphore.make(1)
       return SpeechSynthesis.of({
         capabilities: {
@@ -102,7 +167,7 @@ export const appleSynthesisLayer = (
           encoding: "pcm-s16le",
           sampleRateHz,
           channels: 1,
-          maxPhraseChars: 800,
+          maxPhraseChars: maximumPhraseChars,
           maxAudioFrames: maximumFrames
         },
         synthesize: (raw) =>
@@ -114,7 +179,7 @@ export const appleSynthesisLayer = (
               const voice = chooseVoice(voices, request.language)
               if (!supported.includes(request.language) || !voice)
                 return yield* failed("Unsupported Apple synthesis language")
-              const pcm = yield* render(native, config, request, voice).pipe(
+              const pcm = yield* renderPhrase(native, config, request, voice, chosen).pipe(
                 Effect.scoped,
                 serial.withPermits(1),
                 Effect.timeout(deadlineMillis),
