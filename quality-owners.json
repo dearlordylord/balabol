@@ -28,7 +28,7 @@
       "name": "summary-generation",
       "root": "src/summary-generation",
       "entry": "index.ts",
-      "dependencies": []
+      "dependencies": ["subscription"]
     },
     {
       "name": "speech-recognition",

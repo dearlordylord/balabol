@@ -1,6 +1,7 @@
 import { Memory as UniiMemory } from "@firfi/unii"
 import type { Backend, Storage } from "@firfi/unii"
 import { Schema } from "effect"
+import { SummaryFailed } from "../summary-generation/index.ts"
 import type { DurableMemory } from "./adapter.ts"
 import { DeliveryPayload, PriorSnapshot, Receipt, samePayload } from "./contracts.ts"
 
@@ -58,6 +59,7 @@ export class CoreHost {
       storage: sessionStorage(adapter.storage),
       now,
       backend,
+      shouldRetryBackendError,
       policy: { concurrency }
     })
     return new CoreHost(adapter, now, core, backend, concurrency)
@@ -72,6 +74,7 @@ export class CoreHost {
       storage: sessionStorage(this.#adapter.storage),
       now: this.#now,
       backend: this.#backend,
+      shouldRetryBackendError,
       policy: { concurrency: this.#concurrency }
     })
     this.#state = { kind: "Ready", core }
@@ -135,3 +138,5 @@ const rawInput = (message: DeliveryPayload) => ({
   kind: message.outcome === "interrupted" ? "assistant_interrupted" : (message.role ?? "user"),
   text: message.text
 })
+
+const shouldRetryBackendError = (error: unknown) => !(error instanceof SummaryFailed) || error.retryable !== false

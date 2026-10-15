@@ -48,8 +48,7 @@
                   Text(
                     model.state.isRetryingReply
                       ? "Retrying reply…"
-                      : model.state.replyHasSnapshot
-                        ? "Preparing conversation context…" : "Waiting for reply…"
+                      : "Preparing your reply…"
                   ).accessibilityIdentifier("reply-waiting")
                 }
                 if !model.state.replyLanguageSpans.isEmpty {

@@ -12,10 +12,26 @@ index 66857b8a05dc5318d95e402fe09861e1f3d056c1..54aa5c3ad8d1236d5aec7bf925927f2d
      step(): void;
      /** Wait for all currently schedulable tree work, or expose terminal failures. */
 diff --git a/dist/memory.js b/dist/memory.js
-index c5260305eef477d92851c91822d1385d961a346f..daf8d604078f891c0c609588c9a382af75e02522 100644
+index c5260305eef477d92851c91822d1385d961a346f..bd72cc815f23285fb08ce451cfcb1709a54adf11 100644
 --- a/dist/memory.js
 +++ b/dist/memory.js
-@@ -242,6 +242,22 @@ export class Memory {
+@@ -10,6 +10,7 @@ export class Memory {
+     #backend;
+     #policy;
+     #validate;
++    #shouldRetryBackendError;
+     #now;
+     #records = [];
+     #nodes = new Map();
+@@ -39,6 +40,7 @@ export class Memory {
+         this.#policy = { ...defaults, ...options.policy };
+         this.#validate = options.validate;
+         this.#now = options.now ?? Date.now;
++        this.#shouldRetryBackendError = options.shouldRetryBackendError ?? (() => true);
+         for (const [name, n] of Object.entries(this.#policy)) {
+             if (name === 'resultKind') {
+                 if (typeof n !== 'string' || !n)
+@@ -242,6 +244,22 @@ export class Memory {
      }
      date(id) { this.#check(); if (!Number.isSafeInteger(id) || id < 0 || !this.#records[id])
          throw new Error('Invalid record ID'); return this.#records[id].date; }
@@ -38,3 +54,46 @@ index c5260305eef477d92851c91822d1385d961a346f..daf8d604078f891c0c609588c9a382af
      /** Schedule work without waiting for provider I/O. No autonomous retry timers. */
      step() {
          this.#check();
+@@ -286,7 +304,7 @@ export class Memory {
+         for (let number = 1; number <= this.#policy.maxAttempts; number++) {
+             if (this.#closed || job.controller.signal.aborted)
+                 return;
+-            const request = { jobId: job.id, attemptId: `${job.id}:${number}`, attempt: number, node: { ...job.node }, source, context, priorResponses: [...priorResponses], feedback };
++            const request = { jobId: job.id, attemptId: `${job.id}:${number}`, attempt: number, node: { ...job.node }, source, context, priorResponses: [...priorResponses], feedback, sourceKinds: [...new Set(this.#records.slice(start(job.node), end(job.node)).map(record => record.kind))] };
+             const attempt = { id: request.attemptId, jobId: job.id, node: { ...job.node }, number, state: 'running', request: structuredClone(request), payload: null, payloadObserved: false, response: null, error: null, events: [], usage: {} };
+             this.#attempts.push(attempt);
+             this.#usage.started++;
+@@ -336,6 +354,10 @@ export class Memory {
+                 feedback = String(error);
+                 if (this.#fatal)
+                     throw error;
++                if (!this.#shouldRetryBackendError(error)) {
++                    this.#event('attempt-finished', { id: attempt.id });
++                    break;
++                }
+             }
+             this.#event('attempt-finished', { id: attempt.id });
+         }
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 7f7ee33ae8da527b7ba7ce6e6657c383e591fb47..583077ed32c463a75ea4ec42494ccaffa14b03bf 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -65,6 +65,8 @@ export interface CompressionRequest {
+     context: string;
+     priorResponses: string[];
+     feedback: string | null;
++    /** Distinct journal record kinds covered by this node, excluding prior context. */
++    sourceKinds?: readonly string[];
+ }
+ export type Backend = (request: CompressionRequest, signal: AbortSignal, emit: (event: Observation) => void) => Promise<string>;
+ export interface Policy {
+@@ -85,6 +87,9 @@ export interface MemoryOptions {
+     backend?: Backend;
+     policy?: Partial<Policy>;
+     validate?: (request: CompressionRequest, text: string) => string | null;
++    /** Return false to stop this job after a backend failure; completed oversized summaries still refine.
++     * Defaults to true. A thrown classifier error fails the job without committing a candidate. */
++    shouldRetryBackendError?: (error: unknown) => boolean;
+     now?: () => number;
+ }
+ export interface Snapshot {

@@ -26,7 +26,11 @@ import {
 } from "../memory/index.ts"
 
 import { fakeAnswerLayer, subscriptionAnswerLayer } from "../answer-generation/index.ts"
-import { FakeSummarySettings, configurableFakeSummaryLayer } from "../summary-generation/index.ts"
+import {
+  FakeSummarySettings,
+  configurableFakeSummaryLayer,
+  subscriptionSummaryLayer
+} from "../summary-generation/index.ts"
 import { fakeRecognitionLayer } from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
 import {
@@ -45,21 +49,29 @@ const configuredConversationLayer = (
   memorySettings: MemorySettings = defaultMemorySettings,
   summarySettings?: FakeSummarySettings,
   subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
-) =>
-  Conversation.configuredLayer.pipe(
+) => {
+  const answer =
+    settings.answerProvider === "subscription" ? subscriptionAnswerLayer() : fakeAnswerLayer(settings.deltaMillis)
+  const summary =
+    memorySettings.summaryProvider === "subscription"
+      ? subscriptionSummaryLayer
+      : configurableFakeSummaryLayer(summarySettings)
+  const providers = Layer.merge(answer, summary)
+  const selected =
+    settings.answerProvider === "subscription" || memorySettings.summaryProvider === "subscription"
+      ? providers.pipe(
+          Layer.provide(subscriptionInferenceLayer()),
+          Layer.provide(subscriptionLayer(subscriptionDirectory))
+        )
+      : Layer.merge(fakeAnswerLayer(settings.deltaMillis), configurableFakeSummaryLayer(summarySettings))
+  return Conversation.configuredLayer.pipe(
     Layer.provide(
-      Layer.mergeAll(
-        settings.answerProvider === "subscription"
-          ? subscriptionAnswerLayer().pipe(
-              Layer.provide(subscriptionInferenceLayer()),
-              Layer.provide(subscriptionLayer(subscriptionDirectory))
-            )
-          : fakeAnswerLayer(settings.deltaMillis),
-        Layer.succeed(ReplyConfiguration, settings),
-        configuredUniiLayer(memorySettings).pipe(Layer.provide(configurableFakeSummaryLayer(summarySettings)))
+      Layer.mergeAll(Layer.succeed(ReplyConfiguration, settings), configuredUniiLayer(memorySettings)).pipe(
+        Layer.provideMerge(selected)
       )
     )
   )
+}
 export const conversationLayer = (
   path: string,
   settings: ReplySettings = defaultReplySettings,
@@ -98,8 +110,14 @@ const providerSelection = (environment: NodeJS.ProcessEnv) => ({
 })
 const replyTiming = (environment: NodeJS.ProcessEnv) => ({
   deltaMillis: Number(environment.BALABOL_FAKE_DELTA_MILLIS ?? "80"),
-  contextWaitAttempts: Number(environment.BALABOL_PRIOR_CONTEXT_WAIT_ATTEMPTS ?? "100"),
-  contextWaitMillis: Number(environment.BALABOL_PRIOR_CONTEXT_WAIT_MILLIS ?? "20"),
+  contextWaitAttempts: Number(
+    environment.BALABOL_PRIOR_CONTEXT_WAIT_ATTEMPTS ??
+      (environment.BALABOL_SUMMARY_PROVIDER === "subscription" ? "600" : "100")
+  ),
+  contextWaitMillis: Number(
+    environment.BALABOL_PRIOR_CONTEXT_WAIT_MILLIS ??
+      (environment.BALABOL_SUMMARY_PROVIDER === "subscription" ? "100" : "20")
+  ),
   attachmentMillis: Number(environment.BALABOL_REPLY_ATTACHMENT_MILLIS ?? "5000")
 })
 const voiceSelection = (environment: NodeJS.ProcessEnv) =>
@@ -125,6 +143,13 @@ const languageSelection = (environment: NodeJS.ProcessEnv) => ({
     environment.BALABOL_VOICE_LANGUAGES?.split(",").map((tag) => tag.trim()) ??
     defaultVoiceLanguageConfiguration.allowedLanguages
 })
+const summarySelection = (environment: NodeJS.ProcessEnv) => ({
+  summaryProvider: environment.BALABOL_SUMMARY_PROVIDER ?? "fake",
+  summaryModel:
+    environment.BALABOL_SUMMARY_MODEL ??
+    (environment.BALABOL_SUMMARY_PROVIDER === "subscription" ? "gpt-6-luna" : "luna"),
+  summaryConcurrency: Number(environment.BALABOL_SUMMARY_CONCURRENCY ?? "1")
+})
 const subscriptionSelection = (environment: NodeJS.ProcessEnv) => ({
   subscriptionDirectory:
     environment.BALABOL_SUBSCRIPTION_DIRECTORY ?? join(homedir(), ".local", "share", "balabol", "subscription")
@@ -135,11 +160,7 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     port: Number(environment.BALABOL_PORT ?? "8787"),
     database: environment.BALABOL_DATABASE ?? ".data/conversation.sqlite",
     ...subscriptionSelection(environment),
-    memory: {
-      summaryProvider: environment.BALABOL_SUMMARY_PROVIDER ?? "fake",
-      summaryModel: environment.BALABOL_SUMMARY_MODEL ?? "luna",
-      summaryConcurrency: Number(environment.BALABOL_SUMMARY_CONCURRENCY ?? "1")
-    },
+    memory: summarySelection(environment),
     fakeSummary: {
       failFirstJob: environment.BALABOL_FAKE_SUMMARY_FAIL_FIRST_JOB === "true",
       delayMillis: Number(environment.BALABOL_FAKE_SUMMARY_DELAY_MILLIS ?? "0"),

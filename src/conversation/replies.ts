@@ -1,3 +1,4 @@
+import { waitForPriorMemory } from "./prior-context.ts"
 import { randomUUID } from "node:crypto"
 import { Effect, Fiber, Schema, Stream, Clock } from "effect"
 import type { Scope } from "effect"
@@ -235,22 +236,12 @@ export class Replies {
       )
     })
   }
-  #snapshot(input: Receipt) {
-    return Effect.gen({ self: this }, function* () {
-      let snapshot = yield* this.memory.snapshot(input.recordId)
-      for (let attempts = 0; snapshot.state === "pending" && attempts < this.settings.contextWaitAttempts; attempts++) {
-        yield* Effect.sleep(this.settings.contextWaitMillis)
-        snapshot = yield* this.memory.snapshot(input.recordId)
-      }
-      return snapshot
-    })
-  }
   #canCommit(responseId: string): boolean {
     return this.#phase === "Generating" && this.#state?.responseId === responseId
   }
   #generate(input: Receipt, base: { responseId: string; inputDeliveryId: string; responseLanguage: string }) {
     return Effect.gen({ self: this }, function* () {
-      const snapshot = yield* this.#snapshot(input)
+      const snapshot = yield* waitForPriorMemory(this.memory, input.recordId, this.settings)
       if (snapshot.state !== "ready") {
         this.#update({
           ...base,

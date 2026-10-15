@@ -6,7 +6,7 @@
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
 
-An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech and summary providers remain deterministic fakes. Answers default to a fake, with an explicit opt-in for the qualified ChatGPT subscription model.
+An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers remain deterministic fakes. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
 
 - [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
 - [Synchronized local specification](docs/product/prototype-spec.md)
@@ -62,9 +62,23 @@ pnpm build
 BALABOL_ANSWER_PROVIDER=subscription pnpm start
 ```
 
-The same environment setting applies to `pnpm dev:voice`. Subscription mode defaults to the qualified exact `gpt-6.1-sol`; `BALABOL_ANSWER_MODEL`, if provided, must match it. Unset `BALABOL_ANSWER_PROVIDER` (or set `fake`) to keep deterministic fake replies without acquiring subscription credentials. Summary and speech providers remain fake in this step.
+The same environment setting applies to `pnpm dev:voice`. Subscription mode defaults to the qualified exact `gpt-6.1-sol`; `BALABOL_ANSWER_MODEL`, if provided, must match it. Unset `BALABOL_ANSWER_PROVIDER` (or set `fake`) to keep deterministic fake replies without acquiring subscription credentials. Summaries remain fake unless enabled independently below; speech providers remain fake.
 
 Real requests contain only the explicit prior unii memory, current input and requested response language, with no tools or inherited agent context. Text deltas carry no guessed language spans. Each request has a 60-second total deadline, 100,000 UTF-16 output limit, 64 KiB SSE-frame limit and 2 MiB body limit. Only a valid completed terminal succeeds; incomplete, failed, authentication and quota outcomes remain recoverable errors. Interruption cancels the request and releases its reader without disconnecting the subscription or canceling independent memory work. There is no automatic retry or model/API-key fallback. Keep paid credit fallback disabled in the connected account.
+
+## Enable real memory summaries
+
+Use `BALABOL_SUMMARY_PROVIDER=subscription` to select the qualified exact `gpt-6-luna` independently of the answer provider. `BALABOL_SUMMARY_MODEL`, if supplied, must match. For both real providers:
+
+```sh
+BALABOL_ANSWER_PROVIDER=subscription BALABOL_SUMMARY_PROVIDER=subscription pnpm start
+```
+
+Bootstrap shares one credential writer and inference service between both providers. unii remains the only memory authority; it receives complete summaries through Balabol's Effect adapter. Streamed partials, failures and interrupted output never become summaries. Trusted journal record kinds retain interrupted-assistant attribution through recursive compression; quoted role markers in user text cannot create that provenance.
+
+Accepted input does not wait for summaries. A reply waits for prior memory, with a 60-second default polling budget in real-summary mode (fake mode retains two seconds). Readiness or failure ends the wait early. Timeout, failure or reply cancellation retains accepted input; late summary readiness does not restart a failed reply. Use the existing explicit **Retry** action, which reuses accepted input. Stopping a reply does not cancel independent summary work.
+
+The summary adapter makes one inference request per invocation and has no retry or fallback. unii retains its existing maximum of five attempts to refine a completed oversized or rejected summary to its 512-byte node budget. Real provider failures, including authentication and quota, stop that job after the first failing call; explicit retry can retry failed memory jobs. Fake-provider retry behavior remains unchanged. Host shutdown cancels outstanding work; restart rebuilds from durable memory rather than committing a late completion.
 
 ## Repository tooling
 

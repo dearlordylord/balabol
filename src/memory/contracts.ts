@@ -89,10 +89,12 @@ export type PriorSnapshot = typeof PriorSnapshot.Type
 const maximumSummaryConcurrency = 8
 const maximumModelNameLength = 200
 export const MemorySettings = Schema.Struct({
-  summaryProvider: Schema.Literal("fake"),
+  summaryProvider: Schema.Literals(["fake", "subscription"]),
   summaryModel: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumModelNameLength)),
   summaryConcurrency: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maximumSummaryConcurrency }))
-})
+}).check(
+  Schema.makeFilter((settings) => settings.summaryProvider !== "subscription" || settings.summaryModel === "gpt-6-luna")
+)
 export type MemorySettings = typeof MemorySettings.Type
 export const defaultMemorySettings: MemorySettings = {
   summaryProvider: "fake",

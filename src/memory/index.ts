@@ -42,10 +42,14 @@ export const configuredUniiLayer = (settings: MemorySettings = defaultMemorySett
       const backend = (request: CompressionRequest, signal: AbortSignal) =>
         Effect.runPromiseWith(context)(
           Schema.decodeUnknownEffect(SummaryRequest)({ ...request, model: settings.summaryModel }).pipe(
-            Effect.flatMap(summary.summarize)
+            Effect.flatMap(summary.summarize),
+            Effect.result
           ),
           { signal }
-        )
+        ).then((result) => {
+          if (result._tag === "Failure") throw result.failure
+          return result.success
+        })
       const clock = yield* Clock.Clock
       const adapter = yield* DurableMemory
       const semaphore = yield* Semaphore.make(1)
