@@ -1,7 +1,7 @@
 import { Context, Schema, SchemaGetter } from "effect"
 import type { SynthesisAudio } from "../speech-synthesis/index.ts"
 import type { Effect } from "effect"
-import { LanguageSpans, validLanguageSpans } from "../language/index.ts"
+import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 import { Message } from "../conversation/index.ts"
 const maximumTrackSid = 128
 const outputSampleRate = 24000
@@ -85,7 +85,8 @@ export const VoiceEvent = Schema.Union([
     backendIncarnationId: Id,
     deliveryId: Id,
     text: Schema.String,
-    languageSpans: LanguageSpans
+    languageSpans: LanguageSpans,
+    detectedLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag))
   }).check(
     Schema.makeFilter(
       (event) => event.deliveryId === event.utteranceId && validLanguageSpans(event.text, event.languageSpans)
@@ -106,9 +107,29 @@ export const VoiceEvent = Schema.Union([
   Schema.Struct({ ...base, kind: Schema.Literal("Ended") })
 ])
 export type VoiceEvent = typeof VoiceEvent.Type
+export const sameDetectedLanguage = (left: string | null | undefined, right: string | null | undefined) =>
+  (left ?? null) === (right ?? null)
+const matchingPendingReceipt = (input: {
+  receipt: typeof Message.Type | null
+  deliveryId: string
+  text: string
+  detectedLanguage?: string | null
+  languageSpans: typeof LanguageSpans.Type
+}) => {
+  const receipt = input.receipt
+  return (
+    receipt === null ||
+    (receipt.deliveryId === input.deliveryId &&
+      receipt.text === input.text &&
+      sameDetectedLanguage(receipt.detectedLanguage, input.detectedLanguage) &&
+      JSON.stringify(receipt.languageSpans) === JSON.stringify(input.languageSpans) &&
+      receipt.role === "user")
+  )
+}
 export const PendingVoiceInput = Schema.Struct({
   backendIncarnationId: Id,
   languageSpans: LanguageSpans,
+  detectedLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag)),
   utteranceId: Id,
   deliveryId: Id,
   text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumText)),
@@ -119,11 +140,7 @@ export const PendingVoiceInput = Schema.Struct({
     (input) =>
       input.utteranceId === input.deliveryId &&
       validLanguageSpans(input.text, input.languageSpans) &&
-      (input.receipt === null ||
-        (input.receipt.deliveryId === input.deliveryId &&
-          input.receipt.text === input.text &&
-          JSON.stringify(input.receipt.languageSpans) === JSON.stringify(input.languageSpans) &&
-          input.receipt.role === "user"))
+      matchingPendingReceipt(input)
   )
 )
 export type PendingVoiceInput = typeof PendingVoiceInput.Type

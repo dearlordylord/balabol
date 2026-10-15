@@ -100,7 +100,8 @@ extension VoiceState {
       guard response.isValid(for: requested) else { return [] }
       admissionFailure = nil
       var commands: [VoiceCommand] = []
-      for value in response.admissions where associations[value.deliveryId] == value.association {
+      for value in response.admissions
+      where associations[value.deliveryId]?.identity == value.association.identity {
         switch value.status {
         case .accepted:
           if let receipt = value.receipt {
@@ -169,12 +170,19 @@ extension VoiceState {
   )
     -> [VoiceCommand]
   {
-    if let accepted = recentAcceptedAdmissions.first(where: { $0.association == association }) {
+    if let accepted = recentAcceptedAdmissions.first(where: {
+      $0.association.identity == association.identity
+    }) {
       return accepted.receipt.text == text && accepted.receipt.languageSpans == languageSpans
+        && accepted.receipt.detectedLanguage == association.detectedLanguage
         ? [] : transportFailed(.invalidResponse)
     }
     if let known = associations[association.deliveryId] {
-      guard known == association else { return transportFailed(.invalidResponse) }
+      guard known == association,
+        stagedFinals[association.deliveryId] == nil || stagedFinals[association.deliveryId] == text,
+        admissionLanguageSpans[association.deliveryId] == nil
+          || admissionLanguageSpans[association.deliveryId] == languageSpans
+      else { return transportFailed(.invalidResponse) }
       return []
     }
     switch admissions[association.deliveryId] {
@@ -206,8 +214,15 @@ extension VoiceState {
     guard receipt.isValid, receipt.role == .user, receipt.deliveryId == association.deliveryId,
       expectedText == nil || expectedText?.isEmpty == true || expectedText == receipt.text
     else { return [] }
-    if let known = associations[association.deliveryId], known != association { return [] }
-    if let accepted = recentAcceptedAdmissions.first(where: { $0.association == association }) {
+    if let known = associations[association.deliveryId] {
+      guard known.identity == association.identity,
+        known.detectedLanguage == receipt.detectedLanguage
+      else { return [] }
+    }
+    let association = associations[association.deliveryId] ?? association
+    if let accepted = recentAcceptedAdmissions.first(where: {
+      $0.association.identity == association.identity
+    }) {
       return accepted.receipt == receipt ? [] : transportFailed(.invalidResponse)
     }
     if let spans = admissionLanguageSpans[association.deliveryId], spans != receipt.languageSpans {

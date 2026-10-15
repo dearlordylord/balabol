@@ -4,7 +4,7 @@ import { Effect, Fiber, Schema, Stream, Redacted } from "effect"
 import type { Message, Conversation } from "../conversation/index.ts"
 import type { SpeechRecognition } from "../speech-recognition/index.ts"
 import { RecognitionEvent } from "../speech-recognition/index.ts"
-import { VoiceFrame, VoiceEvent, VoiceFailed, failed } from "./contracts.ts"
+import { VoiceFrame, VoiceEvent, VoiceFailed, failed, sameDetectedLanguage } from "./contracts.ts"
 import type { VoiceSnapshot, MediaConnection, PendingVoiceInput } from "./contracts.ts"
 import type { LanguageSpan } from "../language/index.ts"
 import type { ReplyAudio } from "./output.ts"
@@ -21,6 +21,10 @@ type EventInput = VoiceEvent extends infer E
     ? Omit<E, "sequence" | "sessionId">
     : never
   : never
+const supportsRecognition = (event: RecognitionEvent, languages: readonly string[]) =>
+  event.kind !== "Final" ||
+  (event.spans.every((span) => languages.includes(span.language)) &&
+    (event.detectedLanguage == null || languages.includes(event.detectedLanguage)))
 export class Session {
   readonly id = randomUUID()
   readonly controlToken = Redacted.make(randomBytes(capabilityBytes).toString("hex"))
@@ -41,7 +45,10 @@ export class Session {
   audioFramesReceived = 0
   sampleFramesReceived = 0
   readonly finals = new Map<string, PendingVoiceInput>()
-  readonly unresolved = new Map<string, { text: string; languageSpans: readonly LanguageSpan[] }>()
+  readonly unresolved = new Map<
+    string,
+    { text: string; languageSpans: readonly LanguageSpan[]; detectedLanguage: string | null }
+  >()
   audio: ReplyAudio | undefined
   connection: MediaConnection | undefined
   release = Effect.void
@@ -77,23 +84,24 @@ export class Session {
         yield* this.connection?.publish(event).pipe(Effect.timeout(datagramPublishMillis), Effect.ignore) ?? Effect.void
     })
   }
-  admit(utteranceId: string, text: string, languageSpans: readonly LanguageSpan[]) {
+  admit(utteranceId: string, text: string, languageSpans: readonly LanguageSpan[], detectedLanguage: string | null) {
     return Effect.gen({ self: this }, function* () {
       const association = {
         backendIncarnationId: this.backendIncarnationId,
         sessionId: this.id,
         deliveryId: utteranceId
       }
-      yield* this.admissionStore.begin({ ...association, text, languageSpans })
+      yield* this.admissionStore.begin({ ...association, text, languageSpans, detectedLanguage })
       const deliveryId = utteranceId
       this.admissions += 1
-      this.unresolved.set(utteranceId, { text, languageSpans })
+      this.unresolved.set(utteranceId, { text, languageSpans, detectedLanguage })
       this.finals.set(utteranceId, {
         backendIncarnationId: this.backendIncarnationId,
         utteranceId,
         deliveryId,
         text,
         languageSpans,
+        detectedLanguage,
         receipt: null,
         error: null
       })
@@ -101,7 +109,7 @@ export class Session {
         const accepted = [...this.finals.values()].find((input) => input.receipt !== null)
         if (accepted !== undefined) this.finals.delete(accepted.utteranceId)
       }
-      const send = this.conversation.send({ deliveryId, text, languageSpans }).pipe(
+      const send = this.conversation.send({ deliveryId, text, languageSpans, detectedLanguage }).pipe(
         Effect.flatMap((receipt) => this.accept(utteranceId, receipt)),
         Effect.catch((error) => {
           if (this.finals.get(utteranceId)?.receipt != null) return Effect.void
@@ -111,6 +119,7 @@ export class Session {
             deliveryId,
             text,
             languageSpans,
+            detectedLanguage,
             receipt: null,
             error: { code: error._tag, message: error.message }
           })
@@ -135,7 +144,8 @@ export class Session {
         utteranceId,
         deliveryId,
         text,
-        languageSpans
+        languageSpans,
+        detectedLanguage
       }).pipe(Effect.andThen(send))
     }).pipe(Effect.uninterruptible)
   }
@@ -145,7 +155,8 @@ export class Session {
       receipt.role !== "user" ||
       receipt.deliveryId !== utteranceId ||
       receipt.text !== input?.text ||
-      JSON.stringify(receipt.languageSpans) !== JSON.stringify(input.languageSpans)
+      JSON.stringify(receipt.languageSpans) !== JSON.stringify(input.languageSpans) ||
+      !sameDetectedLanguage(receipt.detectedLanguage, input.detectedLanguage)
     )
       return Effect.void
     this.unresolved.delete(utteranceId)
@@ -155,6 +166,7 @@ export class Session {
       deliveryId: utteranceId,
       text: receipt.text,
       languageSpans: receipt.languageSpans,
+      detectedLanguage: receipt.detectedLanguage ?? null,
       receipt,
       error: null
     })
@@ -182,13 +194,13 @@ export class Session {
             Effect.mapError(() => failed("InvalidRecognition", "Invalid recognition event")),
             Effect.flatMap((event) => {
               if (this.generation !== generation || event.utteranceId !== utteranceId || final) return Effect.void
-              if (event.kind === "Final" && !event.spans.every((span) => this.allowedLanguages.includes(span.language)))
+              if (!supportsRecognition(event, this.allowedLanguages))
                 return Effect.fail(failed("InvalidRecognition", "Detected language is outside the configured set"))
               if (event.kind === "Interim") return this.emit({ kind: "Interim", utteranceId, text: event.text })
               final = true
               return event.text.trim().length === 0
                 ? this.emit({ kind: "Discarded", utteranceId, reason: "Empty" })
-                : this.admit(utteranceId, event.text, event.spans)
+                : this.admit(utteranceId, event.text, event.spans, event.detectedLanguage ?? null)
             })
           )
         ),

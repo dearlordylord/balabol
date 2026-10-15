@@ -6,7 +6,7 @@ import { VoiceTransport, SessionId, OutputReady, OutputInterrupt, failed } from 
 import type { VoiceJoin, VoiceSnapshot, VoiceFailed } from "./contracts.ts"
 import { StartVoiceRequest, ResolveSpeechAdmissions } from "./recovery-contracts.ts"
 import type { SpeechResolutions } from "./recovery-contracts.ts"
-import { VoiceAdmissions, speechPayloadHash, speechAnnotationsHash } from "./admissions.ts"
+import { VoiceAdmissions, speechPayloadHash, speechAnnotationsHash, speechDetectionHash } from "./admissions.ts"
 import { VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration, validateVoiceLanguages } from "./languages.ts"
 import type { VoiceLanguageCapabilities } from "./languages.ts"
 import { Session } from "./session.ts"
@@ -223,7 +223,8 @@ export class Voice extends Context.Service<
                           receipt !== null &&
                           receipt.role === "user" &&
                           speechPayloadHash(receipt.text) === checkpoint.payloadHash &&
-                          speechAnnotationsHash(receipt.languageSpans) === checkpoint.languageSpansHash
+                          speechAnnotationsHash(receipt.languageSpans) === checkpoint.languageSpansHash &&
+                          speechDetectionHash(receipt.detectedLanguage) === checkpoint.detectedLanguageHash
                             ? { ...association, status: "Accepted" as const, receipt }
                             : {
                                 ...association,

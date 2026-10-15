@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from "node:crypto"
 import { Context, Effect, Layer, Schema } from "effect"
 import type { DatabaseSync } from "node:sqlite"
-import { LanguageSpans, validLanguageSpans } from "../language/index.ts"
+import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 import type { LanguageSpan } from "../language/index.ts"
 import { SpeechAdmission } from "./recovery-contracts.ts"
 import { failed, VoiceFailed } from "./contracts.ts"
@@ -10,15 +10,19 @@ const maximumText = 100000
 const BeginAdmission = Schema.Struct({
   ...SpeechAdmission.fields,
   text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumText)),
-  languageSpans: Schema.optionalKey(LanguageSpans)
+  languageSpans: Schema.optionalKey(LanguageSpans),
+  detectedLanguage: Schema.optionalKey(Schema.NullOr(LanguageTag))
 })
 export const speechAnnotationsHash = (spans: readonly LanguageSpan[]) =>
   speechPayloadHash(JSON.stringify(Schema.decodeUnknownSync(LanguageSpans)(spans)))
+export const speechDetectionHash = (language: string | null | undefined) =>
+  speechPayloadHash(JSON.stringify(Schema.decodeUnknownSync(Schema.NullOr(LanguageTag))(language ?? null)))
 export const speechPayloadHash = (text: string) => createHash("sha256").update(text, "utf16le").digest("hex")
 const Checkpoint = Schema.Struct({
   ...SpeechAdmission.fields,
   payloadHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
   languageSpansHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+  detectedLanguageHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
   state: Schema.Literals(["Open", "Sealed"])
 })
 const Checkpoints = Schema.Array(Checkpoint).check(Schema.isMaxLength(maximumCheckpoints))
@@ -58,7 +62,7 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
         Schema.decodeUnknownSync(Checkpoints)(
           database
             .prepare(
-              "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,languageSpansHash,state FROM voice_admissions ORDER BY rowid LIMIT ?"
+              "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,languageSpansHash,detectedLanguageHash,state FROM voice_admissions ORDER BY rowid LIMIT ?"
             )
             .all(maximumCheckpoints + 1)
         )
@@ -72,6 +76,10 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
             database.exec(
               `ALTER TABLE voice_admissions ADD COLUMN languageSpansHash TEXT NOT NULL DEFAULT '${speechAnnotationsHash([])}'`
             )
+          if (!columns.some((row) => row.name === "detectedLanguageHash"))
+            database.exec(
+              `ALTER TABLE voice_admissions ADD COLUMN detectedLanguageHash TEXT NOT NULL DEFAULT '${speechDetectionHash(null)}'`
+            )
           rows()
           database
             .prepare("UPDATE voice_admissions SET state='Sealed' WHERE backendIncarnationId<>?")
@@ -82,7 +90,7 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
       const find = (admission: SpeechAdmission) => {
         const row = database
           .prepare(
-            "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,languageSpansHash,state FROM voice_admissions WHERE deliveryId=? AND backendIncarnationId=? AND sessionId=? LIMIT 1"
+            "SELECT backendIncarnationId,sessionId,deliveryId,payloadHash,languageSpansHash,detectedLanguageHash,state FROM voice_admissions WHERE deliveryId=? AND backendIncarnationId=? AND sessionId=? LIMIT 1"
           )
           .get(admission.deliveryId, admission.backendIncarnationId, admission.sessionId)
         return row === undefined ? null : Schema.decodeUnknownSync(Checkpoint)(row)
@@ -102,14 +110,15 @@ export const sqliteVoiceAdmissions = (database: DatabaseSync) =>
           }
           database
             .prepare(
-              "INSERT INTO voice_admissions(deliveryId,backendIncarnationId,sessionId,payloadHash,languageSpansHash,state) VALUES(?,?,?,?,?,'Open')"
+              "INSERT INTO voice_admissions(deliveryId,backendIncarnationId,sessionId,payloadHash,languageSpansHash,detectedLanguageHash,state) VALUES(?,?,?,?,?,?,'Open')"
             )
             .run(
               admission.deliveryId,
               admission.backendIncarnationId,
               admission.sessionId,
               speechPayloadHash(admission.text),
-              speechAnnotationsHash(admission.languageSpans ?? [])
+              speechAnnotationsHash(admission.languageSpans ?? []),
+              speechDetectionHash(admission.detectedLanguage)
             )
         })
       return VoiceAdmissions.of({

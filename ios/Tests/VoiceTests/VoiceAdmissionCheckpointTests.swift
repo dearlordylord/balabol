@@ -13,7 +13,7 @@ import XCTest
     let file = try FileVoiceAdmissionCheckpoint.fileURL(in: directory, controlOrigin: first)
     let records = [
       VoiceAdmissionAssociation(
-        backendIncarnationId: UUID(), sessionId: UUID(), deliveryId: UUID()),
+        backendIncarnationId: UUID(), sessionId: UUID(), deliveryId: UUID(), detectedLanguage: "ru"),
       VoiceAdmissionAssociation(
         backendIncarnationId: UUID(), sessionId: UUID(), deliveryId: UUID()),
     ]

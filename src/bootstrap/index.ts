@@ -31,7 +31,7 @@ import {
   configurableFakeSummaryLayer,
   subscriptionSummaryLayer
 } from "../summary-generation/index.ts"
-import { fakeRecognitionLayer } from "../speech-recognition/index.ts"
+import { fakeRecognitionLayer, whisperRecognitionLayer, WhisperSettings } from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../speech-synthesis/index.ts"
 import {
   LiveKitSettings,
@@ -96,6 +96,7 @@ export const ServerConfig = Schema.Struct({
   reply: Schema.optionalKey(ReplySettings),
   voice: Schema.optionalKey(LiveKitSettings),
   voiceLanguages: Schema.optionalKey(LanguageTags),
+  recognition: Schema.optionalKey(WhisperSettings),
   tailnetOwner: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumOwnerIdentityLength))
   )
@@ -168,6 +169,13 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     },
     reply: { ...providerSelection(environment), ...replyTiming(environment) },
     ...languageSelection(environment),
+    recognition: {
+      provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
+      executable: environment.BALABOL_WHISPER_EXECUTABLE ?? "/opt/homebrew/bin/whisper-cli",
+      modelPath:
+        environment.BALABOL_WHISPER_MODEL ??
+        join(homedir(), ".local", "share", "balabol", "models", "whisper", "ggml-small.bin")
+    },
     ...voiceSelection(environment),
     ...tailnetSelection(environment)
   })
@@ -205,7 +213,9 @@ export const serverLayer = (config: ServerConfig) => {
         allowedLanguages: config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages
       })
     ),
-    Layer.provide(fakeRecognitionLayer()),
+    Layer.provide(
+      config.recognition?.provider === "whisper" ? whisperRecognitionLayer(config.recognition) : fakeRecognitionLayer()
+    ),
     Layer.provide(fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })),
     Layer.provide(liveKitLayer(config.voice)),
     Layer.provide(admissions),

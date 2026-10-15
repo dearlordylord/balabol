@@ -194,7 +194,8 @@ extension VoiceState {
       where pending.isValid && pending.backendIncarnationId == page.backendIncarnationId {
         let association = VoiceAdmissionAssociation(
           backendIncarnationId: pending.backendIncarnationId,
-          sessionId: page.sessionId, deliveryId: pending.deliveryId)
+          sessionId: page.sessionId, deliveryId: pending.deliveryId,
+          detectedLanguage: pending.detectedLanguage)
         if let receipt = pending.receipt {
           commands += acceptedAdmission(association, receipt: receipt, expectedText: pending.text)
         } else {
@@ -320,7 +321,8 @@ extension VoiceState {
         return stageFinal(
           VoiceAdmissionAssociation(
             backendIncarnationId: incarnation,
-            sessionId: wire.sessionId, deliveryId: delivery), text: text,
+            sessionId: wire.sessionId, deliveryId: delivery, detectedLanguage: wire.detectedLanguage
+          ), text: text,
           languageSpans: wire.languageSpans ?? [])
       case "Discarded":
         if wire.utteranceId == tentativeUtterance {
@@ -394,7 +396,7 @@ extension VoiceState {
       where pending.isValid && pending.backendIncarnationId == page.backendIncarnationId {
         let association = VoiceAdmissionAssociation(
           backendIncarnationId: pending.backendIncarnationId, sessionId: page.sessionId,
-          deliveryId: pending.deliveryId)
+          deliveryId: pending.deliveryId, detectedLanguage: pending.detectedLanguage)
         if let receipt = pending.receipt {
           commands += acceptedAdmission(association, receipt: receipt, expectedText: pending.text)
         } else {

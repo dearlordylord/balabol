@@ -53,6 +53,75 @@ import XCTest
     XCTAssertNil(legacy.languageSpans)
   }
 
+  func testWholeResultDetectionValidatesWithoutInventingSpansAndRejectsContradictoryReceipt() throws
+  {
+    let incarnation = UUID()
+    let session = UUID()
+    let delivery = UUID()
+    var fields: [String: Any] = [
+      "sequence": 1, "sessionId": session.uuidString, "kind": "Final",
+      "backendIncarnationId": incarnation.uuidString,
+      "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString,
+      "text": "Привет", "languageSpans": [], "detectedLanguage": "ru",
+    ]
+    let final = try JSONDecoder().decode(
+      VoiceWireEvent.self,
+      from: JSONSerialization.data(withJSONObject: fields))
+    XCTAssertTrue(final.isValid)
+    XCTAssertEqual(final.detectedLanguage, "ru")
+    XCTAssertEqual(final.languageSpans, [])
+    fields["detectedLanguage"] = "bad_tag"
+    XCTAssertFalse(
+      try JSONDecoder().decode(
+        VoiceWireEvent.self,
+        from: JSONSerialization.data(withJSONObject: fields)
+      ).isValid)
+    fields["detectedLanguage"] = NSNull()
+    XCTAssertNil(
+      try JSONDecoder().decode(
+        VoiceWireEvent.self,
+        from: JSONSerialization.data(withJSONObject: fields)
+      ).detectedLanguage)
+    var state = VoiceState()
+    let association = VoiceAdmissionAssociation(
+      backendIncarnationId: incarnation,
+      sessionId: session, deliveryId: delivery, detectedLanguage: "ru")
+    _ = state.stageFinal(association, text: "Привет", languageSpans: [])
+    let wrong = ConversationMessage(
+      deliveryId: delivery, recordId: 0, position: 0,
+      text: "Привет", detectedLanguage: "fr", responseLanguage: "fr")
+    XCTAssertTrue(
+      state.acceptedAdmission(association, receipt: wrong, expectedText: "Привет").isEmpty)
+    XCTAssertEqual(state.pendingAssociations.first?.detectedLanguage, "ru")
+    let receipt = ConversationMessage(
+      deliveryId: delivery, recordId: 0, position: 0,
+      text: "Привет", detectedLanguage: "ru", responseLanguage: "ru")
+    XCTAssertFalse(
+      state.acceptedAdmission(association, receipt: receipt, expectedText: "Привет").isEmpty)
+    XCTAssertEqual(state.admissions[delivery], .saved(receipt))
+  }
+
+  func testAdmissionCheckpointMetadataReadsLegacyAndRejectsInvalidDetector() throws {
+    var fields: [String: Any] = [
+      "backendIncarnationId": UUID().uuidString,
+      "sessionId": UUID().uuidString, "deliveryId": UUID().uuidString,
+    ]
+    let legacy = try JSONDecoder().decode(
+      VoiceAdmissionAssociation.self,
+      from: JSONSerialization.data(withJSONObject: fields))
+    XCTAssertNil(legacy.detectedLanguage)
+    fields["detectedLanguage"] = NSNull()
+    XCTAssertEqual(
+      try JSONDecoder().decode(
+        VoiceAdmissionAssociation.self,
+        from: JSONSerialization.data(withJSONObject: fields)), legacy)
+    fields["detectedLanguage"] = "bad_tag"
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(
+        VoiceAdmissionAssociation.self,
+        from: JSONSerialization.data(withJSONObject: fields)))
+  }
+
   private func decode(allowed: [String], supported: [String]) throws -> VoiceLanguages {
     try JSONDecoder().decode(
       VoiceLanguages.self,

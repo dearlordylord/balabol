@@ -12,7 +12,9 @@ public actor VolatileVoiceAdmissionCheckpoint: VoiceAdmissionCheckpoint {
   public init() {}
   public func load() -> [VoiceAdmissionAssociation] { value }
   public func save(_ admissions: [VoiceAdmissionAssociation]) throws {
-    guard admissions.count <= 2, Set(admissions.map(\.deliveryId)).count == admissions.count else {
+    guard admissions.allSatisfy(\.isValid), admissions.count <= 2,
+      Set(admissions.map(\.deliveryId)).count == admissions.count
+    else {
       throw VoiceFailure.invalidResponse
     }
     value = admissions
@@ -44,14 +46,17 @@ public actor FileVoiceAdmissionCheckpoint: VoiceAdmissionCheckpoint {
       guard data.count <= 4096 else { throw VoiceFailure.invalidResponse }
       let value = try JSONDecoder().decode(Envelope.self, from: data)
       if value.controlOrigin != origin, value.admissions.isEmpty { return [] }
-      guard value.controlOrigin == origin, value.admissions.count <= 2,
+      guard value.controlOrigin == origin, value.admissions.allSatisfy(\.isValid),
+        value.admissions.count <= 2,
         Set(value.admissions.map(\.deliveryId)).count == value.admissions.count
       else { throw VoiceFailure.invalidResponse }
       return value.admissions
     } catch { throw VoiceFailure.checkpointUnavailable }
   }
   public func save(_ admissions: [VoiceAdmissionAssociation]) throws {
-    guard admissions.count <= 2, Set(admissions.map(\.deliveryId)).count == admissions.count else {
+    guard admissions.allSatisfy(\.isValid), admissions.count <= 2,
+      Set(admissions.map(\.deliveryId)).count == admissions.count
+    else {
       throw VoiceFailure.invalidResponse
     }
     do {

@@ -6,7 +6,7 @@
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
 
-An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers remain deterministic fakes. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
+An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; recognition can opt into pinned local whisper.cpp. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
 
 - [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
 - [Synchronized local specification](docs/product/prototype-spec.md)
@@ -39,11 +39,25 @@ The launcher builds the backend, starts the pinned self-hosted LiveKit container
 
 Simulator uses `http://127.0.0.1:8787`. The launcher prints the iPhone control URL at HTTPS port 8444 and supplies the separate WSS media URL at port 8443 through scoped session joins. On a new ordinary iPhone installation, select **Server** once and paste that control URL; device provisioning can supply it automatically for an explicit debug test launch. No LiveKit keys or media endpoint need entering in the app.
 
-Tap **Start voice**, allow microphone access, speak and pause, then check the accepted transcript. Recognition is explicitly scripted fake output, not an interpretation of the words spoken. Silent and empty results create no message. **Mute** stops new input; **End voice** releases the temporary room while accepted conversation input remains saved. Interim text is tentative; a final remains visibly pending until the durable receipt arrives.
+Tap **Start voice**, allow microphone access, speak and pause, then check the accepted transcript. Recognition defaults to explicitly scripted fake output. Enable local recognition below to interpret supplied microphone utterances. Silent and empty results create no message. **Mute** stops new input; **End voice** releases the temporary room while accepted conversation input remains saved. Interim text is tentative; a final remains visibly pending until the durable receipt arrives.
 
 `pnpm dev:voice --check` checks prerequisites without starting services or changing Serve configuration. Startup refuses occupied backend/media/Serve ports and missing HTTPS setup; it never stops another process or replaces existing Serve port 9999. Ctrl-C stops only this launch's backend, container and unchanged owned routes, and deletes its temporary credentials. The saved conversation is retained.
 
 LiveKit ICE advertises the Mac's Tailscale IPv4 address on UDP 7882 with TCP 7881 fallback. Those Docker media ports bind host interfaces so the tailnet can reach them; LiveKit requires scoped join tokens. HTTPS signaling alone does not qualify media reachability, locked-screen behavior or physical iPhone audio. Those require the corresponding device checks.
+
+## Enable local recognition
+
+The initial local recognition adapter uses whisper.cpp **1.9.5** and multilingual **small** weights. Setup never downloads or installs them. Provision them explicitly using the reviewed bounded runbook in [issue #27](https://github.com/dearlordylord/balabol/issues/27). The default executable is `/opt/homebrew/bin/whisper-cli`; the model is `~/.local/share/balabol/models/whisper/ggml-small.bin`. Startup requires exactly 487,601,967 bytes and SHA-256 `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`, from `ggerganov/whisper.cpp` at revision `5359861c739e955e79d9a303bcbc70fb988958b1`.
+
+```sh
+BALABOL_RECOGNITION_PROVIDER=whisper pnpm dev:voice
+```
+
+`BALABOL_WHISPER_EXECUTABLE` and `BALABOL_WHISPER_MODEL` override the local paths, retaining the exact version and weight checks. Unset the provider or use `fake` for deterministic fixtures. Missing or mismatched resources fail startup; there is no fake fallback. Recognition remains independent of the answer, summary and synthesis selections.
+
+Each completed mono PCM16LE 16 kHz utterance (at most 15 seconds) gets one serialized native process. The 30-second deadline includes queueing, model initialization and inference; cancellation terminates and reaps that process and removes private temporary audio. The next utterance starts a fresh process after failure; a failed utterance is never retried automatically. This has a per-utterance model-load cost and does not retain a warm resident model. Native diagnostics and transcripts are not logged.
+
+Automatic language detection preserves mixed transcript text and emits nullable whole-result `detectedLanguage` with empty exact spans. Empty text has no detected language and creates no message. Russian, French and English are the initial scope; Japanese is a future configured capability, not a quality claim. Advertised support is separate from measured language accuracy and latency; qualification evidence belongs in issue #27.
 
 ## Connect the ChatGPT subscription
 

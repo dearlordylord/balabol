@@ -33,6 +33,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
   public let utteranceId: UUID?
   public let deliveryId: UUID?
   public let text: String?
+  public let detectedLanguage: String?
   public let languageSpans: [LanguageSpan]?
   public let receipt: ConversationMessage?
   public let muted: Bool?
@@ -42,7 +43,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
   public let output: VoiceOutput?
   private enum CodingKeys: String, CodingKey {
     case sequence, sessionId, kind, backendIncarnationId, utteranceId, deliveryId, text,
-      languageSpans,
+      languageSpans, detectedLanguage,
       receipt, muted, reason, code, message, output
   }
   public init(from decoder: any Decoder) throws {
@@ -54,6 +55,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
     utteranceId = try c.decodeIfPresent(UUID.self, forKey: .utteranceId)
     deliveryId = try c.decodeIfPresent(UUID.self, forKey: .deliveryId)
     text = try c.decodeIfPresent(String.self, forKey: .text)
+    detectedLanguage = try c.decodeIfPresent(String.self, forKey: .detectedLanguage)
     languageSpans =
       c.contains(.languageSpans)
       ? try c.decode([LanguageSpan].self, forKey: .languageSpans) : nil
@@ -85,6 +87,7 @@ public struct VoiceWireEvent: Decodable, Sendable {
   private var validText: Bool {
     text?.isEmpty == false && (text?.utf16.count ?? 0) <= 100_000
       && LanguageSpan.areValid(languageSpans ?? [], for: text ?? "")
+      && (detectedLanguage.map(LanguageSpan.isValidLanguageTag) ?? true)
   }
 }
 
@@ -98,11 +101,13 @@ public struct VoicePending: Decodable, Sendable {
   public let deliveryId: UUID
   public let text: String
   public let languageSpans: [LanguageSpan]
+  public let detectedLanguage: String?
   public let receipt: ConversationMessage?
   public let error: Failure?
   internal init(
     utteranceId: UUID, backendIncarnationId: UUID, deliveryId: UUID, text: String,
-    receipt: ConversationMessage?, error: Failure?, languageSpans: [LanguageSpan] = []
+    receipt: ConversationMessage?, error: Failure?, languageSpans: [LanguageSpan] = [],
+    detectedLanguage: String? = nil
   ) {
     self.utteranceId = utteranceId
     self.backendIncarnationId = backendIncarnationId
@@ -111,9 +116,11 @@ public struct VoicePending: Decodable, Sendable {
     self.receipt = receipt
     self.error = error
     self.languageSpans = languageSpans
+    self.detectedLanguage = detectedLanguage
   }
   private enum CodingKeys: String, CodingKey {
-    case utteranceId, backendIncarnationId, deliveryId, text, receipt, error, languageSpans
+    case utteranceId, backendIncarnationId, deliveryId, text, receipt, error, languageSpans,
+      detectedLanguage
   }
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -123,6 +130,7 @@ public struct VoicePending: Decodable, Sendable {
     text = try c.decode(String.self, forKey: .text)
     receipt = try c.decodeIfPresent(ConversationMessage.self, forKey: .receipt)
     error = try c.decodeIfPresent(Failure.self, forKey: .error)
+    detectedLanguage = try c.decodeIfPresent(String.self, forKey: .detectedLanguage)
     languageSpans =
       c.contains(.languageSpans)
       ? try c.decode([LanguageSpan].self, forKey: .languageSpans) : []
@@ -130,11 +138,13 @@ public struct VoicePending: Decodable, Sendable {
   public var isValid: Bool {
     guard utteranceId == deliveryId, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       text.utf16.count <= 100_000, LanguageSpan.areValid(languageSpans, for: text),
+      detectedLanguage.map(LanguageSpan.isValidLanguageTag) ?? true,
       receipt == nil || error == nil
     else { return false }
     if let receipt {
       return receipt.isValid && receipt.role == .user && receipt.deliveryId == deliveryId
         && receipt.text == text && receipt.languageSpans == languageSpans
+        && receipt.detectedLanguage == detectedLanguage
     }
     if let error { return !error.code.isEmpty && !error.message.isEmpty }
     return true
