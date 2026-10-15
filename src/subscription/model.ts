@@ -58,3 +58,6 @@ export const DisconnectOutcome = Schema.Struct({
   revocation: Schema.Literals(["Confirmed", "Unconfirmed", "NotNeeded"])
 })
 export type DisconnectOutcome = typeof DisconnectOutcome.Type
+
+export const DisconnectMode = Schema.Literals(["RetainRegistration", "ChangeAccount"])
+export type DisconnectMode = typeof DisconnectMode.Type

@@ -1,6 +1,6 @@
 import { Clock, Effect, Redacted, Schema, Semaphore } from "effect"
 import type { SubscriptionPorts } from "./ports.ts"
-import type { ConnectionStatus, Credential, PersistentState, SubscriptionFailed } from "./model.ts"
+import type { ConnectionStatus, Credential, DisconnectMode, PersistentState, SubscriptionFailed } from "./model.ts"
 import { failed, issuer, ModelCatalog, resource, sharingScope, TokenResponse } from "./model.ts"
 import { revoke } from "./revocation.ts"
 import { authorizationUrl, callbackCredentials, matchedCallback, parseRedirect } from "./oauth.ts"
@@ -167,14 +167,14 @@ export const connection = (initial: PersistentState, ports: SubscriptionPorts) =
             .map((model) => model.slug)
         })
       ),
-    disconnect: () =>
+    disconnect: (mode: DisconnectMode = "RetainRegistration") =>
       lock.withPermit(
         Effect.uninterruptible(
           Effect.gen(function* () {
             attempt = undefined
             const outcome = yield* revoke(state.credential, ports)
             const { credential: _credential, ...registration } = state
-            yield* save(registration)
+            yield* save(mode === "ChangeAccount" ? { hostId: state.hostId } : registration)
             return outcome
           })
         )

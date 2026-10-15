@@ -2,11 +2,11 @@ import { Context, Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
 import { connection } from "./connection.ts"
 import type { Redacted } from "effect"
-import type { ConnectionStatus, DisconnectOutcome, SubscriptionFailed } from "./model.ts"
+import type { ConnectionStatus, DisconnectMode, DisconnectOutcome, SubscriptionFailed } from "./model.ts"
 import type { SubscriptionPorts } from "./ports.ts"
 import { livePorts } from "./protocol.ts"
 import { protectedStore } from "./store.ts"
-export { ConnectionStatus, DisconnectOutcome, SubscriptionFailed } from "./model.ts"
+export { ConnectionStatus, DisconnectMode, DisconnectOutcome, SubscriptionFailed } from "./model.ts"
 export { subscriptionHttpRequest } from "./protocol.ts"
 export { subscriptionIdentityVerifier } from "./identity.ts"
 export type { PersistentState } from "./model.ts"
@@ -20,7 +20,7 @@ export class Subscription extends Context.Service<
     readonly status: () => Effect.Effect<ConnectionStatus, SubscriptionFailed>
     readonly accessToken: () => Effect.Effect<Redacted.Redacted<string>, SubscriptionFailed>
     readonly models: () => Effect.Effect<readonly string[], SubscriptionFailed>
-    readonly disconnect: () => Effect.Effect<DisconnectOutcome, SubscriptionFailed>
+    readonly disconnect: (mode?: DisconnectMode) => Effect.Effect<DisconnectOutcome, SubscriptionFailed>
   }
 >()("balabol/subscription") {}
 const make = (ports: SubscriptionPorts) =>
