@@ -1,5 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
@@ -21,6 +21,8 @@ it("serves disconnected setup on an actual loopback socket without opening a bro
       Effect.scoped(
         Effect.gen(function* () {
           const address = yield* HttpServer.addressFormattedWith(Effect.succeed)
+          const page = yield* Effect.tryPromise(() => fetch(address))
+          expect(page.headers.get("referrer-policy")).toBe("same-origin")
           const result = yield* Effect.tryPromise(() => fetch(`${address}/status`))
           expect(result.status).toBe(200)
           expect(yield* Effect.tryPromise(() => result.json())).toEqual({ kind: "Disconnected" })
@@ -38,7 +40,7 @@ it("serves disconnected setup on an actual loopback socket without opening a bro
 
 it("validates setup configuration before binding a loopback listener", async () => {
   expect(await Effect.runPromise(parseSubscriptionSettings({}))).toEqual({
-    directory: ".data/subscription",
+    directory: join(homedir(), ".local", "share", "balabol", "subscription"),
     port: 8788
   })
   expect(

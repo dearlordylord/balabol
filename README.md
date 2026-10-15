@@ -47,7 +47,7 @@ LiveKit ICE advertises the Mac's Tailscale IPv4 address on UDP 7882 with TCP 788
 
 ## Connect the ChatGPT subscription
 
-`pnpm subscription` builds and opens a separate setup page on this Mac. Choose **Continue with ChatGPT** and authorize Balabol with the existing account. This does not reuse or modify the Codex login. The listener binds only to `127.0.0.1`, defaults to port 8788 and is not exposed through iPhone/Tailscale routes. `BALABOL_SUBSCRIPTION_PORT` overrides that local port; `BALABOL_SUBSCRIPTION_DIRECTORY` selects the private credential directory (default `.data/subscription`).
+`pnpm subscription` builds and opens a separate setup page on this Mac. Choose **Continue with ChatGPT** and authorize Balabol with the existing account. This does not reuse or modify the Codex login. The listener binds only to `127.0.0.1`, defaults to port 8788 and is not exposed through iPhone/Tailscale routes. `BALABOL_SUBSCRIPTION_PORT` overrides that local port; `BALABOL_SUBSCRIPTION_DIRECTORY` selects the private credential directory (default `~/.local/share/balabol/subscription`, outside the checkout).
 
 Credentials stay in a private local directory with owner-only files and atomic replacement. The setup process holds an exclusive writer lease; stop it before starting another process that uses the same subscription directory. **Disconnect Balabol** attempts bounded remote revocation and removes the locally saved tokens. If remote revocation cannot be confirmed, the page says so and points to ChatGPT access settings. The app registration is retained for reconnecting the same account; account switching is outside this prototype.
 

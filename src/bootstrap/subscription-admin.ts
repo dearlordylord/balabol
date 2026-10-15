@@ -1,4 +1,6 @@
 import { createServer } from "node:http"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
@@ -17,7 +19,8 @@ const Settings = Schema.Struct({
 })
 export const parseSubscriptionSettings = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(Settings)({
-    directory: environment.BALABOL_SUBSCRIPTION_DIRECTORY ?? ".data/subscription",
+    directory:
+      environment.BALABOL_SUBSCRIPTION_DIRECTORY ?? join(homedir(), ".local", "share", "balabol", "subscription"),
     port: Number(environment.BALABOL_SUBSCRIPTION_PORT ?? "8788")
   })
 
@@ -49,7 +52,7 @@ const localOnly = (local: string) =>
         return HttpServerResponse.empty({ status: 403 })
       return (yield* handler).pipe(
         HttpServerResponse.setHeader("cache-control", "no-store"),
-        HttpServerResponse.setHeader("referrer-policy", "no-referrer"),
+        HttpServerResponse.setHeader("referrer-policy", "same-origin"),
         HttpServerResponse.setHeader(
           "content-security-policy",
           "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://auth.openai.com; frame-ancestors 'none'"
