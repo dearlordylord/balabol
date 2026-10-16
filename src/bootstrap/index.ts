@@ -17,7 +17,6 @@ import { LanguageTags } from "../language/index.ts"
 import { welcomeRoutes } from "./welcome.ts"
 import {
   configuredUniiLayer,
-  sqliteLayer,
   sqliteStorageLayer,
   durableMemoryLayer,
   SqliteMemoryStorage,
@@ -53,8 +52,15 @@ import {
   voiceDiagnosticFile,
   VoiceDiagnostics
 } from "../voice/index.ts"
-import { subscriptionLayer, subscriptionInferenceLayer } from "../subscription/index.ts"
+import { sqliteKnowledgeLayer } from "../personal-knowledge/index.ts"
+import { subscriptionLayer, subscriptionInferenceLayer, subscriptionToolInferenceLayer } from "../subscription/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
+const sharedKnowledgeLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const resource = yield* SqliteMemoryStorage
+    return sqliteKnowledgeLayer(resource.storage.database)
+  })
+)
 const configuredConversationLayer = (
   settings: ReplySettings = defaultReplySettings,
   memorySettings: MemorySettings = defaultMemorySettings,
@@ -62,7 +68,9 @@ const configuredConversationLayer = (
   subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
 ) => {
   const answer =
-    settings.answerProvider === "subscription" ? subscriptionAnswerLayer() : fakeAnswerLayer(settings.deltaMillis)
+    settings.answerProvider === "subscription"
+      ? subscriptionAnswerLayer().pipe(Layer.provide(sharedKnowledgeLayer))
+      : fakeAnswerLayer(settings.deltaMillis)
   const summary =
     memorySettings.summaryProvider === "subscription"
       ? subscriptionSummaryLayer
@@ -71,7 +79,7 @@ const configuredConversationLayer = (
   const selected =
     settings.answerProvider === "subscription" || memorySettings.summaryProvider === "subscription"
       ? providers.pipe(
-          Layer.provide(subscriptionInferenceLayer()),
+          Layer.provide(Layer.merge(subscriptionInferenceLayer(), subscriptionToolInferenceLayer())),
           Layer.provide(subscriptionLayer(subscriptionDirectory))
         )
       : Layer.merge(fakeAnswerLayer(settings.deltaMillis), configurableFakeSummaryLayer(summarySettings))
@@ -91,7 +99,8 @@ export const conversationLayer = (
   subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
 ) =>
   configuredConversationLayer(settings, memorySettings, summarySettings, subscriptionDirectory).pipe(
-    Layer.provide(sqliteLayer(path))
+    Layer.provide(durableMemoryLayer),
+    Layer.provide(sqliteStorageLayer(path))
   )
 const maximumPort = 65_535
 const maximumOwnerIdentityLength = 254

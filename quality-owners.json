@@ -7,6 +7,12 @@
       "dependencies": []
     },
     {
+      "name": "personal-knowledge",
+      "root": "src/personal-knowledge",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
       "name": "conversation",
       "root": "src/conversation",
       "entry": "index.ts",
@@ -22,7 +28,7 @@
       "name": "answer-generation",
       "root": "src/answer-generation",
       "entry": "index.ts",
-      "dependencies": ["language", "subscription"]
+      "dependencies": ["language", "subscription", "personal-knowledge"]
     },
     {
       "name": "summary-generation",
@@ -67,7 +73,8 @@
         "speech-synthesis",
         "voice",
         "language",
-        "subscription"
+        "subscription",
+        "personal-knowledge"
       ]
     }
   ]

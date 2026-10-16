@@ -18,7 +18,8 @@ Each entrypoint hides sequencing, state coordination and implementation files. C
 | Language           | Canonical BCP47 tags and validated UTF-16 text spans shared by language-aware contracts                                                  | None                                                         |
 | Conversation       | Sole conversation, input acceptance, response identity, interruption and recovery                                                        | Memory, answer generation, Language                          |
 | Memory             | Hosting real unii, durable adapter, bounded reads, summary readiness and independent compaction lifetime                                 | Summary generation, Language                                 |
-| Answer generation  | Parsed reply requests, prompt mapping and typed streaming/cancellation outcomes; fake and subscription adapters                          | Language, Subscription                                       |
+| Personal Knowledge | Persisted explicit knowledge schema, typed inspection and later schema/data mutations and retained revisions                             | None                                                         |
+| Answer generation  | Parsed replies and bounded Yielded model/tool execution, prompt mapping and typed streaming/cancellation outcomes                        | Language, Subscription, Personal Knowledge                   |
 | Summary generation | Parsed summary requests, provenance and typed completion/cancellation outcomes; fake and subscription adapters                           | Subscription                                                 |
 | Speech recognition | Bounded audio recognition and validated partial/final outcomes; fake and pinned local whisper.cpp implementations                        | Language                                                     |
 | Speech synthesis   | Phrase-input synthesis and validated audio/terminal outcomes; fake and native Apple implementations                                      | Language                                                     |
@@ -54,6 +55,12 @@ This checks declared static source dependencies, not arbitrary runtime reflectio
 
 Substantial owner/interface or composition changes require architectural agent review in addition to green checks. Planned roots must be updated deliberately when concrete implementation justifies a different boundary; do not create forwarding modules merely to match this map.
 
+## Personal knowledge inspection
+
+Personal Knowledge owns its persisted explicit schema catalog and inspection contract. It borrows the composition-owned SQLite database without closing it; callers receive parsed snapshots, never SQL handles. The initial capability exposes only the empty schema. Schema mutation, entities, associations and revision history are separate subsequent slices.
+
+Answer generation owns the bounded Yielded run and per-answer tool transcript. It receives canonical prior conversation memory and the accepted input through its existing contract; only ordinary text and final completion leave that owner. It exposes the explicit knowledge inspection tool and no ambient capabilities. Framework context retrieval, compaction and durable scheduling are disabled. Subscription owns structured inference transport and call identity validation separately from its text-only summary operation; both consume the same credential owner. Conversation and Voice continue to fence stale responses and own playback interruption.
+
 ## Durable text slice
 
 Conversation owns validated send/page wire contracts, conflict admission and serialized delivery. Memory owns schema-parsed durable delivery evidence and receipts, raw batches, SQLite transactions, checkpoints and the unii lifecycle. The public `DurableMemory` port supports real storage composition and fault decorators through Layers; its prepare/raw-append protocol is internal to the memory host's serialized admission. Bootstrap composes the concrete SQLite memory and HTTP server Layers. The backend defaults to loopback; explicit private-network binding is startup configuration.
@@ -64,7 +71,7 @@ Acceptance commits the complete raw batch and delivery association atomically. P
 
 ## Subscription connection
 
-Subscription owns its OAuth attempt, validated account connection, protected credential persistence and serialized refresh. Bootstrap mounts a separate loopback-only setup console; it is never included in phone or Tailscale control routes. Answer generation consumes its narrow `SubscriptionInference` stream; summary generation consumes the same service independently. Subscription owns request-local HTTP/SSE parsing, output and deadline bounds and cancellation controllers, separate from the shared rotating credential lifetime. Bootstrap acquires one credential owner for its dependent inference work. Conversation and unii remain independent of OAuth. A scoped writer lease prevents concurrent local processes from rotating or deleting the same credential store.
+Subscription owns its OAuth attempt, validated account connection, protected credential persistence and serialized refresh. Bootstrap mounts a separate loopback-only setup console; it is never included in phone or Tailscale control routes. Answer generation consumes the structured `SubscriptionToolInference` stream; summary generation independently consumes the text-only `SubscriptionInference` service. Subscription owns request-local HTTP/SSE parsing, output and deadline bounds and cancellation controllers, separate from the shared rotating credential lifetime. Bootstrap acquires one credential owner for its dependent inference work. Conversation and unii remain independent of OAuth. A scoped writer lease prevents concurrent local processes from rotating or deleting the same credential store.
 
 Real summary requests carry trusted source record kinds from unii rather than inferring provenance from quoted text. Memory preserves typed summary failures across its Promise boundary and supplies unii a plain retry classifier: non-retryable real-provider failures stop the job; completed-summary size refinement remains unii policy. Bootstrap merges provider consumers before supplying a single shared subscription/inference Layer.
 

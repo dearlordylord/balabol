@@ -30,3 +30,12 @@ export const subscriptionLayer = (directory: string) =>
       return yield* make({ ...livePorts(), ...store })
     })
   )
+export {
+  SubscriptionToolInference,
+  ToolInferenceRequest,
+  ToolInferenceEvent,
+  ToolInput,
+  ToolDefinition
+} from "./tool-model.ts"
+export { subscriptionToolInferenceLayer, toolInferenceHttpTransport } from "./tool-inference.ts"
+export type { ToolInferenceTransport } from "./tool-inference.ts"

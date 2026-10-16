@@ -9,10 +9,13 @@ import {
   inferenceHttpTransport
 } from "../src/subscription/index.ts"
 import type { InferenceTransport } from "../src/subscription/index.ts"
-import { AnswerGeneration, subscriptionAnswerLayer } from "../src/answer-generation/index.ts"
+import { AnswerGeneration } from "../src/answer-generation/index.ts"
+import { knowledgeAnswerLayer } from "./knowledge-answer-fixture.ts"
+import { temporaryDatabase } from "./memory-fixture.ts"
+import { sqliteStorageLayer } from "../src/memory/index.ts"
 const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
 const delta = frame({ type: "response.output_text.delta", delta: "bonjour" })
-const completed = frame({ type: "response.completed", response: { status: "completed" } })
+const completed = frame({ type: "response.completed", response: { status: "completed", output: [] } })
 const request = { model: "gpt-6.1-sol", instructions: "explicit", input: "synthetic" } as const
 const subscription = Layer.succeed(
   Subscription,
@@ -114,34 +117,40 @@ it.effect("enforces a total deadline even while an upstream fetch never resolves
     expect((yield* Fiber.join(running)).reason).toBe("Deadline")
   }).pipe(Effect.provide(layer(async () => new Promise<Response>(() => undefined))))
 )
-it.effect("maps explicit memory and requested language to real deltas with truthful empty spans", () =>
-  Effect.gen(function* () {
-    const answer = yield* AnswerGeneration
-    const events = yield* Stream.runCollect(
-      answer.generate({
-        model: request.model,
-        prior: "PRIOR",
-        input: "CURRENT",
-        inputLanguageSpans: [],
-        responseLanguage: "fr",
-        capabilities: ["memory.context"]
-      })
-    )
-    expect(events).toEqual([{ kind: "Delta", text: "bonjour", languageSpans: [] }, { kind: "Completed" }])
-  }).pipe(
-    Effect.provide(
-      subscriptionAnswerLayer().pipe(
-        Layer.provide(
-          layer(async (input) => {
-            expect(input.instructions).toContain("fr")
-            expect(JSON.parse(input.input)).toEqual({ priorMemory: "PRIOR", currentInput: "CURRENT" })
+it("maps explicit memory and requested language to real deltas with truthful empty spans", async () => {
+  const database = await temporaryDatabase()
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const answer = yield* AnswerGeneration
+          const events = yield* Stream.runCollect(
+            answer.generate({
+              model: request.model,
+              prior: "PRIOR",
+              input: "CURRENT",
+              inputLanguageSpans: [],
+              responseLanguage: "fr",
+              capabilities: ["memory.context"]
+            })
+          )
+          expect(events).toEqual([{ kind: "Delta", text: "bonjour", languageSpans: [] }, { kind: "Completed" }])
+        })
+      ).pipe(
+        Effect.provide(
+          knowledgeAnswerLayer(async (input) => {
+            expect(JSON.stringify(input.input)).toContain("fr")
+            expect(JSON.stringify(input.input)).toContain("PRIOR")
+            expect(JSON.stringify(input.input)).toContain("CURRENT")
             return body(delta + completed)
-          })
+          }).pipe(Layer.provide(sqliteStorageLayer(database.path)))
         )
       )
     )
-  )
-)
+  } finally {
+    await database.close()
+  }
+})
 it.effect("HTTP adapter sends only the allowed fields, fixed endpoint and redacted authorization", () =>
   Effect.tryPromise(async () => {
     const transport = inferenceHttpTransport(async (url, init) => {

@@ -1,12 +1,12 @@
 import { Effect, Layer } from "effect"
-import type { AnswerFailed, AnswerGeneration } from "../src/answer-generation/index.ts"
+import type { AnswerGeneration } from "../src/answer-generation/index.ts"
 import { fakeSummaryLayer, type SummaryGeneration } from "../src/summary-generation/index.ts"
 import { Conversation, ReplyConfiguration, defaultReplySettings } from "../src/conversation/index.ts"
 import { configuredUniiLayer, sqliteStorageLayer, durableMemoryLayer } from "../src/memory/index.ts"
 
-export const replyLayer = (
+export const replyLayer = <Error, Requirements>(
   path: string,
-  answer: Layer.Layer<AnswerGeneration, AnswerFailed>,
+  answer: Layer.Layer<AnswerGeneration, Error, Requirements>,
   overrides: Partial<typeof defaultReplySettings> = {},
   summary: Layer.Layer<SummaryGeneration> = fakeSummaryLayer
 ) => {

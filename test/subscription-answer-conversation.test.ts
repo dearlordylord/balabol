@@ -1,36 +1,19 @@
-import { Effect, Layer, Redacted } from "effect"
+import { Effect } from "effect"
 import { expect, it } from "vitest"
-import { subscriptionAnswerLayer } from "../src/answer-generation/index.ts"
-import { Subscription, subscriptionInferenceLayer } from "../src/subscription/index.ts"
-import type { InferenceTransport } from "../src/subscription/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
+import { knowledgeAnswerLayer } from "./knowledge-answer-fixture.ts"
 import { replyLayer, waitForReply } from "./reply-fixture.ts"
 const input = { deliveryId: "11111111-1111-4111-8111-111111111111", text: "synthetic input" }
 const later = { deliveryId: "22222222-2222-4222-8222-222222222222", text: "synthetic followup" }
 const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
 const success =
   event({ type: "response.output_text.delta", delta: "synthetic answer" }) +
-  event({ type: "response.completed", response: { status: "completed" } })
-function answerLayer(transport: InferenceTransport) {
-  return subscriptionAnswerLayer().pipe(
-    Layer.provide(subscriptionInferenceLayer(transport)),
-    Layer.provide(
-      Layer.succeed(Subscription, {
-        accessToken: () => Effect.succeed(Redacted.make("fixture")),
-        begin: () => Effect.die("unused"),
-        complete: () => Effect.die("unused"),
-        status: () => Effect.succeed({ kind: "Disconnected" }),
-        models: () => Effect.succeed([]),
-        disconnect: () => Effect.succeed({ revocation: "NotNeeded" })
-      })
-    )
-  )
-}
+  event({ type: "response.completed", response: { status: "completed", output: [] } })
 it("durably streams real-adapter output once across duplicate delivery and reconnect", async () => {
   const database = await temporaryDatabase()
   let calls = 0
-  const answer = answerLayer(async () => {
+  const answer = knowledgeAnswerLayer(async () => {
     calls++
     return new Response(success)
   })
@@ -68,12 +51,12 @@ it("durably streams real-adapter output once across duplicate delivery and recon
 it("a quota failure leaves accepted memory and permits the next real-adapter answer without restart", async () => {
   const database = await temporaryDatabase()
   let calls = 0
-  const answer = answerLayer(async (request) => {
+  const answer = knowledgeAnswerLayer(async (request) => {
     if (calls++ === 0)
       return new Response(
         event({ type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } })
       )
-    expect(request.input).toContain("synthetic input")
+    expect(JSON.stringify(request.input)).toContain("synthetic input")
     return new Response(success)
   })
   try {
