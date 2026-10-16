@@ -24,7 +24,7 @@ import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { replyLayer, waitForReply } from "./reply-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
-import { voiceOutputLayer, waitForOutput } from "./voice-output-fixture.ts"
+import { voiceOutputLayer, waitForOutput, classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 const identity = "11111111-1111-4111-8111-111111111111"
 const Snapshot = Schema.Struct({
@@ -347,6 +347,7 @@ it("ignores a replayed delivery projection without borrowing the active epoch", 
 })
 
 it("records a pre-Final recognition failure without output or an accepted message", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
   const records: VoiceDiagnosticInput[] = []
@@ -360,7 +361,10 @@ it("records a pre-Final recognition failure without output or an accepted messag
       transport,
       fakeSynthesisLayer(),
       fakeAnswerLayer(0),
-      recognition
+      recognition,
+      undefined,
+      undefined,
+      input.layer
     ).pipe(
       Layer.provide(
         Layer.succeed(VoiceDiagnostics, {
@@ -375,8 +379,8 @@ it("records a pre-Final recognition failure without output or an accepted messag
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        for (let index = 0; index < 3; index++) yield* transport.send(transport.audio(1200))
-        for (let index = 0; index < 50; index++) yield* transport.send(transport.audio(0))
+        for (let index = 0; index < 3; index++) yield* input.send(transport, transport.audio(1200))
+        for (let index = 0; index < 50; index++) yield* input.send(transport, transport.audio(0))
         let snapshot = yield* voice.snapshot(join.sessionId, 0)
         for (let index = 0; !snapshot.events.some((event) => event.kind === "Error") && index < 100; index++) {
           yield* Effect.sleep(5)

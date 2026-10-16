@@ -7,18 +7,19 @@ import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice, VoiceAdmissions } from "../src/voice/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
-import { withVoiceOutput, voiceOutputLayer } from "./voice-output-fixture.ts"
+import { withVoiceOutput, voiceOutputLayer, classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 
-it("admits Russian, French and English detector labels without fabricating spans", () =>
-  withVoiceOutput(
+it("admits Russian, French and English detector labels without fabricating spans", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
+  return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
         for (const language of ["ru", "fr", "en"]) {
-          yield* transport.segment
+          yield* input.segment(transport)
           let snapshot = yield* voice.snapshot(join.sessionId, 0)
           for (
             let attempt = 0;
@@ -64,8 +65,12 @@ it("admits Russian, French and English detector labels without fabricating spans
         delayMillis: 0,
         failure: null
       }))
-    })
-  ))
+    }),
+    undefined,
+    undefined,
+    input.layer
+  )
+})
 
 it("binds detector metadata into durable admission evidence with absent-null compatibility", () =>
   withVoiceOutput(() =>

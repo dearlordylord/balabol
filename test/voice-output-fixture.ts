@@ -1,10 +1,11 @@
 import { voiceAdmissionsFixture } from "./voice-admission-fixture.ts"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import type { AnswerGeneration, AnswerFailed } from "../src/answer-generation/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import {
   Voice,
-  type SpeechActivity,
+  SpeechActivity,
+  type VoiceFrame,
   fakeSpeechActivityLayer,
   VoiceOutputConfiguration,
   defaultVoiceOutputSettings,
@@ -23,6 +24,40 @@ import type { SpeechSynthesis, SpeechSynthesisFailed } from "../src/speech-synth
 import { replyLayer } from "./reply-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
+const onsetFrames = 3
+const silenceFrames = 50
+const speechSample = 1200
+/** Opt in when a test needs ordinary input, rather than queue-overload or late-frame behavior. */
+export const classifiedVoiceInput = (base: Layer.Layer<SpeechActivity, VoiceFailed> = fakeSpeechActivityLayer) =>
+  Effect.gen(function* () {
+    const completed = yield* Queue.unbounded<void>()
+    const layer = Layer.effect(
+      SpeechActivity,
+      Effect.gen(function* () {
+        const real = yield* SpeechActivity
+        return SpeechActivity.of({
+          open: () =>
+            real
+              .open()
+              .pipe(
+                Effect.map((stream) => ({
+                  reset: () => stream.reset(),
+                  push: (frame) => stream.push(frame).pipe(Effect.tap(() => Queue.offer(completed, undefined)))
+                }))
+              )
+        })
+      })
+    ).pipe(Layer.provide(base))
+    const send = (transport: ReturnType<typeof voiceTransportFixture>, frame: VoiceFrame, track?: string) =>
+      transport.send(frame, track).pipe(Effect.andThen(Queue.take(completed)), Effect.timeout("2 seconds"))
+    const segment = (transport: ReturnType<typeof voiceTransportFixture>) =>
+      Effect.gen(function* () {
+        for (let frame = 0; frame < onsetFrames; frame++) yield* send(transport, transport.audio(speechSample))
+        for (let frame = 0; frame < silenceFrames; frame++) yield* send(transport, transport.audio(0))
+      })
+    return { layer, send, segment }
+  })
+
 export const voiceOutputLayer = (
   path: string,
   transport: ReturnType<typeof voiceTransportFixture>,

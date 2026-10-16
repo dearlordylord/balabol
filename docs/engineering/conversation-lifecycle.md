@@ -2,7 +2,7 @@
 
 **Purpose:** Define lifecycle authority, ordering and execution contracts for the functional conversation migration.
 **Audience:** Implementers and architectural reviewers.
-**Status:** Accepted target protocol; the admission core is integrated in #53 and response/delivery integration in #54; #55–#58 migrate the remaining owners.
+**Status:** Accepted target protocol; admission is integrated in #53, response/delivery in #54 and session/registry lifecycle in #55; #56–#58 migrate the remaining recognition, output and Swift owners.
 **Authority:** [Specification #51](https://github.com/dearlordylord/balabol/issues/51), its child issues and owner-delegated Astra review.
 **Expected use:** Start Conversation or Voice state changes here, then follow the owner-local transition and interpreter.
 **Lifecycle:** Update this protocol with changes to ownership, command acknowledgement or cancellation semantics. Do not describe planned guarantees as implemented.
@@ -12,6 +12,8 @@
 Conversation owns pending input operations, response eligibility, the active response attempt, delivery authorization and its exact terminal persistence intent. Memory owns durable receipts and retained context through unii. A lifecycle snapshot is not a second durable transcript.
 
 Each VoiceSession owns capture, provisional spoken-turn assembly and session-specific output. The voice registry owns start reservations and bounded retained-session identity. Segmentation, recognition assembly and output are named subtransitions within VoiceSession, not independent schedulers merely because they have separate source modules.
+
+Start backend session changes in `voice/session-transitions.ts`, its named subtransitions and `session-state.ts`; `session-runtime.ts` interprets their commands through one mailbox. `registry-state.ts` owns reservation and retention decisions; `registry-runtime.ts` owns their resource execution. The temporary `session-recognition.ts` adapter contains the old segmentation/utterance machinery until #56, and `ReplyAudio` remains the output migration boundary until #57. Neither adapter may write session lifecycle fields.
 
 Conversation and VoiceSession stay separate because text operation and handed durable admission outlive media capture. Memory compaction is independent of response and media cancellation. Swift owns client intent, checkpoints, local platform availability and projections of server facts; it cannot decide durable acceptance.
 
@@ -69,6 +71,8 @@ A token conservation proof does not prove the bytes it denotes. The interpreter 
 
 There is no atomic instant spanning the Voice and Conversation loops. Conversation-side revocation is guaranteed from its processed fence, identified by acknowledgement. Immediate resource suppression protects local output while that command is in transit. Start/publication handshakes must carry the relevant revision and exact target rather than assuming an earlier physical speech onset was already observed by Conversation.
 
+Capture continues while a speech fence awaits acknowledgement. A completed recognition result may reserve bounded provisional capacity, carrying its original generation, fence identity and source sequence. Only the matching applied fence permits handing that payload to Conversation; rejection cannot masquerade as acknowledgement. Mute, replacement or closure may discard this unhanded provisional set, while already handed admission keeps its host lifetime. An older fence rejection cannot reset a newer spoken turn.
+
 Delivery registration installs its scoped subscription and initial snapshot atomically. Started and invalidated notifications carry exact registration, ticket, response and input identities. Notification delay cannot grant publication permission: the resource adapter reads current authorization after each asynchronous wait and immediately before enqueuing each native audio frame. Its guard performs no transitions or I/O and returns false after retirement or detach. An acquisition that finishes after revocation closes its stale resource. Each ticket has an interpreter-owned AbortController. After committing logical revocation, the owner synchronously aborts that controller before dispatching notifications. The native adapter’s abort listener only invalidates its publication and clears queued RTC audio; domain projections still consume typed events. The adapter checks an already-aborted signal on attachment, removes the listener on close and cannot report successful capture or drain after cancellation. Controllers are never reused.
 
 The authorization check must hold at the actual publication boundary, including after asynchronous synthesis or readiness waits. Checking only when a command is dequeued permits a stale capture to publish later. The resource gate is synchronously revocable; its private implementation does not make independent domain policy.
@@ -95,6 +99,10 @@ Generated text, durable terminal text and delivered audio remain different evide
 | Client feature   | Tasks, draft/admission checkpoints, local playback gate and platform resources                | Uncertain delivery identity/payload and server-owned facts                        |
 
 Closing media fences new media work before collecting the fixed set of owned resources to release. An acquisition already in flight must either enter the tracked release set or close itself when its stale completion arrives; closing only attached handles is insufficient. Release acknowledgements decrease that set; durable admission is not counted as disposable media work. Shutdown/restart recovery continues to rely on existing durable evidence; this refactor does not introduce a new durable command journal implicitly.
+
+The registry reserves a start identity before acquiring session resources. Identical concurrent starts share that reservation; conflicting starts receive a decision without waiting for acquisition. Logical closure and physical release are distinct: a closing session remains retained until its fixed resource obligations settle. An ended session is evictable only after release completes and no handed admission remains unresolved. Factory failure acknowledges acquisition cleanup before removing its reservation.
+
+Session retention facts carry a monotonically increasing session-local revision assigned by the session writer. The registry ignores older or duplicate facts, so delayed delivery cannot replace pending admission or closure with an earlier projection. Neither owner waits inside its writer for the other owner's acknowledgement. Host shutdown settles waiting start callers and fences installation before interrupting acquisition; a late acquired handle is disposed rather than published.
 
 ## Formal guarantee boundary
 

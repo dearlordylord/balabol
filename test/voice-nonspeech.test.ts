@@ -6,9 +6,10 @@ import { whisperRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice } from "../src/voice/index.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
-import { withVoiceOutput } from "./voice-output-fixture.ts"
+import { withVoiceOutput, classifiedVoiceInput } from "./voice-output-fixture.ts"
 
-it("discards non-speech caption finals without memory or answers while preserving separately segmented speech", () => {
+it("discards non-speech caption finals without memory or answers while preserving separately segmented speech", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
   let transcriptions = 0
   let answerCalls = 0
   const results = [["[BLANK AUDIO]"], ["(keyboard tapping)"], ["Bonjour ", "(keyboard tapping)", "Hello"]]
@@ -39,7 +40,7 @@ it("discards non-speech caption finals without memory or answers while preservin
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
         for (let utterance = 0; utterance < 2; utterance++) {
-          yield* transport.segment
+          yield* input.segment(transport)
           let snapshot = yield* voice.snapshot(join.sessionId, 0)
           for (
             let attempt = 0;
@@ -54,7 +55,7 @@ it("discards non-speech caption finals without memory or answers while preservin
           expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
           expect(answerCalls).toBe(0)
         }
-        yield* transport.segment
+        yield* input.segment(transport)
         let current = yield* conversation.currentTurn()
         for (let attempt = 0; (current == null || answerCalls === 0) && attempt < 200; attempt++) {
           yield* Effect.sleep(5)
@@ -70,6 +71,9 @@ it("discards non-speech caption finals without memory or answers while preservin
       }),
     fakeSynthesisLayer(),
     answer,
-    recognition
+    recognition,
+    undefined,
+    undefined,
+    input.layer
   )
 })

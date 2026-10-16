@@ -5,7 +5,7 @@ import { Conversation } from "../src/conversation/index.ts"
 import { AnswerGeneration, fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { SpeechSynthesis, fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { SpeechRecognition, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
-import { withVoiceOutput, waitForOutput, outputInput } from "./voice-output-fixture.ts"
+import { withVoiceOutput, waitForOutput, outputInput, classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 const recordingSynthesis = (requests: { language: string; text: string }[]) =>
   Layer.effect(
@@ -24,6 +24,7 @@ const recordingSynthesis = (requests: { language: string; text: string }[]) =>
 const deliver = (voice: Voice["Service"], sessionId: string) =>
   Effect.gen(function* () {
     const waiting = (yield* waitForOutput(voice, sessionId, "AwaitingReady")).output
+    expect(waiting?.status).toBe("AwaitingReady")
     if (waiting?.manifest == null) throw new Error("Expected identified audio readiness")
     yield* voice.ready(sessionId, {
       responseId: waiting.responseId,
@@ -32,7 +33,8 @@ const deliver = (voice: Voice["Service"], sessionId: string) =>
     })
     expect((yield* waitForOutput(voice, sessionId, "Delivered")).output?.status).toBe("Delivered")
   })
-it("runs RU to FR to EN and mixed speech through one Conversation and one voice room", () => {
+it("runs RU to FR to EN and mixed speech through one Conversation and one voice room", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
   const requests: { language: string; text: string }[] = []
   return withVoiceOutput(
     (transport) =>
@@ -41,7 +43,7 @@ it("runs RU to FR to EN and mixed speech through one Conversation and one voice 
         const conversation = yield* Conversation
         const joined = yield* voice.start(startVoiceRequest())
         for (let index = 0; index < 4; index++) {
-          yield* transport.segment
+          yield* input.segment(transport)
           yield* deliver(voice, joined.sessionId)
         }
         const messages = (yield* conversation.page({ limit: 100 })).messages
@@ -65,10 +67,16 @@ it("runs RU to FR to EN and mixed speech through one Conversation and one voice 
         expect(transport.opens()).toBe(1)
         expect(transport.captured.length).toBeGreaterThan(0)
       }),
-    recordingSynthesis(requests)
+    recordingSynthesis(requests),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    input.layer
   )
 })
-it("uses Japanese from matching declared capabilities without redesigning a session", () => {
+it("uses Japanese from matching declared capabilities without redesigning a session", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
   const requests: { language: string; text: string }[] = []
   return withVoiceOutput(
     (transport) =>
@@ -76,7 +84,7 @@ it("uses Japanese from matching declared capabilities without redesigning a sess
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        yield* transport.segment
+        yield* input.segment(transport)
         yield* deliver(voice, join.sessionId)
         const messages = (yield* conversation.page({ limit: 100 })).messages
         expect(messages[0]?.text).toBe("こんにちは")
@@ -88,7 +96,9 @@ it("uses Japanese from matching declared capabilities without redesigning a sess
     recordingSynthesis(requests),
     fakeAnswerLayer(0),
     fakeRecognitionLayer(),
-    { allowedLanguages: ["ja"] }
+    { allowedLanguages: ["ja"] },
+    undefined,
+    input.layer
   )
 })
 it("splits mixed reply phrases at language boundaries and preserves a scalar-safe uncovered gap", () => {
@@ -132,7 +142,8 @@ for (const metadata of [
   { name: "out-of-set detected tag", spans: [{ language: "de", start: 0, end: 7 }] },
   { name: "surrogate-splitting span", spans: [{ language: "en", start: 1, end: 7 }] }
 ])
-  it(`rejects ${metadata.name} at the outer recognition boundary without appending input`, () => {
+  it(`rejects ${metadata.name} at the outer recognition boundary without appending input`, async () => {
+    const input = await Effect.runPromise(classifiedVoiceInput())
     const recognition = Layer.effect(
       SpeechRecognition,
       Effect.gen(function* () {
@@ -150,7 +161,7 @@ for (const metadata of [
           const voice = yield* Voice
           const conversation = yield* Conversation
           const join = yield* voice.start(startVoiceRequest())
-          yield* transport.segment
+          yield* input.segment(transport)
           let snapshot = yield* voice.snapshot(join.sessionId, 0)
           for (let index = 0; !snapshot.events.some((event) => event.kind === "Error") && index < 100; index++) {
             yield* Effect.sleep(5)
@@ -163,10 +174,14 @@ for (const metadata of [
         }),
       fakeSynthesisLayer(),
       fakeAnswerLayer(0),
-      recognition
+      recognition,
+      undefined,
+      undefined,
+      input.layer
     )
   })
-it("ignores wrong-utterance and post-Final recognition events without another append or tentative revival", () => {
+it("ignores wrong-utterance and post-Final recognition events without another append or tentative revival", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
   const recognition = Layer.effect(
     SpeechRecognition,
     Effect.gen(function* () {
@@ -194,7 +209,7 @@ it("ignores wrong-utterance and post-Final recognition events without another ap
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        yield* transport.segment
+        yield* input.segment(transport)
         yield* deliver(voice, join.sessionId)
         const snapshot = yield* voice.snapshot(join.sessionId, 0)
         expect(snapshot.events.filter((event) => event.kind === "Final").map((event) => event.text)).toEqual([
@@ -209,7 +224,10 @@ it("ignores wrong-utterance and post-Final recognition events without another ap
       }),
     fakeSynthesisLayer({ delayMillis: 0 }),
     fakeAnswerLayer(0),
-    recognition
+    recognition,
+    undefined,
+    undefined,
+    input.layer
   )
 })
 it("drains a collected reply larger than the staging window without truncation or duplicate speech", () => {
@@ -231,6 +249,7 @@ it("drains a collected reply larger than the staging window without truncation o
         const join = yield* voice.start(startVoiceRequest())
         yield* conversation.send(outputInput)
         const waiting = (yield* waitForOutput(voice, join.sessionId, "AwaitingReady")).output
+        expect(waiting?.status).toBe("AwaitingReady")
         if (waiting?.manifest == null) throw new Error("Expected bounded publication")
         yield* voice.ready(join.sessionId, {
           responseId: waiting.responseId,

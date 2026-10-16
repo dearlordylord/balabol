@@ -6,13 +6,14 @@ import { Voice, VoiceTransport } from "../src/voice/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
-import { voiceOutputLayer, waitForOutput } from "./voice-output-fixture.ts"
+import { voiceOutputLayer, waitForOutput, classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 
 it("interrupts only the old accepted reply when new speech starts during Final publication", async () => {
   const database = await temporaryDatabase()
   const fixture = voiceTransportFixture()
+  const input = await Effect.runPromise(classifiedVoiceInput())
   let reached = false
   let release: () => void = () => {}
   const publication = new Promise<void>((resolve) => {
@@ -62,7 +63,10 @@ it("interrupts only the old accepted reply when new speech starts during Final p
     { ...fixture, layer: transport },
     fakeSynthesisLayer({ delayMillis: 0 }),
     answer,
-    recognition
+    recognition,
+    undefined,
+    undefined,
+    input.layer
   )
   try {
     await Effect.runPromise(
@@ -71,10 +75,10 @@ it("interrupts only the old accepted reply when new speech starts during Final p
           const voice = yield* Voice
           const conversation = yield* Conversation
           const join = yield* voice.start(startVoiceRequest())
-          yield* fixture.segment
+          yield* input.segment(fixture)
           for (let i = 0; !reached && i < 200; i++) yield* Effect.sleep(5)
           expect(reached).toBe(true)
-          for (let i = 0; i < 10; i++) yield* fixture.send(fixture.audio(1200))
+          for (let i = 0; i < 10; i++) yield* input.send(fixture, fixture.audio(1200))
           release()
           let turn = yield* conversation.currentTurn()
           for (let i = 0; turn?.reply.state !== "Interrupted" && i < 200; i++) {

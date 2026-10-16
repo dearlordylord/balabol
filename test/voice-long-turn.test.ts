@@ -1,11 +1,11 @@
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Queue, Stream } from "effect"
 import { expect, it } from "vitest"
 import { AnswerGeneration } from "../src/answer-generation/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
 import { SpeechRecognition, RecognitionFailed } from "../src/speech-recognition/index.ts"
 import type { RecognitionRequest, RecognitionEvent } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
-import { Voice } from "../src/voice/index.ts"
+import { Voice, SpeechActivity, fakeSpeechActivityLayer } from "../src/voice/index.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { withVoiceOutput } from "./voice-output-fixture.ts"
 import type { voiceTransportFixture } from "./voice-fixture.ts"
@@ -54,8 +54,37 @@ const controlledRecognition = () => {
   })
   return { layer, requests }
 }
-const frames = (transport: Transport, count: number, sample = 1200) =>
-  Effect.forEach(Array.from({ length: count }), () => transport.send(transport.audio(sample)), { discard: true })
+const classifiedActivity = Effect.gen(function* () {
+  const completed = yield* Queue.unbounded<void>()
+  const layer = Layer.effect(
+    SpeechActivity,
+    Effect.gen(function* () {
+      const real = yield* SpeechActivity
+      return SpeechActivity.of({
+        open: () =>
+          real
+            .open()
+            .pipe(
+              Effect.map((stream) => ({
+                reset: () => stream.reset(),
+                push: (frame) => stream.push(frame).pipe(Effect.tap(() => Queue.offer(completed, undefined)))
+              }))
+            )
+      })
+    })
+  ).pipe(Layer.provide(fakeSpeechActivityLayer))
+  return { layer, completed }
+})
+type ClassifiedActivity = Effect.Success<typeof classifiedActivity>
+const frames = (transport: Transport, activity: ClassifiedActivity, count: number, sample = 1200) =>
+  Effect.forEach(
+    Array.from({ length: count }),
+    () =>
+      transport
+        .send(transport.audio(sample))
+        .pipe(Effect.andThen(Queue.take(activity.completed)), Effect.timeout("2 seconds")),
+    { discard: true }
+  )
 const settle = Effect.sleep(30)
 const waitRequests = (provider: ReturnType<typeof controlledRecognition>, count: number) =>
   Effect.gen(function* () {
@@ -73,20 +102,21 @@ const waitAccepted = (voice: Voice["Service"], sessionId: string) =>
     expect(snapshot.events.some((event) => event.kind === "Accepted")).toBe(true)
   })
 
-it("orders completed chunks, shifts multilingual spans and accepts only once after an empty final chunk", () => {
+it("orders completed chunks, shifts multilingual spans and accepts only once after an empty final chunk", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const provider = controlledRecognition()
   return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const join = yield* voice.start(startVoiceRequest())
-        yield* frames(transport, 1010)
+        yield* frames(transport, activity, 1010)
         yield* waitRequests(provider, 2)
         expect(provider.requests.every(({ request }) => request.audio.sampleFrames === 160000)).toBe(true)
         provider.requests[1]?.finish("pain", "fr")
         yield* settle
         expect((yield* page()).messages).toEqual([])
-        yield* frames(transport, 50, 0)
+        yield* frames(transport, activity, 50, 0)
         yield* waitRequests(provider, 3)
         provider.requests[2]?.finish("")
         yield* settle
@@ -101,31 +131,35 @@ it("orders completed chunks, shifts multilingual spans and accepts only once aft
         ])
         expect(messages[0]?.detectedLanguage).toBeNull()
         expect(transport.published.filter((event) => event.kind === "Final")).toHaveLength(1)
-        yield* frames(transport, 60, 0)
+        yield* frames(transport, activity, 60, 0)
         expect((yield* (yield* Conversation).currentTurn())?.reply.state).toBe("Waiting")
         yield* voice.end(join.sessionId)
       }),
     fakeSynthesisLayer(),
     waiting,
-    provider.layer
+    provider.layer,
+    undefined,
+    undefined,
+    activity.layer
   )
 })
 
-it("keeps resumed speech provisional when the previous quiet chunk finishes recognition", () => {
+it("keeps resumed speech provisional when the previous quiet chunk finishes recognition", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const provider = controlledRecognition()
   return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const join = yield* voice.start(startVoiceRequest())
-        yield* frames(transport, 10)
-        yield* frames(transport, 50, 0)
+        yield* frames(transport, activity, 10)
+        yield* frames(transport, activity, 50, 0)
         yield* waitRequests(provider, 1)
-        yield* frames(transport, 10)
+        yield* frames(transport, activity, 10)
         provider.requests[0]?.finish("first")
         yield* settle
         expect((yield* page()).messages).toEqual([])
-        yield* frames(transport, 50, 0)
+        yield* frames(transport, activity, 50, 0)
         yield* waitRequests(provider, 2)
         provider.requests[1]?.finish("second")
         yield* waitAccepted(voice, join.sessionId)
@@ -134,29 +168,33 @@ it("keeps resumed speech provisional when the previous quiet chunk finishes reco
       }),
     fakeSynthesisLayer(),
     waiting,
-    provider.layer
+    provider.layer,
+    undefined,
+    undefined,
+    activity.layer
   )
 })
 
-it("fails the whole incomplete turn once, ignores stale chunk errors and suppresses its spoken suffix", () => {
+it("fails the whole incomplete turn once, ignores stale chunk errors and suppresses its spoken suffix", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const provider = controlledRecognition()
   return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const join = yield* voice.start(startVoiceRequest())
-        yield* frames(transport, 1010)
+        yield* frames(transport, activity, 1010)
         yield* waitRequests(provider, 2)
         provider.requests[0]?.fail()
         yield* settle
         provider.requests[1]?.fail()
-        yield* frames(transport, 10)
-        yield* frames(transport, 50, 0)
+        yield* frames(transport, activity, 10)
+        yield* frames(transport, activity, 50, 0)
         yield* settle
         expect((yield* page()).messages).toEqual([])
         expect(transport.published.filter((event) => event.kind === "Error")).toHaveLength(1)
-        yield* frames(transport, 10)
-        yield* frames(transport, 50, 0)
+        yield* frames(transport, activity, 10)
+        yield* frames(transport, activity, 50, 0)
         yield* waitRequests(provider, 3)
         provider.requests[2]?.finish("fresh")
         yield* waitAccepted(voice, join.sessionId)
@@ -165,18 +203,22 @@ it("fails the whole incomplete turn once, ignores stale chunk errors and suppres
       }),
     fakeSynthesisLayer(),
     waiting,
-    provider.layer
+    provider.layer,
+    undefined,
+    undefined,
+    activity.layer
   )
 })
 
-it("fences both late recognition success and failure when muted", () => {
+it("fences both late recognition success and failure when muted", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const provider = controlledRecognition()
   return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const join = yield* voice.start(startVoiceRequest())
-        yield* frames(transport, 1010)
+        yield* frames(transport, activity, 1010)
         yield* waitRequests(provider, 2)
         yield* voice.mute(join.sessionId, true)
         provider.requests[0]?.finish("stale")
@@ -188,11 +230,15 @@ it("fences both late recognition success and failure when muted", () => {
       }),
     fakeSynthesisLayer(),
     waiting,
-    provider.layer
+    provider.layer,
+    undefined,
+    undefined,
+    activity.layer
   )
 })
 
-it("rejects a recognition stream without Final instead of silently accepting its incomplete turn", () => {
+it("rejects a recognition stream without Final instead of silently accepting its incomplete turn", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const recognition = Layer.succeed(SpeechRecognition, {
     capabilities: {
       input: "supplied-audio",
@@ -209,7 +255,8 @@ it("rejects a recognition stream without Final instead of silently accepting its
       Effect.gen(function* () {
         const voice = yield* Voice
         const join = yield* voice.start(startVoiceRequest())
-        yield* transport.segment
+        yield* frames(transport, activity, 3)
+        yield* frames(transport, activity, 50, 0)
         yield* settle
         expect((yield* page()).messages).toEqual([])
         expect(transport.published.filter((event) => event.kind === "Error")).toHaveLength(1)
@@ -217,6 +264,9 @@ it("rejects a recognition stream without Final instead of silently accepting its
       }),
     fakeSynthesisLayer(),
     waiting,
-    recognition
+    recognition,
+    undefined,
+    undefined,
+    activity.layer
   )
 })

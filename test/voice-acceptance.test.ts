@@ -1,7 +1,16 @@
+import { classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { voiceAdmissionsFixture, startVoiceRequest } from "./voice-admission-fixture.ts"
-import { Effect, Fiber, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { expect, it } from "vitest"
-import { Voice, VoiceAdmissions } from "../src/voice/index.ts"
+import {
+  Voice,
+  VoiceTransport,
+  VoiceAdmissions,
+  VoiceLanguageConfiguration,
+  VoiceOutputConfiguration,
+  defaultVoiceLanguageConfiguration,
+  defaultVoiceOutputSettings
+} from "../src/voice/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
@@ -10,6 +19,7 @@ import { voiceTransportFixture } from "./voice-fixture.ts"
 it("reconciles a durable final after uncertain storage acknowledgement and session end", async () => {
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
+  const input = await Effect.runPromise(classifiedVoiceInput())
   const conversation = decoratedConversation(database.path, (storage) => ({
     ...storage,
     open: () => storage.open(),
@@ -26,9 +36,12 @@ it("reconciles a durable final after uncertain storage acknowledgement and sessi
     languages: ["ru", "fr", "en"],
     scripts: [{ events: [{ kind: "Final", text: "Durable speech", spans: [] }], delayMillis: 0, failure: null }]
   })
-  const voice = Voice.layer.pipe(
+  const voice = Voice.configuredLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        input.layer,
+        Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
+        Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings),
         conversation,
         transport.layer,
         provider,
@@ -44,7 +57,7 @@ it("reconciles a durable final after uncertain storage acknowledgement and sessi
           const sessions = yield* Voice
           const durable = yield* Conversation
           const join = yield* sessions.start(startVoiceRequest())
-          yield* transport.segment
+          yield* input.segment(transport)
           for (let index = 0; !transport.published.some((event) => event.kind === "Error") && index < 200; index++)
             yield* Effect.sleep(5)
           expect(transport.published.some((event) => event.kind === "Error")).toBe(true)
@@ -84,6 +97,29 @@ for (const rejected of [false, true])
       release = resolve
     })
     const transport = voiceTransportFixture()
+    const closed = await Effect.runPromise(Deferred.make<void>())
+    const closingTransport = Layer.effect(
+      VoiceTransport,
+      Effect.gen(function* () {
+        const base = yield* VoiceTransport
+        return VoiceTransport.of({
+          open: (...args) =>
+            base
+              .open(...args)
+              .pipe(
+                Effect.map((opened) => ({
+                  ...opened,
+                  connection: {
+                    ...opened.connection,
+                    close: () =>
+                      opened.connection.close().pipe(Effect.andThen(Deferred.succeed(closed, undefined)), Effect.asVoid)
+                  }
+                }))
+              )
+        })
+      })
+    ).pipe(Layer.provide(transport.layer))
+    const input = await Effect.runPromise(classifiedVoiceInput())
     const conversation = decoratedConversation(database.path, (storage) => ({
       ...storage,
       open: () => storage.open(),
@@ -103,11 +139,14 @@ for (const rejected of [false, true])
         { events: [{ kind: "Final", text: "Pending identified speech", spans: [] }], delayMillis: 0, failure: null }
       ]
     })
-    const voice = Voice.layer.pipe(
+    const voice = Voice.configuredLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          input.layer,
+          Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
+          Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings),
           conversation,
-          transport.layer,
+          closingTransport,
           provider,
           fakeSynthesisLayer(),
           voiceAdmissionsFixture().pipe(Layer.provide(conversation))
@@ -121,7 +160,7 @@ for (const rejected of [false, true])
             const sessions = yield* Voice
             const durable = yield* Conversation
             const join = yield* sessions.start(startVoiceRequest())
-            yield* transport.segment
+            yield* input.segment(transport)
             yield* Effect.sleep(50)
             const final = (yield* sessions.snapshot(join.sessionId, 0)).pending[0]
             if (final === undefined) throw new Error("Expected Final before durable acknowledgement")
@@ -132,7 +171,7 @@ for (const rejected of [false, true])
             }
             expect((yield* sessions.resolve({ admissions: [association] })).admissions[0]?.status).toBe("Unknown")
             const ending = yield* sessions.end(join.sessionId).pipe(Effect.forkChild)
-            yield* Effect.sleep(10)
+            yield* Deferred.await(closed).pipe(Effect.timeout("2 seconds"))
             expect(transport.closed()).toBe(true)
             expect((yield* sessions.resolve({ admissions: [association] })).admissions[0]?.status).toBe("Unknown")
             release?.()
@@ -159,6 +198,7 @@ it("keeps a read-back durable acceptance when its original acknowledgement later
     release = resolve
   })
   const transport = voiceTransportFixture()
+  const input = await Effect.runPromise(classifiedVoiceInput())
   const conversation = decoratedConversation(database.path, (storage) => ({
     ...storage,
     open: () => storage.open(),
@@ -179,8 +219,19 @@ it("keeps a read-back durable acceptance when its original acknowledgement later
       { events: [{ kind: "Final", text: "Durable before acknowledgement", spans: [] }], delayMillis: 0, failure: null }
     ]
   })
-  const voice = Voice.layer.pipe(
-    Layer.provide(Layer.mergeAll(conversation, transport.layer, provider, fakeSynthesisLayer(), admissions))
+  const voice = Voice.configuredLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        input.layer,
+        Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
+        Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings),
+        conversation,
+        transport.layer,
+        provider,
+        fakeSynthesisLayer(),
+        admissions
+      )
+    )
   )
   try {
     await Effect.runPromise(
@@ -189,7 +240,7 @@ it("keeps a read-back durable acceptance when its original acknowledgement later
           const sessions = yield* Voice
           const evidence = yield* VoiceAdmissions
           const join = yield* sessions.start(startVoiceRequest())
-          yield* transport.segment
+          yield* input.segment(transport)
           let snapshot = yield* sessions.snapshot(join.sessionId, 0)
           for (let index = 0; snapshot.pending[0]?.receipt == null && index < 200; index++) {
             yield* Effect.sleep(5)

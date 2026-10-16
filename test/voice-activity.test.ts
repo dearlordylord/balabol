@@ -13,7 +13,7 @@ import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
-import { withVoiceOutput } from "./voice-output-fixture.ts"
+import { classifiedVoiceInput, withVoiceOutput } from "./voice-output-fixture.ts"
 const settings = { modelPath: "fixture-model.onnx" }
 const frame = (sample: number): VoiceFrame => ({
   sampleRate: 16000,
@@ -87,12 +87,15 @@ it("rejects invalid inference output without falling back to energy and recovers
   )
 })
 
-it("ignores keyboard-energy windows before onset or admission while genuine classified speech still admits once", () => {
-  let speech = false
+it("ignores keyboard-energy windows before onset or admission while genuine classified speech still admits once", async () => {
   const layer = sileroSpeechActivityLayer(
     settings,
-    runtime(async () => ({ probability: speech ? 0.9 : 0.01, state: new Float32Array(256) }))
+    runtime(async (input) => ({
+      probability: input.slice(64).some((sample) => sample === 328 / 32768) ? 0.9 : 0.01,
+      state: new Float32Array(256)
+    }))
   )
+  const classified = await Effect.runPromise(classifiedVoiceInput(layer))
   return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
@@ -100,16 +103,14 @@ it("ignores keyboard-energy windows before onset or admission while genuine clas
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
         const input = yield* conversation.send({ deliveryId: crypto.randomUUID(), text: "Wait for my speech" })
-        for (let index = 0; index < 20; index++) yield* transport.send(transport.audio(2000))
+        for (let index = 0; index < 20; index++) yield* classified.send(transport, transport.audio(2000))
         yield* Effect.sleep(20)
         expect((yield* conversation.reply(input.deliveryId)).state).not.toBe("Interrupted")
         expect(
           (yield* conversation.page({ limit: 100 })).messages.filter((message) => message.role === "user")
         ).toHaveLength(1)
-        speech = true
-        for (let index = 0; index < 6; index++) yield* transport.send(transport.audio(328))
-        speech = false
-        for (let index = 0; index < 60; index++) yield* transport.send(transport.audio(0))
+        for (let index = 0; index < 6; index++) yield* classified.send(transport, transport.audio(328))
+        for (let index = 0; index < 60; index++) yield* classified.send(transport, transport.audio(0))
         let page = yield* conversation.page({ limit: 100 })
         for (
           let attempt = 0;
@@ -128,7 +129,7 @@ it("ignores keyboard-energy windows before onset or admission while genuine clas
     fakeRecognitionLayer(),
     undefined,
     undefined,
-    layer
+    classified.layer
   )
 })
 
@@ -202,7 +203,7 @@ it("preserves every classified source sample across a partial 512-sample ten-sec
   ).toEqual([{ started: false, ended: true, bytes: 32000 }])
 })
 
-it("fences classification finishing after mute and admits only fresh speech after resume", () => {
+it("fences classification finishing after mute and admits only fresh speech after resume", async () => {
   let complete: (value: unknown) => void = () => {
     throw new Error("No pending inference")
   }
@@ -214,25 +215,28 @@ it("fences classification finishing after mute and admits only fresh speech afte
     complete = resolve
   })
   let calls = 0
-  let speech = true
   const layer = sileroSpeechActivityLayer(
     settings,
-    runtime(async () => {
+    runtime(async (input) => {
       calls += 1
       if (calls === 1) {
         signalStarted()
         return await pending
       }
-      return { probability: speech ? 0.9 : 0.01, state: new Float32Array(256) }
+      return {
+        probability: input.slice(64).some((sample) => sample === 328 / 32768) ? 0.9 : 0.01,
+        state: new Float32Array(256)
+      }
     })
   )
+  const classified = await Effect.runPromise(classifiedVoiceInput(layer))
   return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        yield* transport.send(transport.audio(1200))
+        yield* classified.send(transport, transport.audio(1200))
         yield* transport.send(transport.audio(1200))
         yield* Effect.promise(() => started)
         yield* voice.mute(join.sessionId, true)
@@ -242,9 +246,8 @@ it("fences classification finishing after mute and admits only fresh speech afte
         expect((yield* voice.snapshot(join.sessionId, 0)).pending).toEqual([])
         expect(transport.captured).toEqual([])
         yield* voice.mute(join.sessionId, false)
-        for (let index = 0; index < 6; index++) yield* transport.send(transport.audio(328))
-        speech = false
-        for (let index = 0; index < 60; index++) yield* transport.send(transport.audio(0))
+        for (let index = 0; index < 6; index++) yield* classified.send(transport, transport.audio(328))
+        for (let index = 0; index < 60; index++) yield* classified.send(transport, transport.audio(0))
         let page = yield* conversation.page({ limit: 100 })
         for (let attempt = 0; page.messages.length === 0 && attempt < 200; attempt++) {
           yield* Effect.sleep(5)
@@ -258,6 +261,6 @@ it("fences classification finishing after mute and admits only fresh speech afte
     fakeRecognitionLayer(),
     undefined,
     undefined,
-    layer
+    classified.layer
   )
 })

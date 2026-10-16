@@ -1,16 +1,21 @@
 import { Deferred, Effect, Layer } from "effect"
 import { expect, it } from "vitest"
 import type { SpeechAdmission } from "../src/voice/index.ts"
-import { Voice, VoiceAdmissions, VoiceTransport } from "../src/voice/index.ts"
+import {
+  Voice,
+  VoiceAdmissions,
+  VoiceTransport,
+  defaultVoiceLanguageConfiguration,
+  defaultVoiceOutputSettings
+} from "../src/voice/index.ts"
 import { Conversation, type Message } from "../src/conversation/index.ts"
-import { withVoiceOutput, voiceOutputLayer } from "./voice-output-fixture.ts"
+import { withVoiceOutput, voiceOutputLayer, classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
-import { replyLayer } from "./reply-fixture.ts"
-import { voiceAdmissionsFixture, startVoiceRequest } from "./voice-admission-fixture.ts"
+import { startVoiceRequest } from "./voice-admission-fixture.ts"
 it("retries the same bootstrap without another room or refreshed credentials", () =>
   withVoiceOutput((transport) =>
     Effect.gen(function* () {
@@ -99,6 +104,7 @@ it("a finalized accepted input survives End and backend restart without replay o
   }
   try {
     const transport = voiceTransportFixture()
+    const capture = await Effect.runPromise(classifiedVoiceInput())
     const accepted = Deferred.makeUnsafe<void>()
     const transportLayer = Layer.effect(
       VoiceTransport,
@@ -134,7 +140,7 @@ it("a finalized accepted input survives End and backend restart without replay o
           const voice = yield* Voice
           const conversation = yield* Conversation
           const join = yield* voice.start(startVoiceRequest())
-          yield* transport.segment
+          yield* capture.segment(transport)
           yield* Deferred.await(accepted).pipe(Effect.timeout("2 seconds"))
           const pending = (yield* voice.snapshot(join.sessionId, 0)).pending[0]
           if (pending?.receipt == null) throw new Error("Expected durably accepted speech before ending the host")
@@ -147,7 +153,20 @@ it("a finalized accepted input survives End and backend restart without replay o
           }
           yield* voice.end(join.sessionId)
         })
-      ).pipe(Effect.provide(voiceOutputLayer(database.path, { ...transport, layer: transportLayer })))
+      ).pipe(
+        Effect.provide(
+          voiceOutputLayer(
+            database.path,
+            { ...transport, layer: transportLayer },
+            fakeSynthesisLayer(),
+            fakeAnswerLayer(0),
+            fakeRecognitionLayer(),
+            defaultVoiceLanguageConfiguration,
+            defaultVoiceOutputSettings,
+            capture.layer
+          )
+        )
+      )
     )
     const nextTransport = voiceTransportFixture()
     await Effect.runPromise(
@@ -297,89 +316,6 @@ it("validates checkpoint identities and rejects repeated or expired admission or
       expect((yield* store.find(association))?.state).toBe("Sealed")
     })
   ))
-it("reserves finalized speech before publication so conflicting direct text cannot take its delivery identity", async () => {
-  let conflictCode: string | undefined
-  const accepted = Deferred.makeUnsafe<void>()
-  const database = await temporaryDatabase()
-  const fixture = voiceTransportFixture()
-  const conversation = replyLayer(database.path, fakeAnswerLayer(0))
-  const transport = Layer.effect(
-    VoiceTransport,
-    Effect.gen(function* () {
-      const base = yield* VoiceTransport
-      const durable = yield* Conversation
-      return VoiceTransport.of({
-        open: (...args) =>
-          base.open(...args).pipe(
-            Effect.map((opened) => ({
-              ...opened,
-              connection: {
-                ...opened.connection,
-                publish: (event) =>
-                  event.kind === "Final"
-                    ? durable.send({ deliveryId: event.deliveryId, text: "Conflicting direct text" }).pipe(
-                        Effect.result,
-                        Effect.tap((result) =>
-                          Effect.sync(() => {
-                            conflictCode = result._tag === "Failure" ? result.failure._tag : undefined
-                          })
-                        ),
-                        Effect.asVoid
-                      )
-                    : opened.connection
-                        .publish(event)
-                        .pipe(
-                          Effect.andThen(
-                            event.kind === "Accepted" ? Deferred.succeed(accepted, undefined) : Effect.void
-                          ),
-                          Effect.asVoid
-                        )
-              }
-            }))
-          )
-      })
-    })
-  ).pipe(Layer.provide(fixture.layer), Layer.provide(conversation))
-  const admissions = voiceAdmissionsFixture().pipe(Layer.provide(conversation))
-  const voice = Voice.layer.pipe(
-    Layer.provide(Layer.mergeAll(conversation, transport, admissions, fakeRecognitionLayer(), fakeSynthesisLayer()))
-  )
-  try {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const sessions = yield* Voice
-          const join = yield* sessions.start(startVoiceRequest())
-          yield* fixture.segment
-          yield* Deferred.await(accepted).pipe(Effect.timeout("2 seconds"))
-          const first = yield* sessions.snapshot(join.sessionId, 0)
-          expect(conflictCode).toBe("DeliveryConflict")
-          expect(first.events.filter((event) => event.kind === "Accepted")).toHaveLength(1)
-          expect(first.pending[0]?.receipt?.text).toBe("Привет")
-          expect(first.pending[0]?.error).toBeNull()
-          const pending = first.pending[0]
-          if (pending === undefined) throw new Error("Expected finalized admission")
-          expect(
-            (yield* sessions.resolve({
-              admissions: [
-                {
-                  backendIncarnationId: pending.backendIncarnationId,
-                  sessionId: join.sessionId,
-                  deliveryId: pending.deliveryId
-                }
-              ]
-            })).admissions[0]?.status
-          ).toBe("Accepted")
-          expect(
-            (yield* sessions.snapshot(join.sessionId, 0)).events.filter((event) => event.kind === "Accepted")
-          ).toHaveLength(1)
-        })
-      ).pipe(Effect.provide(Layer.merge(voice, conversation)))
-    )
-  } finally {
-    await database.close()
-  }
-})
 it("keeps distinct allowed UTF-16 speech payloads distinct during durable resolution", () =>
   withVoiceOutput(() =>
     Effect.gen(function* () {

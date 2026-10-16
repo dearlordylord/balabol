@@ -1,7 +1,15 @@
 import { voiceAdmissionsFixture, startVoiceRequest } from "./voice-admission-fixture.ts"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import { describe, expect, it } from "vitest"
-import { Voice } from "../src/voice/index.ts"
+import {
+  Voice,
+  SpeechActivity,
+  fakeSpeechActivityLayer,
+  VoiceLanguageConfiguration,
+  VoiceOutputConfiguration,
+  defaultVoiceLanguageConfiguration,
+  defaultVoiceOutputSettings
+} from "../src/voice/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { SpeechRecognition, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
@@ -23,14 +31,49 @@ const script = (text: string, delayMillis = 0) =>
       }
     ]
   })
+const steadyFixture = Effect.gen(function* () {
+  const fixture = voiceTransportFixture()
+  const completed = yield* Queue.unbounded<void>()
+  const activity = Layer.effect(
+    SpeechActivity,
+    Effect.gen(function* () {
+      const real = yield* SpeechActivity
+      return SpeechActivity.of({
+        open: () =>
+          real
+            .open()
+            .pipe(
+              Effect.map((stream) => ({
+                reset: () => stream.reset(),
+                push: (frame) => stream.push(frame).pipe(Effect.tap(() => Queue.offer(completed, undefined)))
+              }))
+            )
+      })
+    })
+  ).pipe(Layer.provide(fakeSpeechActivityLayer))
+  const sendClassified = (sample: number, track?: string) =>
+    fixture.send(fixture.audio(sample), track).pipe(Effect.andThen(Queue.take(completed)), Effect.timeout("2 seconds"))
+  const classifiedSegment = Effect.gen(function* () {
+    for (let frame = 0; frame < 3; frame++) yield* sendClassified(1200)
+    for (let frame = 0; frame < 50; frame++) yield* sendClassified(0)
+  })
+  return { ...fixture, activity, sendClassified, classifiedSegment }
+})
 const runVoice = async (
-  program: (fixture: ReturnType<typeof voiceTransportFixture>) => Effect.Effect<void, unknown, Voice | Conversation>,
+  program: (fixture: Effect.Success<typeof steadyFixture>) => Effect.Effect<void, unknown, Voice | Conversation>,
   provider = script("Bonjour")
 ) => {
   const database = await temporaryDatabase()
-  const fixture = voiceTransportFixture()
+  const fixture = await Effect.runPromise(steadyFixture)
   const conversation = replyLayer(database.path, fakeAnswerLayer())
-  const voice = Voice.layer.pipe(
+  const voice = Voice.configuredLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        fixture.activity,
+        Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
+        Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings)
+      )
+    ),
     Layer.provide(
       Layer.mergeAll(
         conversation,
@@ -58,7 +101,7 @@ describe("voice input uses the sole durable conversation", () => {
         yield* voice.authorize(joined.sessionId, joined.controlToken)
         expect((yield* Effect.flip(voice.authorize(joined.sessionId, "wrong"))).code).toBe("Unauthorized")
         expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("VoiceBusy")
-        yield* fixture.segment
+        yield* fixture.classifiedSegment
         let snapshot = yield* voice.snapshot(joined.sessionId, 0)
         for (let attempt = 0; !snapshot.events.some((event) => event.kind === "Accepted") && attempt < 200; attempt++) {
           yield* Effect.sleep(5)
@@ -84,9 +127,9 @@ describe("voice input uses the sole durable conversation", () => {
           const voice = yield* Voice
           const conversation = yield* Conversation
           const joined = yield* voice.start(startVoiceRequest())
-          yield* fixture.send(fixture.audio(0))
+          yield* fixture.sendClassified(0)
           yield* fixture.send({ ...fixture.audio(1000), channels: 2 })
-          yield* fixture.segment
+          yield* fixture.classifiedSegment
           yield* settle
           const discarded = (yield* voice.snapshot(joined.sessionId, 0)).events.filter(
             (event) => event.kind === "Interim" || event.kind === "Discarded"
@@ -105,7 +148,7 @@ describe("voice input uses the sole durable conversation", () => {
           const voice = yield* Voice
           const conversation = yield* Conversation
           const joined = yield* voice.start(startVoiceRequest())
-          yield* fixture.segment
+          yield* fixture.classifiedSegment
           yield* voice.mute(joined.sessionId, true)
           yield* fixture.segment
           yield* voice.end(joined.sessionId)
@@ -124,9 +167,9 @@ it("queues recognition chunks without treating three pauses as overload and reta
         const voice = yield* Voice
         const conversation = yield* Conversation
         const first = yield* voice.start(startVoiceRequest())
-        yield* fixture.segment
-        yield* fixture.segment
-        yield* fixture.segment
+        yield* fixture.classifiedSegment
+        yield* fixture.classifiedSegment
+        yield* fixture.classifiedSegment
         const overloaded = yield* voice.snapshot(first.sessionId, 0)
         expect(overloaded.events.some((event) => event.kind === "Error")).toBe(false)
         yield* voice.end(first.sessionId)
@@ -147,7 +190,7 @@ it("reports deterministic recognition failures without saving an input", () =>
         const voice = yield* Voice
         const conversation = yield* Conversation
         const session = yield* voice.start(startVoiceRequest())
-        yield* fixture.segment
+        yield* fixture.classifiedSegment
         yield* settle
         expect(
           (yield* voice.snapshot(session.sessionId, 0)).events.some(
@@ -191,18 +234,18 @@ it("ignores isolated transients before admitting sustained speech without consum
         const voice = yield* Voice
         const conversation = yield* Conversation
         const joined = yield* voice.start(startVoiceRequest())
-        yield* fixture.send(fixture.audio(1200))
-        for (let frame = 0; frame < 50; frame++) yield* fixture.send(fixture.audio(0))
-        for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200))
-        yield* fixture.send(fixture.audio(0))
-        yield* fixture.send(fixture.audio(1200))
-        for (let frame = 0; frame < 50; frame++) yield* fixture.send(fixture.audio(0))
+        yield* fixture.sendClassified(1200)
+        for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0)
+        for (let frame = 0; frame < 2; frame++) yield* fixture.sendClassified(1200)
+        yield* fixture.sendClassified(0)
+        yield* fixture.sendClassified(1200)
+        for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0)
         yield* settle
         expect((yield* voice.snapshot(joined.sessionId, 0)).events).toEqual([])
         expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
         expect(received).toEqual([])
-        for (const sample of [1200, 1300, 1400]) yield* fixture.send(fixture.audio(sample))
-        for (let frame = 0; frame < 50; frame++) yield* fixture.send(fixture.audio(0))
+        for (const sample of [1200, 1300, 1400]) yield* fixture.sendClassified(sample)
+        for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0)
         yield* settle
         const snapshot = yield* voice.snapshot(joined.sessionId, 0)
         const accepted = snapshot.events.filter((event) => event.kind === "Accepted")
@@ -221,24 +264,24 @@ it("clears tentative onset when microphone tracks, mute state or sessions change
       const voice = yield* Voice
       const conversation = yield* Conversation
       const first = yield* voice.start(startVoiceRequest())
-      for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200))
+      for (let frame = 0; frame < 2; frame++) yield* fixture.sendClassified(1200)
       yield* voice.mute(first.sessionId, true)
       yield* voice.mute(first.sessionId, false)
-      yield* fixture.send(fixture.audio(1200))
-      for (let frame = 0; frame < 50; frame++) yield* fixture.send(fixture.audio(0))
-      for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200))
-      yield* fixture.send(fixture.audio(1200), "replacement")
-      for (let frame = 0; frame < 50; frame++) yield* fixture.send(fixture.audio(0), "replacement")
-      for (let frame = 0; frame < 2; frame++) yield* fixture.send(fixture.audio(1200), "replacement")
+      yield* fixture.sendClassified(1200)
+      for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0)
+      for (let frame = 0; frame < 2; frame++) yield* fixture.sendClassified(1200)
+      yield* fixture.sendClassified(1200, "replacement")
+      for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0, "replacement")
+      for (let frame = 0; frame < 2; frame++) yield* fixture.sendClassified(1200, "replacement")
       yield* voice.end(first.sessionId)
       const second = yield* voice.start(startVoiceRequest())
-      yield* fixture.send(fixture.audio(1200))
-      for (let frame = 0; frame < 50; frame++) yield* fixture.send(fixture.audio(0))
+      yield* fixture.sendClassified(1200)
+      for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0)
       yield* settle
       expect((yield* voice.snapshot(first.sessionId, 0)).pending).toEqual([])
       expect((yield* voice.snapshot(second.sessionId, 0)).events).toEqual([])
       expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
-      yield* fixture.segment
+      yield* fixture.classifiedSegment
       yield* settle
       expect((yield* voice.snapshot(second.sessionId, 0)).events.some((event) => event.kind === "Accepted")).toBe(true)
     })

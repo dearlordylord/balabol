@@ -1,13 +1,41 @@
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Queue, Stream } from "effect"
 import { expect, it } from "vitest"
 import { AnswerGeneration, fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
 import { SpeechRecognition, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { SpeechSynthesis, fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
-import { Voice } from "../src/voice/index.ts"
+import { Voice, SpeechActivity, fakeSpeechActivityLayer } from "../src/voice/index.ts"
 import { waitForReply } from "./reply-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { withVoiceOutput, waitForOutput } from "./voice-output-fixture.ts"
+
+const classifiedActivity = Effect.gen(function* () {
+  const completed = yield* Queue.unbounded<void>()
+  const layer = Layer.effect(
+    SpeechActivity,
+    Effect.gen(function* () {
+      const real = yield* SpeechActivity
+      return SpeechActivity.of({
+        open: () =>
+          real
+            .open()
+            .pipe(
+              Effect.map((stream) => ({
+                reset: () => stream.reset(),
+                push: (frame) => stream.push(frame).pipe(Effect.tap(() => Queue.offer(completed, undefined)))
+              }))
+            )
+      })
+    })
+  ).pipe(Layer.provide(fakeSpeechActivityLayer))
+  return { layer, completed }
+})
+
+const sendClassified = (
+  transport: Parameters<Parameters<typeof withVoiceOutput>[0]>[0],
+  completed: Queue.Queue<void>,
+  sample: number
+) => transport.send(transport.audio(sample)).pipe(Effect.andThen(Queue.take(completed)), Effect.timeout("2 seconds"))
 
 const fullInput = "Запомни мой тестовый код сорок два"
 const waitingAnswer = Layer.succeed(AnswerGeneration, {
@@ -54,7 +82,8 @@ const acceptedPage = (conversation: Conversation["Service"]) =>
 
 // Public-Voice regressions use supplied synthetic PCM and deterministic providers;
 // no microphone, real inference, synthesis output or private utterance is used.
-it("keeps an 800ms natural pause inside one utterance and admits its complete input exactly once", () => {
+it("keeps an 800ms natural pause inside one utterance and admits its complete input exactly once", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const recognizedFrames: number[] = []
   return withVoiceOutput(
     (transport) =>
@@ -62,16 +91,16 @@ it("keeps an 800ms natural pause inside one utterance and admits its complete in
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        for (let frame = 0; frame < 30; frame++) yield* transport.send(transport.audio(1200))
-        for (let frame = 0; frame < 20; frame++) yield* transport.send(transport.audio(0))
+        for (let frame = 0; frame < 30; frame++) yield* sendClassified(transport, activity.completed, 1200)
+        for (let frame = 0; frame < 20; frame++) yield* sendClassified(transport, activity.completed, 0)
         expect(recognizedFrames).toEqual([])
         expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
-        for (let frame = 0; frame < 20; frame++) yield* transport.send(transport.audio(0))
+        for (let frame = 0; frame < 20; frame++) yield* sendClassified(transport, activity.completed, 0)
         expect(recognizedFrames).toEqual([])
-        for (let frame = 0; frame < 20; frame++) yield* transport.send(transport.audio(1200))
-        for (let frame = 0; frame < 49; frame++) yield* transport.send(transport.audio(0))
+        for (let frame = 0; frame < 20; frame++) yield* sendClassified(transport, activity.completed, 1200)
+        for (let frame = 0; frame < 49; frame++) yield* sendClassified(transport, activity.completed, 0)
         expect(recognizedFrames).toEqual([])
-        yield* transport.send(transport.audio(0))
+        yield* sendClassified(transport, activity.completed, 0)
         const page = yield* acceptedPage(conversation)
         expect(page.messages.map((message) => message.text)).toEqual([fullInput])
         expect(recognizedFrames).toHaveLength(1)
@@ -82,7 +111,10 @@ it("keeps an 800ms natural pause inside one utterance and admits its complete in
       }),
     fakeSynthesisLayer(),
     waitingAnswer,
-    recordingRecognition(recognizedFrames)
+    recordingRecognition(recognizedFrames),
+    undefined,
+    undefined,
+    activity.layer
   )
 })
 
@@ -127,7 +159,8 @@ it("ignores low-RMS sparse breath peaks while a reply waits but interrupts on su
     waitingAnswer
   ))
 
-it("keeps bounded recognition chunks separate from a twenty-five-second spoken turn", () => {
+it("keeps bounded recognition chunks separate from a twenty-five-second spoken turn", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
   const recognizedFrames: number[] = []
   return withVoiceOutput(
     (transport) =>
@@ -135,11 +168,11 @@ it("keeps bounded recognition chunks separate from a twenty-five-second spoken t
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        for (let frame = 0; frame < 1250; frame++) yield* transport.send(transport.audio(1200))
+        for (let frame = 0; frame < 1250; frame++) yield* sendClassified(transport, activity.completed, 1200)
         expect(recognizedFrames).toEqual([160000, 160000])
         expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
         expect(transport.published.filter((event) => event.kind === "Final")).toEqual([])
-        for (let frame = 0; frame < 50; frame++) yield* transport.send(transport.audio(0))
+        for (let frame = 0; frame < 50; frame++) yield* sendClassified(transport, activity.completed, 0)
         expect((yield* acceptedPage(conversation)).messages.map((message) => message.text)).toEqual([
           `${fullInput} ${fullInput} ${fullInput}`
         ])
@@ -149,7 +182,10 @@ it("keeps bounded recognition chunks separate from a twenty-five-second spoken t
       }),
     fakeSynthesisLayer(),
     waitingAnswer,
-    recordingRecognition(recognizedFrames)
+    recordingRecognition(recognizedFrames),
+    undefined,
+    undefined,
+    activity.layer
   )
 })
 

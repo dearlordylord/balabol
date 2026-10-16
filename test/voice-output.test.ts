@@ -7,7 +7,7 @@ import { AnswerGeneration, fakeAnswerLayer } from "../src/answer-generation/inde
 import type { AnswerEvent } from "../src/answer-generation/index.ts"
 import { Voice } from "../src/voice/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
-import { withVoiceOutput, outputInput, waitForOutput } from "./voice-output-fixture.ts"
+import { withVoiceOutput, outputInput, waitForOutput, classifiedVoiceInput } from "./voice-output-fixture.ts"
 it("starts no reply PCM before exact publication readiness and settles durable output only after delivery", () =>
   withVoiceOutput((transport) =>
     Effect.gen(function* () {
@@ -42,8 +42,9 @@ it("starts no reply PCM before exact publication readiness and settles durable o
       expect((yield* conversation.page({ limit: 100 })).messages).toHaveLength(2)
     })
   ))
-it("speech onset fences audio before final recognition and empty recognition cannot resume it", () =>
-  withVoiceOutput(
+it("speech onset fences audio before final recognition and empty recognition cannot resume it", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
+  return withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {
         const voice = yield* Voice
@@ -61,13 +62,13 @@ it("speech onset fences audio before final recognition and empty recognition can
         yield* waitForOutput(voice, join.sessionId, "Playing")
         for (let attempt = 0; transport.captured.length === 0 && attempt < 100; attempt++) yield* Effect.sleep(5)
         expect(transport.captured.length).toBeGreaterThan(0)
-        for (let frame = 0; frame < 2; frame++) yield* transport.send(transport.audio(1200))
+        for (let frame = 0; frame < 2; frame++) yield* input.send(transport, transport.audio(1200))
         expect((yield* voice.snapshot(join.sessionId, 0)).output?.status).toBe("Playing")
-        yield* transport.send(transport.audio(1200))
+        yield* input.send(transport, transport.audio(1200))
         const stopped = yield* waitForOutput(voice, join.sessionId, "Interrupted")
         expect(stopped.output?.status).toBe("Interrupted")
         const count = transport.captured.length
-        for (let frame = 0; frame < 50; frame++) yield* transport.send(transport.audio(0))
+        for (let frame = 0; frame < 50; frame++) yield* input.send(transport, transport.audio(0))
         yield* Effect.sleep(150)
         expect((yield* voice.snapshot(join.sessionId, 0)).events.some((event) => event.kind === "Discarded")).toBe(true)
         expect(transport.captured).toHaveLength(count)
@@ -85,8 +86,12 @@ it("speech onset fences audio before final recognition and empty recognition can
     fakeRecognitionLayer({
       languages: ["ru", "fr", "en"],
       scripts: [{ events: [{ kind: "Final", text: "", spans: [] }], delayMillis: 0, failure: null }]
-    })
-  ))
+    }),
+    undefined,
+    undefined,
+    input.layer
+  )
+})
 it("keeps an emoji whole at the phrase bound without dropping ordered reply text", () => {
   const text = `${"x".repeat(799)}😀fin.`
   const phrases: string[] = []
