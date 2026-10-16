@@ -58,6 +58,7 @@ const configured = (files, action) =>
       "tsconfig.json",
       "tsconfig.build.json",
       "vitest.config.ts",
+      "vitest.slow.config.ts",
       "dprint.json",
       "oxlint.complexity.json",
       ".oxlintrc.json",
@@ -671,3 +672,27 @@ test("Layer runner provenance does not leak into an unrelated outer object", () 
     "lint",
     true,
   ));
+
+test("fast behavior excludes slow tests and explicit slow invocation excludes fast tests", () => {
+  configured(
+    {
+      "src/index.ts": increment,
+      "test/index.test.ts": positiveTests,
+      "test/index.slow.test.ts":
+        'import { it } from "vitest"; it("manual slow sentinel", () => { throw new Error("SLOW_SENTINEL") })',
+    },
+    (root) => {
+      const fast = run(root, "behavior");
+      assert.equal(fast.status, 0, fast.stdout + fast.stderr);
+      writeFileSync(join(root, "test/index.test.ts"), 'throw new Error("FAST_SENTINEL")');
+      const slow = spawnSync(
+        process.execPath,
+        [resolve("node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.slow.config.ts"],
+        { cwd: root, encoding: "utf8" },
+      );
+      assert.notEqual(slow.status, 0);
+      assert.match(slow.stdout + slow.stderr, /SLOW_SENTINEL/);
+      assert.doesNotMatch(slow.stdout + slow.stderr, /FAST_SENTINEL/);
+    },
+  );
+});

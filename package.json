@@ -20,6 +20,8 @@
     "typecheck:tsc": "node scripts/quality/cli.mjs compiler",
     "typecheck:effect": "node scripts/quality/cli.mjs effect",
     "test": "node scripts/quality/cli.mjs behavior",
+    "test:fast": "node scripts/quality/cli.mjs behavior",
+    "test:slow": "vitest run --config vitest.slow.config.ts",
     "test:coverage": "node scripts/quality/cli.mjs behavior",
     "test:harness": "node --test scripts/quality/cli.test.mjs scripts/dev-voice.test.mjs scripts/prepare-vad.test.mjs",
     "lint": "node scripts/quality/cli.mjs lint && node scripts/quality/cli.mjs duplication",

@@ -1,46 +1,8 @@
 import { Effect } from "effect"
 import { expect, it } from "vitest"
-import { SqliteMemoryStorage, sqliteStorageLayer } from "../src/memory/index.ts"
-import {
-  PersonalKnowledge,
-  sqliteKnowledgeLayer,
-  knowledgeLimits,
-  type Change,
-  type Entity
-} from "../src/personal-knowledge/index.ts"
+import { PersonalKnowledge, knowledgeLimits, type Change } from "../src/personal-knowledge/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
-
-const inputDeliveryId = "11111111-1111-4111-8111-111111111111"
-const responseId = "22222222-2222-4222-8222-222222222222"
-const context = (operationId: string) => ({ inputDeliveryId, responseId, operationId })
-const identity = (index: number) => `aaaaaaaa-aaaa-4aaa-8aaa-${index.toString(16).padStart(12, "0")}`
-const entities = (start: number, count: number, size: number): readonly Entity[] =>
-  Array.from({ length: count }, (_, offset) => ({
-    id: identity(start + offset),
-    type: "Entry",
-    values: { text: "x".repeat(size) }
-  }))
-const creation = (creates: readonly Entity[]): Change => ({
-  reason: "Retain bounded structured values",
-  types: [],
-  creates,
-  updates: []
-})
-const declaration: Change = {
-  reason: "Declare entries",
-  types: [{ name: "Entry", fields: [{ name: "text", kind: "string", required: true }] }],
-  creates: [],
-  updates: []
-}
-const opened = <A, E>(path: string, program: Effect.Effect<A, E, PersonalKnowledge>) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { storage } = yield* SqliteMemoryStorage
-        return yield* program.pipe(Effect.provide(sqliteKnowledgeLayer(storage.database)))
-      }).pipe(Effect.provide(sqliteStorageLayer(path)))
-    )
-  )
+import { context, identity, entities, creation, declaration, opened } from "./knowledge-limits-fixture.ts"
 
 it("accepts the schema type and field ceilings and rejects larger schemas without publishing a revision", async () => {
   const database = await temporaryDatabase()
@@ -194,26 +156,3 @@ it("reports query and four-MiB state byte limits without truncating or advancing
     await database.close()
   }
 }, 20_000)
-
-it("accepts ten thousand small entities and rejects entity 10001 while retaining accepted history", async () => {
-  const database = await temporaryDatabase()
-  try {
-    await opened(
-      database.path,
-      Effect.gen(function* () {
-        const knowledge = yield* PersonalKnowledge
-        yield* knowledge.apply(declaration, context("declare"))
-        for (let batch = 0; batch < 100; batch++)
-          yield* knowledge.apply(creation(entities(batch * 100, 100, 0)), context(`batch${batch}`))
-        expect((yield* knowledge.revision(101)).entities).toHaveLength(10_000)
-        expect(
-          yield* knowledge.apply(creation(entities(10_000, 1, 0)), context("excess-entity")).pipe(Effect.result)
-        ).toMatchObject({ _tag: "Failure", failure: { code: "LimitExceeded" } })
-        expect((yield* knowledge.inspect()).revision).toBe(101)
-        expect((yield* knowledge.revision(2)).entities).toEqual(entities(0, 100, 0))
-      })
-    )
-  } finally {
-    await database.close()
-  }
-}, 30_000)

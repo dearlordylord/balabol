@@ -4,4 +4,4 @@ command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks is required; install it 
 pnpm secrets:staged
 pnpm exec lint-staged
 pnpm typecheck
-pnpm test
+pnpm test:fast
