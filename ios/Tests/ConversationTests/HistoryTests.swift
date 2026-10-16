@@ -29,6 +29,11 @@ actor PageTransport: ConversationTransport {
   func send(_ delivery: PendingDelivery) async throws -> ConversationMessage {
     throw ConversationFailure.unavailable
   }
+  func olderHistory(before: Int?) async throws -> OlderHistoryPage {
+    cursors.append(before)
+    let page = pages.removeFirst()
+    return OlderHistoryPage(messages: page.messages, nextBefore: page.nextAfter)
+  }
   func history(after: Int?) async throws -> HistoryPage {
     cursors.append(after)
     return pages.removeFirst()
@@ -41,7 +46,7 @@ final class PagingTests: XCTestCase {
     let first = ConversationMessage(deliveryId: UUID(), recordId: 9, position: 0, text: "First")
     let second = ConversationMessage(deliveryId: UUID(), recordId: 30, position: 1, text: "Second")
     let transport = PageTransport(pages: [
-      HistoryPage(messages: [first], nextAfter: 0), HistoryPage(messages: [second], nextAfter: nil),
+      HistoryPage(messages: [second], nextAfter: 1), HistoryPage(messages: [first], nextAfter: nil),
     ])
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
     await model.start()
@@ -49,7 +54,7 @@ final class PagingTests: XCTestCase {
     await model.loadHistory()
     XCTAssertEqual(model.messages.map(\.text), ["First", "Second"])
     let cursors = await transport.cursors
-    XCTAssertEqual(cursors, [nil, 0])
+    XCTAssertEqual(cursors, [nil, 1])
     XCTAssertNil(model.failure)
   }
   func testConflictingHistoryReceiptCannotClearPendingDraft() async throws {

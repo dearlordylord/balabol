@@ -11,13 +11,13 @@ import XCTest
     await model.loadHistory()
     model.editDraft("Independent draft")
     await model.flushDraft()
-    let cursor = model.state.historyCursor
-    let next = model.nextAfter
+    let cursor = 6
+    let next = model.nextBefore
     await transport.exposeCurrent()
     model.refreshReconnectDisplay()
     await settle { model.messages.count == 3 }
     XCTAssertEqual(model.state.historyCursor, cursor)
-    XCTAssertEqual(model.nextAfter, next)
+    XCTAssertEqual(model.nextBefore, next)
     XCTAssertEqual(model.draft, "Independent draft")
     XCTAssertNil(model.pendingDelivery)
     XCTAssertEqual(model.messages.map(\.text), ["Earlier", "Voice input", "Answer"])
@@ -50,7 +50,7 @@ import XCTest
     await settle { model.messages.count == 4 }
     XCTAssertEqual(model.messages.last, newer)
     XCTAssertEqual(model.state.reply, .idle)
-    XCTAssertEqual(model.state.historyCursor, 0)
+    XCTAssertEqual(model.state.historyCursor, 6)
     XCTAssertEqual(model.draft, "Still mine")
     let observers = await transport.observers
     XCTAssertEqual(observers, 0)

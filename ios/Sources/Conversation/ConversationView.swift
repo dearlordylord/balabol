@@ -10,6 +10,9 @@
     #endif
     @FocusState private var draftFocused: Bool
     @State private var followsLatest = true
+    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var transcriptFrame: CGRect = .zero
+    @State private var olderAnchor: ConversationReadingAnchor?
     @Bindable private var model: ConversationViewModel
     private let controls: Controls
     private let details: Details
@@ -45,8 +48,33 @@
               if model.messages.isEmpty && !model.replyIsWaiting && model.replyText.isEmpty {
                 introduction
               }
-              ForEach(model.messages) { message in
-                messageRow(message).id(message.deliveryId)
+              if model.nextBefore != nil {
+                Button {
+                  followsLatest = false
+                  olderAnchor = ConversationReadingAnchor(
+                    frames: rowFrames, viewport: transcriptFrame)
+                  Task {
+                    await model.loadOlderHistory()
+                    if model.historyFailure != nil { olderAnchor = nil }
+                  }
+                } label: {
+                  Label("Load older messages", systemImage: "arrow.up.circle")
+                    .frame(minHeight: 44)
+                }
+                .disabled(model.isLoading)
+                .accessibilityIdentifier("load-older-messages")
+
+              }
+              ForEach(model.messages, id: \.deliveryId.uuidString) { message in
+                messageRow(message)
+                  .background {
+                    GeometryReader { geometry in
+                      Color.clear.preference(
+                        key: ConversationRowFrames.self,
+                        value: [message.deliveryId.uuidString: geometry.frame(in: .global)])
+                    }
+                  }
+                  .id(message.deliveryId.uuidString)
               }
               details
               if model.replyIsWaiting || !model.replyText.isEmpty {
@@ -55,16 +83,6 @@
               replyNotices
               historyNotices
               draftNotices
-              if model.nextAfter != nil {
-                Button {
-                  followsLatest = false
-                  Task { await model.loadHistory() }
-                } label: {
-                  Label("Load more", systemImage: "arrow.down.circle")
-                    .frame(minHeight: 44)
-                }
-                .disabled(model.isLoading)
-              }
               DisclosureGroup("About this prototype") {
                 Text(
                   "Providers are configured on your Mac. Scripted replies and speech may be enabled."
@@ -75,13 +93,46 @@
               .font(.footnote).foregroundStyle(.primary.opacity(0.75))
               Color.clear.frame(height: 1).id("latest-message").accessibilityHidden(true)
             }
+            .scrollTargetLayout()
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
           }
+          .background {
+            GeometryReader { geometry in
+              Color.clear
+                .onAppear { transcriptFrame = geometry.frame(in: .global) }
+                .onChange(of: geometry.frame(in: .global)) { _, frame in
+                  transcriptFrame = frame
+                  olderAnchor = nil
+                }
+            }
+          }
+          .onPreferenceChange(ConversationRowFrames.self) { frames in
+            rowFrames = frames
+            if var anchor = olderAnchor, anchor.isRestoring,
+              let frame = frames[anchor.message], frame.intersects(transcriptFrame)
+            {
+              if anchor.refine(using: frame) {
+                olderAnchor = anchor
+                proxy.scrollTo(anchor.message, anchor: anchor.alignment)
+              } else {
+                olderAnchor = nil
+              }
+            }
+          }
+          .onChange(of: model.messages.first?.deliveryId) { _, _ in
+            if var anchor = olderAnchor {
+              anchor.isRestoring = true
+              olderAnchor = anchor
+              proxy.scrollTo(anchor.message, anchor: anchor.alignment)
+            }
+          }
+          .defaultScrollAnchor(.bottom)
           .accessibilityIdentifier("conversation-transcript")
           .scrollDismissesKeyboard(.interactively)
           .simultaneousGesture(
             DragGesture(minimumDistance: 12).onChanged { value in
+              if abs(value.translation.height) > 12 { olderAnchor = nil }
               if value.translation.height > 12 { followsLatest = false }
             }
           )
@@ -90,6 +141,7 @@
               && (!model.messages.isEmpty || model.replyIsWaiting || !model.replyText.isEmpty)
             {
               Button {
+                olderAnchor = nil
                 followsLatest = true
                 proxy.scrollTo("latest-message", anchor: .bottom)
               } label: {
@@ -100,6 +152,9 @@
               .padding(8)
               .accessibilityIdentifier("latest-message")
             }
+          }
+          .onChange(of: model.isSending) { _, sending in
+            if sending { olderAnchor = nil }
           }
           .onChange(of: model.messages.count) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyText) { _, _ in scrollToLatest(proxy) }

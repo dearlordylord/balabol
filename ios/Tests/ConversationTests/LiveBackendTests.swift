@@ -32,7 +32,7 @@ final class LiveBackendTests: XCTestCase {
     await reopened.start()
     repeat {
       await reopened.loadHistory()
-    } while reopened.nextAfter != nil && reopened.failure == nil
+    } while reopened.nextBefore != nil && reopened.failure == nil
     XCTAssertNil(reopened.failure)
     XCTAssertEqual(reopened.messages.filter { $0.deliveryId == accepted.deliveryId }, [accepted])
   }

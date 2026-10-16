@@ -1,7 +1,7 @@
 import { Effect, Schema, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { DeliveryId } from "../memory/index.ts"
-import { maximumPageSize, Reply, CurrentTurn } from "./contracts.ts"
+import { maximumPageSize, Reply, CurrentTurn, OlderPageRequest, OlderMessagePage } from "./contracts.ts"
 import type { DeliveryConflict, ReplyBusy, ReplyNotFound, StorageUnavailable } from "./contracts.ts"
 import { ResponseTarget } from "./delivery.ts"
 import { Conversation, ErrorResponse, InvalidInput, Message, MessagePage, PageRequest, SendMessage } from "./service.ts"
@@ -10,14 +10,25 @@ const readPage = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest
   const url = new URL(request.url, "http://localhost")
   const after = url.searchParams.get("after")
+  const before = url.searchParams.get("before")
+  const direction = url.searchParams.get("direction")
   const limit = url.searchParams.get("limit")
-  const raw = {
-    ...(after === null ? {} : { after: Number(after) }),
-    limit: limit === null ? maximumPageSize : Number(limit)
+  const size = limit === null ? maximumPageSize : Number(limit)
+  const invalid = () => new InvalidInput({ message: "Invalid page cursor, direction or limit" })
+  if (direction === "older") {
+    if (after !== null) return yield* invalid()
+    const input = yield* Schema.decodeUnknownEffect(OlderPageRequest)({
+      ...(before === null ? {} : { before: Number(before) }),
+      limit: size
+    }).pipe(Effect.mapError(invalid))
+    return { direction: Schema.decodeUnknownSync(Schema.Literal("older"))("older"), input }
   }
-  return yield* Schema.decodeUnknownEffect(PageRequest)(raw).pipe(
-    Effect.mapError(() => new InvalidInput({ message: "Invalid page cursor or limit" }))
-  )
+  if (direction !== null || before !== null) return yield* invalid()
+  const input = yield* Schema.decodeUnknownEffect(PageRequest)({
+    ...(after === null ? {} : { after: Number(after) }),
+    limit: size
+  }).pipe(Effect.mapError(invalid))
+  return { direction: Schema.decodeUnknownSync(Schema.Literal("newer"))("newer"), input }
 })
 const send = Effect.gen(function* () {
   const input = yield* HttpServerRequest.schemaBodyJson(SendMessage).pipe(
@@ -29,7 +40,9 @@ const send = Effect.gen(function* () {
 const page = Effect.gen(function* () {
   const input = yield* readPage
   const conversation = yield* Conversation
-  return yield* HttpServerResponse.schemaJson(MessagePage)(yield* conversation.page(input))
+  return input.direction === "older"
+    ? yield* HttpServerResponse.schemaJson(OlderMessagePage)(yield* conversation.olderPage(input.input))
+    : yield* HttpServerResponse.schemaJson(MessagePage)(yield* conversation.page(input.input))
 })
 const conflictStatus = 409
 const invalidStatus = 400

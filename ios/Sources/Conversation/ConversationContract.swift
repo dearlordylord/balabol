@@ -105,6 +105,28 @@ public struct HistoryPage: Codable, Equatable, Sendable {
   }
 }
 
+/// Latest window, ordered chronologically; the exclusive cursor walks into the past.
+public struct OlderHistoryPage: Codable, Equatable, Sendable {
+  public static let maximumMessages = 100
+  public let messages: [ConversationMessage]
+  public let nextBefore: Int?
+  public init(messages: [ConversationMessage], nextBefore: Int?) {
+    self.messages = messages
+    self.nextBefore = nextBefore
+  }
+  private enum CodingKeys: String, CodingKey { case messages, nextBefore }
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    messages = try container.decode([ConversationMessage].self, forKey: .messages)
+    nextBefore = try container.decode(Int?.self, forKey: .nextBefore)
+  }
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(messages, forKey: .messages)
+    try container.encode(nextBefore, forKey: .nextBefore)
+  }
+}
+
 public enum ConversationFailure: Error, Equatable, Sendable {
   case invalidInput
   case invalidResponse
@@ -118,6 +140,7 @@ public protocol ConversationTransport: Sendable {
   func currentTurn() async throws -> CurrentTurn?
   func retryReply(for inputDeliveryId: UUID) async throws -> ReplySnapshot
   func send(_ delivery: PendingDelivery) async throws -> ConversationMessage
+  func olderHistory(before: Int?) async throws -> OlderHistoryPage
   func history(after: Int?) async throws -> HistoryPage
   func replySnapshot(for inputDeliveryId: UUID) async throws -> ReplySnapshot
   func observeReply(for inputDeliveryId: UUID) async throws -> ReplyObservation

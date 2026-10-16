@@ -50,7 +50,7 @@ public struct ConversationState: Equatable, Sendable {
   }
   public enum History: Equatable, Sendable {
     case idle
-    case loading(Request, after: Int?)
+    case loading(Request, after: Int?, older: Bool)
     case failed(ConversationFailure)
   }
 
@@ -139,6 +139,8 @@ public struct ConversationState: Equatable, Sendable {
   internal var reconnectDisplayRequest: Request?
   internal var reconnectDisplayAfter: Int?
   public internal(set) var reconnectDisplayFailure: ConversationFailure?
+  internal var historyRefreshPending = false
+  public internal(set) var nextBefore: Int?
   public internal(set) var historyCursor: Int?
   public internal(set) var hasLoadedHistory = false
   public internal(set) var hasMoreHistory = false

@@ -19,6 +19,11 @@ export const PageRequest = Schema.Struct({
 export type PageRequest = typeof PageRequest.Type
 export const MessagePage = Schema.Struct({ messages: Schema.Array(Message), nextAfter: Schema.NullOr(Position) })
 export type MessagePage = typeof MessagePage.Type
+// Display history walks backwards; synchronization retains the separate forward cursor.
+export const OlderPageRequest = Schema.Struct({ before: Schema.optionalKey(Position), limit: PageRequest.fields.limit })
+export type OlderPageRequest = typeof OlderPageRequest.Type
+export const OlderMessagePage = Schema.Struct({ messages: Schema.Array(Message), nextBefore: Schema.NullOr(Position) })
+export type OlderMessagePage = typeof OlderMessagePage.Type
 export class DeliveryConflict extends Schema.TaggedError<DeliveryConflict>()("DeliveryConflict", {
   message: Schema.String
 }) {}

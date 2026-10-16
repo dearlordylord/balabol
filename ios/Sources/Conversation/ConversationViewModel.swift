@@ -56,7 +56,7 @@ public final class ConversationViewModel {
   public var canEditDraft: Bool { state.canEditDraft }
   public var canSwitchServer: Bool { state.canSwitchServer }
   public var hasLoadedHistory: Bool { state.hasLoadedHistory }
-  public var nextAfter: Int? { state.hasMoreHistory ? state.historyCursor : nil }
+  public var nextBefore: Int? { state.nextBefore }
   public var draftFailure: ConversationFailure? { state.draftFailure }
   public var deliveryFailure: ConversationFailure? { state.deliveryFailure }
   public var historyFailure: ConversationFailure? { state.historyFailure }
@@ -74,7 +74,7 @@ public final class ConversationViewModel {
     platformStop = afterLocalStop
     receive(.platformInterrupt(handedInputIds))
   }
-  /// Refresh a bounded display page and current reply without moving pagination or draft.
+  /// Catch up bounded forward pages without consuming older pagination or touching draft.
   public func refreshReconnectDisplay() {
     receive(.refreshReconnectDisplay)
   }
@@ -100,17 +100,19 @@ public final class ConversationViewModel {
     if let task = deliveryTask { await task.value }
     await flushDraft()
   }
+  public func loadOlderHistory() async {
+    await loadHistory()
+  }
   public func loadHistory() async {
     receive(.loadHistory(refresh: false))
-    if let task = historyTask { await task.value }
+    while let task = historyTask { await task.value }
     if state.isSavingDraft { await flushDraft() }
   }
-  /// One page per foreground/explicit refresh, including after an earlier EOF.
-  /// Further pages remain an explicit Load more intent rather than an auto drain.
+  /// Catch up all new rows, without consuming the independent older-history cursor.
   public func refreshHistory() async {
     receive(.refreshCurrent)
     receive(.loadHistory(refresh: true))
-    if let task = historyTask { await task.value }
+    while let task = historyTask { await task.value }
     if let task = currentTask { await task.value }
     if state.isSavingDraft { await flushDraft() }
   }
@@ -247,27 +249,45 @@ public final class ConversationViewModel {
     case .reconnectDisplay(let request, let after):
       let transport = transport
       reconnectDisplayTask = Task { [weak self] in
-        let result: Result<HistoryPage, ConversationFailure>
-        do { result = .success(try await transport.history(after: after)) } catch {
-          result = .failure(error as? ConversationFailure ?? .unavailable)
-        }
-        let current: Result<CurrentTurn?, ConversationFailure>
-        do { current = .success(try await transport.currentTurn()) } catch {
-          current = .failure(error as? ConversationFailure ?? .unavailable)
-        }
-        guard !Task.isCancelled, let self else { return }
-        self.receive(.reconnectDisplayLoaded(request, result, current))
-        self.reconnectDisplayTask = nil
+        var cursor = after
+        repeat {
+          let result: Result<HistoryPage, ConversationFailure>
+          do { result = .success(try await transport.history(after: cursor)) } catch {
+            result = .failure(error as? ConversationFailure ?? .unavailable)
+          }
+          let current: Result<CurrentTurn?, ConversationFailure>
+          if case .success(let page) = result, page.nextAfter != nil {
+            current = .success(nil)
+          } else {
+            do { current = .success(try await transport.currentTurn()) } catch {
+              current = .failure(error as? ConversationFailure ?? .unavailable)
+            }
+          }
+          guard !Task.isCancelled, let self else { return }
+          self.receive(.reconnectDisplayLoaded(request, result, current))
+          guard self.state.reconnectDisplayRequest == request,
+            case .success(let page) = result, let next = page.nextAfter
+          else { break }
+          cursor = next
+        } while true
+        self?.reconnectDisplayTask = nil
       }
     case .cancelReconnectDisplay:
       reconnectDisplayTask?.cancel()
       reconnectDisplayTask = nil
-    case .history(let request, let after):
+    case .history(let request, let after, let older):
       let transport = transport
       historyRequest = request
       historyTask = Task { [weak self] in
         let result: Result<HistoryPage, ConversationFailure>
-        do { result = .success(try await transport.history(after: after)) } catch let failure
+        do {
+          if older {
+            let page = try await transport.olderHistory(before: after)
+            result = .success(HistoryPage(messages: page.messages, nextAfter: page.nextBefore))
+          } else {
+            result = .success(try await transport.history(after: after))
+          }
+        } catch let failure
           as ConversationFailure
         { result = .failure(failure) } catch { result = .failure(.unavailable) }
         guard let self, self.historyRequest == request else { return }

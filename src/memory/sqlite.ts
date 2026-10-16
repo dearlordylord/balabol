@@ -40,6 +40,20 @@ const Ledger = Schema.Union([
 )
 export type Ledger = typeof Ledger.Type
 
+const decodeReceipt = (row: Record<string, unknown>): Receipt => {
+  const fields = Schema.decodeUnknownSync(
+    Schema.Struct({ inputDeliveryId: Schema.NullOr(DeliveryId), responseId: Schema.NullOr(DeliveryId) })
+  )(row)
+  const { inputDeliveryId: _input, outcome: _outcome, responseId: _response, ...rest } = row
+  return Schema.decodeUnknownSync(Receipt)({
+    ...rest,
+    languageSpans: JSON.parse(Schema.decodeUnknownSync(Schema.String)(row.languageSpans)),
+    ...(fields.inputDeliveryId === null ? {} : { inputDeliveryId: fields.inputDeliveryId }),
+    ...(fields.responseId === null ? {} : { responseId: fields.responseId }),
+    ...(row.outcome === null ? {} : { outcome: row.outcome })
+  })
+}
+
 /** A second SQLite file holds only the OS-released writer lease, never durable data. */
 export class SqliteStorage implements Storage {
   readonly database: DatabaseSync
@@ -225,19 +239,18 @@ export class SqliteStorage implements Storage {
               "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
             )
             .all(after, limit)
-    return rows.map((row) => {
-      const fields = Schema.decodeUnknownSync(
-        Schema.Struct({ inputDeliveryId: Schema.NullOr(DeliveryId), responseId: Schema.NullOr(DeliveryId) })
-      )(row)
-      const { inputDeliveryId: _input, outcome: _outcome, responseId: _response, ...rest } = row
-      return Schema.decodeUnknownSync(Receipt)({
-        ...rest,
-        languageSpans: JSON.parse(Schema.decodeUnknownSync(Schema.String)(row.languageSpans)),
-        ...(fields.inputDeliveryId === null ? {} : { inputDeliveryId: fields.inputDeliveryId }),
-        ...(fields.responseId === null ? {} : { responseId: fields.responseId }),
-        ...(row.outcome === null ? {} : { outcome: row.outcome })
-      })
-    })
+    return rows.map(decodeReceipt)
+  }
+  // Fetch at most one extra receipt to distinguish a full final page from more history.
+  olderPage(before: number | undefined, limit: number): readonly Receipt[] {
+    Schema.decodeUnknownSync(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })))(limit)
+    if (before !== undefined) Schema.decodeUnknownSync(Position)(before)
+    const rows = this.database
+      .prepare(
+        "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage FROM deliveries WHERE firstId IS NOT NULL AND position < ? ORDER BY position DESC LIMIT ?"
+      )
+      .all(before ?? Number.MAX_SAFE_INTEGER, limit + 1)
+    return rows.map(decodeReceipt)
   }
   async open(): Promise<void> {
     if (this.#opened || this.#closed) throw new Error("Storage already opened or closed")

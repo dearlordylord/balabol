@@ -16,6 +16,8 @@ import {
   type ReplyNotFound,
   type Message,
   type MessagePage,
+  OlderPageRequest,
+  type OlderMessagePage,
   PageRequest,
   type StorageUnavailable
 } from "./contracts.ts"
@@ -30,6 +32,8 @@ export {
   InvalidInput,
   Message,
   MessagePage,
+  OlderMessagePage,
+  OlderPageRequest,
   PageRequest,
   SendMessage,
   StorageUnavailable,
@@ -69,6 +73,7 @@ export class Conversation extends Context.Service<
     send: (
       message: SendMessage
     ) => Effect.Effect<Message, DeliveryConflict | ReplyBusy | StorageUnavailable | InvalidInput>
+    olderPage: (request: OlderPageRequest) => Effect.Effect<OlderMessagePage, StorageUnavailable | InvalidInput>
     page: (request: PageRequest) => Effect.Effect<MessagePage, StorageUnavailable | InvalidInput>
   }
 >()("balabol/conversation") {
@@ -115,6 +120,12 @@ export class Conversation extends Context.Service<
           messages,
           nextAfter: messages.length === request.limit ? (messages[messages.length - 1]?.position ?? null) : null
         }
+      })
+      const olderPage = Effect.fn("Conversation.olderPage")(function* (raw: OlderPageRequest) {
+        const request = yield* Schema.decodeUnknownEffect(OlderPageRequest)(raw).pipe(Effect.mapError(invalidIdentity))
+        const rows = yield* memory.olderPage(request.before, request.limit)
+        const messages = rows.slice(0, request.limit).toReversed()
+        return { messages, nextBefore: rows.length > request.limit ? (messages[0]?.position ?? null) : null }
       })
       const currentTurn = Effect.gen(function* () {
         const input = yield* memory.latestInput()
@@ -180,6 +191,7 @@ export class Conversation extends Context.Service<
             semaphore.withPermits(1)
           ),
         page,
+        olderPage,
         send,
         reply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.current(parsed))),
         cancelReply: (id) =>

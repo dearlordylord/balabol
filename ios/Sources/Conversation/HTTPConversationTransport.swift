@@ -151,6 +151,23 @@ public struct HTTPConversationTransport: ConversationTransport {
         stream.continuation.finish()
       })
   }
+  public func olderHistory(before: Int?) async throws -> OlderHistoryPage {
+    guard before.map({ $0 >= 0 }) ?? true else { throw ConversationFailure.invalidInput }
+    guard
+      var components = URLComponents(
+        url: baseURL.appendingPathComponent("conversation/messages"), resolvingAgainstBaseURL: false
+      )
+    else { throw ConversationFailure.invalidInput }
+    components.queryItems = [
+      URLQueryItem(name: "direction", value: "older"),
+      URLQueryItem(name: "limit", value: String(OlderHistoryPage.maximumMessages)),
+    ]
+    if let before {
+      components.queryItems?.append(URLQueryItem(name: "before", value: String(before)))
+    }
+    guard let url = components.url else { throw ConversationFailure.invalidInput }
+    return try await execute(URLRequest(url: url), as: OlderHistoryPage.self)
+  }
   public func history(after: Int?) async throws -> HistoryPage {
     guard after.map({ $0 >= 0 }) ?? true else { throw ConversationFailure.invalidInput }
     guard

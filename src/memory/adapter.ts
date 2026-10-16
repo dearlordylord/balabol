@@ -16,6 +16,7 @@ export class DurableMemory extends Context.Service<
     prepare: (payload: DeliveryPayload) => void
     find: (deliveryId: DeliveryPayload["deliveryId"]) => DeliveryEvidence | undefined
     page: (after: number | undefined, limit: number) => readonly Receipt[]
+    olderPage: (before: number | undefined, limit: number) => readonly Receipt[]
   }
 >()("balabol/memory/durable") {}
 
@@ -69,6 +70,7 @@ export const durableMemoryLayer = Layer.effect(
         )
       },
       page: (after, limit) => storage.page(after, limit),
+      olderPage: (before, limit) => storage.olderPage(before, limit),
       prepare: (payload) => storage.prepare(payload)
     })
   })

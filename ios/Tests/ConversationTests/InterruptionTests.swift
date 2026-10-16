@@ -114,11 +114,11 @@ final class InterruptionTests: XCTestCase {
   }
 
   func testTargetedInterruptedReceiptDoesNotDrainUnloadedHistory() async throws {
-    let transport = InterruptingTransport(backlog: HistoryPage.maximumMessages + 1)
+    let transport = InterruptingTransport(backlog: OlderHistoryPage.maximumMessages + 1)
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
     await model.start()
     await model.loadHistory()
-    XCTAssertEqual(model.messages.count, HistoryPage.maximumMessages)
+    XCTAssertEqual(model.messages.count, OlderHistoryPage.maximumMessages)
     let cursor = model.state.historyCursor
     model.editDraft("First")
     await model.send()
@@ -138,7 +138,7 @@ final class InterruptionTests: XCTestCase {
     XCTAssertEqual(interrupted.text, "Partial")
     XCTAssertLessThan(interrupted.position, try XCTUnwrap(model.messages.last).position)
     XCTAssertEqual(model.state.historyCursor, cursor)
-    XCTAssertFalse(model.messages.contains { $0.text == "Backlog 10" })
+    XCTAssertFalse(model.messages.contains { $0.text == "Backlog 0" })
     XCTAssertNil(model.state.interruptedReceiptFailure)
     await model.shutdown()
   }
@@ -243,6 +243,12 @@ actor InterruptingTransport: ConversationTransport {
       responseId: receipt.deliveryId, inputDeliveryId: inputDeliveryId,
       sequence: 2, state: receipt.outcome == .interrupted ? .interrupted : .completed,
       text: receipt.text, receipt: receipt)
+  }
+  func olderHistory(before: Int?) async throws -> OlderHistoryPage {
+    let eligible = messages.filter { message in before.map { message.position < $0 } ?? true }
+    let page = Array(eligible.suffix(OlderHistoryPage.maximumMessages))
+    return OlderHistoryPage(
+      messages: page, nextBefore: eligible.count > page.count ? page.first?.position : nil)
   }
   func history(after: Int?) async throws -> HistoryPage {
     let remaining = messages.filter { $0.position > (after ?? -1) }

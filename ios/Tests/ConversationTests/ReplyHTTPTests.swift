@@ -58,7 +58,7 @@ final class ReplyHTTPTests: XCTestCase {
     await reopened.start()
     repeat {
       await reopened.loadHistory()
-    } while reopened.nextAfter != nil && reopened.historyFailure == nil
+    } while reopened.nextBefore != nil && reopened.historyFailure == nil
     XCTAssertEqual(reopened.messages.filter { $0.responseId == receipt.responseId }, [receipt])
     XCTAssertNil(reopened.historyFailure)
     await reopened.shutdown()
@@ -111,7 +111,7 @@ final class ReplyHTTPTests: XCTestCase {
     await restored.start()
     repeat {
       await restored.loadHistory()
-    } while restored.nextAfter != nil && restored.historyFailure == nil
+    } while restored.nextBefore != nil && restored.historyFailure == nil
     let interrupted = try XCTUnwrap(
       restored.messages.first { $0.responseId == generated.responseId })
     XCTAssertEqual(interrupted.outcome, .interrupted)

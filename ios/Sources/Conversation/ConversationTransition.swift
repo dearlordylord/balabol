@@ -47,7 +47,7 @@ enum ConversationCommand {
   case send(ConversationState.Request, PendingDelivery)
   case reconnectDisplay(ConversationState.Request, Int?)
   case cancelReconnectDisplay
-  case history(ConversationState.Request, Int?)
+  case history(ConversationState.Request, Int?, older: Bool)
   case observeReply(ConversationState.Request, UUID)
   case recoverInterruptedReply(ConversationState.Request, UUID)
   case cancelInterruptionRecoveries
@@ -74,18 +74,18 @@ extension ConversationState {
       draft = .loading(request, previous: nil)
       return [.loadDraft(request)]
     case .refreshReconnectDisplay:
-      guard isActive, reconnectDisplayRequest == nil else { return [] }
+      guard isActive, hasLoadedHistory, reconnectDisplayRequest == nil else { return [] }
       let request = request()
       reconnectDisplayRequest = request
-      reconnectDisplayAfter = messages.last?.position
+      reconnectDisplayAfter = historyCursor
       return [.reconnectDisplay(request, reconnectDisplayAfter)]
     case .reconnectDisplayLoaded(let request, let result, let current):
       guard isActive, reconnectDisplayRequest == request else { return [] }
-      reconnectDisplayRequest = nil
       let after = reconnectDisplayAfter
-      reconnectDisplayAfter = nil
       switch result {
-      case .failure(let failure): reconnectDisplayFailure = failure
+      case .failure(let failure):
+        reconnectDisplayRequest = nil
+        reconnectDisplayFailure = failure
       case .success(let page):
         guard page.messages.count <= HistoryPage.maximumMessages,
           page.messages.allSatisfy(\.isValid),
@@ -94,10 +94,16 @@ extension ConversationState {
           page.messages.first.map({ $0.position > (after ?? -1) }) ?? true,
           merge(page.messages)
         else {
+          reconnectDisplayRequest = nil
           reconnectDisplayFailure = .invalidResponse
           return []
         }
+        historyCursor = [historyCursor, page.messages.last?.position, after].compactMap { $0 }.max()
+        reconnectDisplayAfter = page.messages.last?.position ?? after
         reconnectDisplayFailure = nil
+        if page.nextAfter != nil { return [] }
+        reconnectDisplayRequest = nil
+        reconnectDisplayAfter = nil
       }
       switch current {
       case .failure(let failure): reconnectDisplayFailure = failure
@@ -235,12 +241,19 @@ extension ConversationState {
       return [.inputIntent(pending.deliveryId)]
         + checkpoint(.awaitingReceipt(pending), purpose: .pending)
     case .loadHistory(let refresh):
-      guard isActive, !isLoadingHistory, refresh || !hasLoadedHistory || hasMoreHistory else {
+      guard isActive else { return [] }
+      if isLoadingHistory {
+        historyRefreshPending = historyRefreshPending || refresh
+        return []
+      }
+      guard refresh || !hasLoadedHistory || hasMoreHistory else {
         return []
       }
       let request = request()
-      history = .loading(request, after: historyCursor)
-      var commands: [ConversationCommand] = [.history(request, historyCursor)]
+      let older = !refresh || !hasLoadedHistory
+      let cursor = older ? nextBefore : historyCursor
+      history = .loading(request, after: cursor, older: older)
+      var commands: [ConversationCommand] = [.history(request, cursor, older: older)]
       if refresh, case .observationFailed(let input, _, _) = reply {
         let observation = self.request()
         // The first full snapshot of a fresh observer is authoritative for
@@ -290,10 +303,17 @@ extension ConversationState {
         return []
       }
     case .historyLoaded(let request, let result):
-      guard isActive, case .loading(let expected, let after) = history, expected == request else {
+      guard isActive, case .loading(let expected, let after, let older) = history,
+        expected == request
+      else {
         return []
       }
-      return finishHistory(result, after: after)
+      var commands = finishHistory(result, after: after, older: older)
+      if !isLoadingHistory, historyRefreshPending {
+        historyRefreshPending = false
+        commands += transition(.loadHistory(refresh: true))
+      }
+      return commands
     case .replyReceived(let request, let snapshot):
       return receiveReply(request, snapshot)
     case .interruptedReplyRecovered(let request, let result):
@@ -419,18 +439,24 @@ extension ConversationState {
   }
 
   private mutating func finishHistory(
-    _ result: Result<HistoryPage, ConversationFailure>, after: Int?
+    _ result: Result<HistoryPage, ConversationFailure>, after: Int?, older: Bool
   ) -> [ConversationCommand] {
     switch result {
     case .failure(let error):
       history = .failed(error)
       return []
     case .success(let page):
-      guard page.messages.count <= HistoryPage.maximumMessages,
+      guard
+        page.messages.count
+          <= (older ? OlderHistoryPage.maximumMessages : HistoryPage.maximumMessages),
         page.messages.allSatisfy(\.isValid),
         zip(page.messages, page.messages.dropFirst()).allSatisfy({ $0.position < $1.position }),
-        page.messages.first.map({ $0.position > (after ?? -1) }) ?? true,
-        page.nextAfter == nil || page.nextAfter == page.messages.last?.position
+        (older
+          ? page.messages.last.map({ message in after.map { message.position < $0 } ?? true })
+          : page.messages.first.map({ $0.position > (after ?? -1) })) ?? true,
+        page.nextAfter == nil
+          || page.nextAfter
+            == (older ? page.messages.first?.position : page.messages.last?.position)
       else {
         history = .failed(.invalidResponse)
         return []
@@ -447,10 +473,20 @@ extension ConversationState {
         return []
       }
       history = .idle
-      historyCursor = page.messages.last?.position ?? after
+      if older {
+        if !hasLoadedHistory { historyCursor = page.messages.last?.position }
+        nextBefore = page.nextAfter
+        hasMoreHistory = nextBefore != nil
+      } else {
+        historyCursor = [historyCursor, page.messages.last?.position, after].compactMap { $0 }.max()
+      }
       hasLoadedHistory = true
-      hasMoreHistory = page.nextAfter != nil
       var replyCommands: [ConversationCommand] = []
+      if !older, let cursor = page.nextAfter {
+        let next = request()
+        history = .loading(next, after: cursor, older: false)
+        replyCommands.append(.history(next, cursor, older: false))
+      }
       if case .observing(_, let input, let latest) = reply,
         let completed = page.messages.first(where: {
           $0.role == .assistant && $0.inputDeliveryId == input
@@ -458,7 +494,7 @@ extension ConversationState {
         latest == nil || completed.responseId == latest?.responseId
       {
         reply = .completed(completed)
-        replyCommands = [.cancelReply]
+        replyCommands.append(.cancelReply)
       }
       if let accepted {
         delivery = .idle(nil)

@@ -3,6 +3,52 @@ import XCTest
 
 @MainActor
 final class TextDeliveryUITests: XCTestCase {
+  func testLatestHistoryAndOlderPrependPreserveReadingPosition() async throws {
+    let server = "http://127.0.0.1:8791"
+    var probe = URLRequest(url: URL(string: server + "/conversation/messages?direction=older")!)
+    probe.timeoutInterval = 2
+    do { _ = try await URLSession.shared.data(for: probe) } catch {
+      throw XCTSkip("Run node scripts/quality/history-ui-fixture.mjs for this isolated UI check.")
+    }
+    let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
+    app.launchEnvironment["BALABOL_UI_TEST_CONTROL_URL"] = server
+    app.launch()
+    let latest = app.staticTexts["message-204"]
+    XCTAssertTrue(latest.waitForExistence(timeout: 10))
+    XCTAssertTrue(latest.isHittable, "Opening the conversation must reveal its latest message.")
+    XCTAssertFalse(app.staticTexts["message-0"].exists)
+    let transcript = app.scrollViews["conversation-transcript"]
+    let older = app.buttons["load-older-messages"]
+    // Native status-bar tap reaches the oldest loaded row; swipes cover SDKs without it.
+    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02)).tap()
+    for _ in 0..<35 {
+      if older.exists && older.isHittable { break }
+      transcript.swipeDown(velocity: .fast)
+    }
+    XCTAssertTrue(older.isHittable)
+    let boundary = app.staticTexts["message-105"]
+    XCTAssertTrue(boundary.isHittable)
+    let originalY = boundary.frame.minY
+    older.tap()
+    let previous = app.staticTexts["message-104"]
+    if !previous.waitForExistence(timeout: 5) {
+      XCTFail("Prepend did not restore the boundary row")
+      return
+    }
+    XCTAssertTrue(boundary.isHittable)
+    XCTAssertEqual(
+      boundary.frame.minY, originalY, accuracy: 4,
+      "Prepending older history must retain the visible message's position.")
+    if app.buttons["latest-message"].exists { app.buttons["latest-message"].tap() }
+    XCTAssertTrue(latest.isHittable)
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(latest.waitForExistence(timeout: 10))
+    XCTAssertTrue(latest.isHittable)
+  }
+
   func testNamespacedDebugLaunchUsesPreconfiguredControlURLWithoutTyping() {
     let app = XCUIApplication()
     defer { app.terminate() }
@@ -238,12 +284,6 @@ final class TextDeliveryUITests: XCTestCase {
     XCTAssertFalse(progress.exists)
     app.terminate()
     app.launch()
-    for _ in 0..<5 {
-      if answer.waitForExistence(timeout: 1) { break }
-      let more = app.buttons["Load more"]
-      if !more.exists { app.swipeUp() }
-      if more.waitForExistence(timeout: 2) { more.tap() }
-    }
     XCTAssertTrue(answer.waitForExistence(timeout: 10))
     XCTAssertEqual(answer.label, completedText)
   }
@@ -311,18 +351,7 @@ final class TextDeliveryUITests: XCTestCase {
     let answerText = answer.label
     app.terminate()
     app.launch()
-    // Current-turn recovery can show the latest reply before intervening
-    // history pages. Explicitly load those pages before looking for its prior turn.
-    XCTAssertTrue(answer.waitForExistence(timeout: 10))
-    for _ in 0..<5 {
-      let more = app.buttons["Load more"]
-      guard more.waitForExistence(timeout: 1) else { break }
-      if !more.isHittable, app.buttons["latest-message"].exists {
-        app.buttons["latest-message"].tap()
-      }
-      more.tap()
-    }
-    if app.buttons["latest-message"].exists { app.buttons["latest-message"].tap() }
+    // The newest history page contains both recent turns without forward pagination.
     XCTAssertTrue(answer.waitForExistence(timeout: 10))
     XCTAssertEqual(answer.label, answerText)
     let restoredInterrupted = await revealInterruptedReceipt(

@@ -27,6 +27,7 @@ export class Memory extends Context.Service<
     find: (deliveryId: DeliveryPayload["deliveryId"]) => Effect.Effect<DeliveryEvidence | undefined, StorageUnavailable>
     append: (message: DeliveryPayload) => Effect.Effect<Receipt, StorageUnavailable>
     page: (after: number | undefined, limit: number) => Effect.Effect<readonly Receipt[], StorageUnavailable>
+    olderPage: (before: number | undefined, limit: number) => Effect.Effect<readonly Receipt[], StorageUnavailable>
   }
 >()("balabol/memory") {}
 
@@ -86,7 +87,8 @@ export const configuredUniiLayer = (settings: MemorySettings = defaultMemorySett
             semaphore.withPermits(1),
             Effect.uninterruptible
           ),
-        page: (after, limit) => Effect.try({ try: () => adapter.page(after, limit), catch: unavailable })
+        page: (after, limit) => Effect.try({ try: () => adapter.page(after, limit), catch: unavailable }),
+        olderPage: (before, limit) => Effect.try({ try: () => adapter.olderPage(before, limit), catch: unavailable })
       })
     })
   )
