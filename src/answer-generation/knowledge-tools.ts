@@ -8,6 +8,8 @@ import {
   KnowledgeReceipt,
   KnowledgeSnapshot,
   KnowledgeUnavailable,
+  NeighborhoodQuery,
+  NeighborhoodPage,
   type PersonalKnowledge,
   Query,
   QueryPage,
@@ -33,16 +35,25 @@ export const knowledgeTools = Toolkit.make(
   }),
   Tool.make("apply_knowledge", {
     description:
-      "Atomically introduce explicit types and create or update typed entities. Supply a reason. Operation identity is assigned by the host; never supply identity fields. Correct rejected changes before retrying.",
+      "Atomically introduce explicit types and create or update typed entities and relations with declared endpoint kinds. Supply a reason. Operation identity is assigned by the host; never supply identity fields. Correct rejected changes before retrying.",
     parameters: Change.annotate(strict),
     success: KnowledgeReceipt,
     failure: failures,
     failureMode: "return"
   }).annotate(Tool.Strict, false),
   Tool.make("query_knowledge", {
-    description: "Read typed personal entities by stable identity or type, with bounded pagination.",
+    description:
+      "Read typed personal entities by stable identity, type or declared field values, with bounded pagination.",
     parameters: Query.annotate(strict),
     success: QueryPage,
+    failure: failures,
+    failureMode: "return"
+  }).annotate(Tool.Strict, false),
+  Tool.make("query_knowledge_neighborhood", {
+    description:
+      "Read a bounded one- or two-step relation neighborhood with stable identities, typed endpoint interpretation and explicit pagination or truncation. Distinguish personal mnemonics from asserted translations using their declared relation types.",
+    parameters: NeighborhoodQuery.annotate(strict),
+    success: NeighborhoodPage,
     failure: failures,
     failureMode: "return"
   }).annotate(Tool.Strict, false),
@@ -78,6 +89,7 @@ export const knowledgeHandlers = (knowledge: typeof PersonalKnowledge.Service, r
         return yield* knowledge.apply(change, host)
       }),
     query_knowledge: (query) => knowledge.query(query),
+    query_knowledge_neighborhood: (query) => knowledge.neighborhood(query),
     inspect_knowledge_operations: (query) => knowledge.receipts({ ...query, inputDeliveryId: request.inputDeliveryId })
   })
 export const acceptedKnowledgeOperations = (knowledge: typeof PersonalKnowledge.Service, request: AnswerRequest) =>

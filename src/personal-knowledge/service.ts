@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { DurableKnowledge } from "./durable-port.ts"
-import { boundedKnowledge, nextRevision, parseChange, queryRevision, recoverOutcome, rejectUnknown } from "./domain.ts"
+import { boundedKnowledge, nextRevision, parseChange, recoverOutcome, rejectUnknown } from "./domain.ts"
+import { neighborhoodRevision, queryRevision } from "./queries.ts"
 import {
   type Change,
   HostContext,
@@ -9,6 +10,8 @@ import {
   type KnowledgeRevision,
   type KnowledgeSnapshot,
   type KnowledgeUnavailable,
+  NeighborhoodQuery,
+  type NeighborhoodPage,
   Query,
   type QueryPage,
   type ReceiptPage,
@@ -23,6 +26,7 @@ export class PersonalKnowledge extends Context.Service<
   {
     inspect: () => Effect.Effect<KnowledgeSnapshot, KnowledgeUnavailable>
     query: (query: Query) => Effect.Effect<QueryPage, Failure>
+    neighborhood: (query: NeighborhoodQuery) => Effect.Effect<NeighborhoodPage, Failure>
     apply: (change: Change, context: HostContext) => Effect.Effect<KnowledgeReceipt, Failure>
     receipts: (query: ReceiptQuery) => Effect.Effect<ReceiptPage, Failure>
     revision: (revision: number) => Effect.Effect<KnowledgeRevision, Failure>
@@ -30,6 +34,7 @@ export class PersonalKnowledge extends Context.Service<
 >()("balabol/personal-knowledge") {}
 const checked = <A>(evaluate: () => A) => Effect.try({ try: evaluate, catch: rejectUnknown })
 const decodeQuery = Schema.decodeUnknownSync(Query, { onExcessProperty: "error" })
+const decodeNeighborhood = Schema.decodeUnknownSync(NeighborhoodQuery, { onExcessProperty: "error" })
 const decodeContext = Schema.decodeUnknownSync(HostContext, { onExcessProperty: "error" })
 const decodeReceipts = Schema.decodeUnknownSync(ReceiptQuery, { onExcessProperty: "error" })
 const RevisionNumber = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
@@ -47,6 +52,12 @@ export const personalKnowledgeLayer = Layer.effect(
           const query = yield* checked(() => decodeQuery(raw))
           const current = yield* durable.current()
           return yield* checked(() => queryRevision(current, query))
+        }),
+      neighborhood: (raw) =>
+        Effect.gen(function* () {
+          const query = yield* checked(() => decodeNeighborhood(raw))
+          const current = yield* durable.current()
+          return yield* checked(() => neighborhoodRevision(current, query))
         }),
       apply: (rawChange, rawContext) =>
         Effect.gen(function* () {

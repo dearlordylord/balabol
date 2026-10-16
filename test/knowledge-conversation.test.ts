@@ -29,7 +29,8 @@ it("the conversation inspects its empty knowledge schema and answers using the a
       "apply_knowledge",
       "inspect_knowledge",
       "inspect_knowledge_operations",
-      "query_knowledge"
+      "query_knowledge",
+      "query_knowledge_neighborhood"
     ])
     if (requests === 1) return new Response(toolResponse)
     const result = request.input.find((item) => "type" in item && item.type === "function_call_output")

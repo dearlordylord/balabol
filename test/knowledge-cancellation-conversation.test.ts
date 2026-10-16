@@ -9,11 +9,14 @@ import { replyLayer, waitForReply } from "./reply-fixture.ts"
 
 const inputId = "11111111-1111-4111-8111-111111111111"
 const entityId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const relationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const change = {
   reason: "Keep a concrete personal practice target",
   types: [{ name: "PracticeTarget", fields: [{ name: "minutes", kind: "number", required: true }] }],
   creates: [{ id: entityId, type: "PracticeTarget", values: { minutes: 15 } }],
-  updates: []
+  updates: [],
+  relationTypes: [{ name: "Reinforces", sources: ["PracticeTarget"], targets: ["PracticeTarget"], fields: [] }],
+  relationCreates: [{ id: relationId, type: "Reinforces", source: entityId, target: entityId, values: {} }]
 }
 const latch = () => {
   let resolve: () => void = () => undefined
@@ -43,7 +46,11 @@ it.each(["before", "after"] as const)(
           expect(initial.acceptedKnowledgeOperations.receipts).toHaveLength(boundary === "after" ? 1 : 0)
           return tool("apply_knowledge", change, "new-provider-call-on-retry")
         }
-        expect(lastToolResult(request)).toMatchObject({ revision: 1, createdIds: [entityId] })
+        expect(lastToolResult(request)).toMatchObject({
+          revision: 1,
+          createdIds: [entityId],
+          createdRelationIds: [relationId]
+        })
         return answer("The target is saved exactly once.")
       },
       (durable) => ({

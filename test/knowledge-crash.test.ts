@@ -64,7 +64,9 @@ it("recovers committed knowledge and its original receipt after SIGKILL before a
             revision: 1,
             reason: change.reason,
             createdIds: [entity.id],
-            updatedIds: []
+            updatedIds: [],
+            createdRelationIds: [],
+            updatedRelationIds: []
           }
           expect((yield* knowledge.receipts({ inputDeliveryId: context.inputDeliveryId, limit: 20 })).receipts).toEqual(
             [expectedReceipt]
@@ -78,11 +80,13 @@ it("recovers committed knowledge and its original receipt after SIGKILL before a
           expect(yield* knowledge.revision(0)).toEqual({
             snapshot: { revision: 0, schema: { types: [], relations: [] } },
             entities: [],
+            relations: [],
             receipt: null
           })
           expect(yield* knowledge.revision(1)).toEqual({
             snapshot: { revision: 1, schema: { types: change.types, relations: [] } },
             entities: [entity],
+            relations: [],
             receipt: expectedReceipt
           })
           expect(
@@ -152,6 +156,7 @@ it("rolls back partial knowledge transaction after SIGKILL before commit and per
           expect(yield* knowledge.revision(0)).toEqual({
             snapshot: { revision: 0, schema: { types: [], relations: [] } },
             entities: [],
+            relations: [],
             receipt: null
           })
           expect(yield* knowledge.receipts({ inputDeliveryId: context.inputDeliveryId, limit: 20 })).toEqual({

@@ -94,11 +94,13 @@ it("recovers accepted operation outcomes across reopen and rejects conflicting r
         expect(yield* knowledge.revision(0)).toEqual({
           snapshot: { revision: 0, schema: { types: [], relations: [] } },
           entities: [],
+          relations: [],
           receipt: null
         })
         expect(yield* knowledge.revision(1)).toEqual({
           snapshot: { revision: 1, schema: { types: change.types, relations: [] } },
           entities: change.creates,
+          relations: [],
           receipt
         })
         expect(yield* knowledge.receipts({ inputDeliveryId, limit: 1 })).toEqual({

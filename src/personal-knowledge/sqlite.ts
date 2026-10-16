@@ -183,6 +183,7 @@ const initialize = (database: DatabaseSync): void =>
       const initial: KnowledgeRevision = {
         snapshot: { revision: 0, schema: { types: [], relations: [] } },
         entities: [],
+        relations: [],
         receipt: null
       }
       database
@@ -195,7 +196,7 @@ const initialize = (database: DatabaseSync): void =>
     const head = readHead(database)
     if (head.format === 1) {
       const snapshot = decode(Legacy, head)
-      const revision: KnowledgeRevision = { snapshot, entities: [], receipt: null }
+      const revision: KnowledgeRevision = { snapshot, entities: [], relations: [], receipt: null }
       const payload = encodeRevision(revision)
       database.prepare("INSERT INTO personal_knowledge_revisions(revision,payload) VALUES(0,?)").run(payload)
       database.prepare("UPDATE personal_knowledge_snapshot SET format=2,payload=? WHERE id=1").run(payload)
