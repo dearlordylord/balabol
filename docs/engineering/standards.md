@@ -23,7 +23,7 @@ Source authority: sibling jev's source organization policy, accepted 2026-10-10.
 
 ## Conversation lifecycle refactor
 
-The accepted [functional lifecycle specification](../product/functional-conversation-spec.md) defines the target for Conversation, Voice and Swift state changes: immutable pure transitions, one writer per owner, explicit command interpretation and selective Bend laws for consequential safety and conditional progress. Follow its staged migration; existing code is not evidence that the target is already implemented. Proofs do not establish provider, scheduler or physical audio guarantees.
+The accepted [functional lifecycle specification](../product/functional-conversation-spec.md) defines the target for Conversation, Voice and Swift state changes: immutable pure transitions, one writer per owner, explicit command interpretation and selective Bend laws for consequential safety and conditional progress. Use the [lifecycle protocol](conversation-lifecycle.md) for ordering, identities and cancellation ownership. Follow its staged migration; existing code is not evidence that the target is already implemented. Proofs do not establish provider, scheduler or physical audio guarantees.
 
 ## TypeScript / Effect
 

@@ -37,6 +37,10 @@ Keep ordinary behavioral coverage in the fast suite; moving a scale check does n
 
 CRAP combines complexity and measured coverage: `complexity² × (1 − coverage)³ + complexity`. Simple partially covered functions can pass; risky insufficiently covered functions fail. The independent classic complexity cap remains 8. Use Node >=22.19 and <25: the published crap4ts package excludes Node 25; this harness was verified with the isolated Node 24.14.0 runtime, without adding a machine-specific executable path.
 
+## Bend bridge qualification
+
+`pnpm check:bend` qualifies the installed native compiler and typed Effect call separately from product behavior. See the [lifecycle protocol](conversation-lifecycle.md#qualified-compilation-boundary) for exact supported versions, ABI scope, numeric boundary, proof controls and later production integration. It installs nothing and uses synthetic temporary fixtures only. ABI generator self-checks run in `test:harness`; this milestone does not add native-tool prerequisites to ordinary fast application tests.
+
 ## Exact Effect evidence
 
 The unpatched cohort is `effect`, `@effect/platform-node`, `@effect/platform-node-shared` and `@effect/vitest` at **4.0.5**, `@effect/tsgo` at **0.36.4**, and Vitest/v8 at **5.0.1**. TS7 is `@typescript/native` aliased to **typescript 7.0.2**; the source checker separately uses TypeScript 5.9.3's JavaScript compiler API. All direct tooling dependencies are exact pins in the lockfile.

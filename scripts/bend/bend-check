@@ -1,0 +1,12 @@
+#!/bin/sh
+# Refuse proof checks without the five-second deadline.
+TO=timeout
+command -v timeout >/dev/null 2>&1 || TO=gtimeout
+if ! command -v "$TO" >/dev/null 2>&1; then
+  echo "bend-check: install coreutils to provide timeout or gtimeout" >&2
+  exit 127
+fi
+"$TO" --signal=KILL 5 bend "$@"
+rc=$?
+[ "$rc" = 124 ] || [ "$rc" = 137 ] && echo "bend-check: exceeded five seconds: $*" >&2
+exit "$rc"
