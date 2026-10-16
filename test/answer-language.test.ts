@@ -3,6 +3,8 @@ import { expect, it } from "vitest"
 import type { AnswerRequest } from "../src/answer-generation/index.ts"
 import { AnswerGeneration, fakeAnswerLayer } from "../src/answer-generation/index.ts"
 const request = {
+  inputDeliveryId: "11111111-1111-4111-8111-111111111111",
+  responseId: "22222222-2222-4222-8222-222222222222",
   model: "sol",
   prior: "<chat>\n</chat>",
   input: "Fixture input",

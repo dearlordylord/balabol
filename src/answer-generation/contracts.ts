@@ -8,6 +8,8 @@ export const AnswerCapabilities = Schema.Struct({ languages: LanguageTags, outpu
 export type AnswerCapabilities = typeof AnswerCapabilities.Type
 // Complete current input remains separate from exclusive prior memory context.
 export const AnswerRequest = Schema.Struct({
+  inputDeliveryId: Schema.String.check(Schema.isUUID()),
+  responseId: Schema.String.check(Schema.isUUID()),
   model: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(modelNameLimit)),
   prior: Schema.String.check(Schema.isMaxLength(priorContextLimit)),
   input: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(answerTextLimit)),

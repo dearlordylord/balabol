@@ -262,6 +262,8 @@ export class Replies {
       let completed = false
       yield* this.answer
         .generate({
+          inputDeliveryId: input.deliveryId,
+          responseId: base.responseId,
           model: this.settings.answerModel,
           prior: /^[0-9]+\+[0-9]+\|assistant_interrupted:/m.test(snapshot.text)
             ? `[Interrupted assistant output: generated text may not have been heard; no user agreement implied]\n${snapshot.text}`

@@ -196,6 +196,8 @@ it("validates unsupported capabilities, dependent reply data and startup policy"
       const invalid = yield* Effect.flip(
         Stream.runCollect(
           provider.generate({
+            inputDeliveryId: input.deliveryId,
+            responseId: input.deliveryId,
             model: defaultReplySettings.answerModel,
             prior: "",
             input: "hello",

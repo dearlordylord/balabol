@@ -126,6 +126,8 @@ it("maps explicit memory and requested language to real deltas with truthful emp
           const answer = yield* AnswerGeneration
           const events = yield* Stream.runCollect(
             answer.generate({
+              inputDeliveryId: "11111111-1111-4111-8111-111111111111",
+              responseId: "22222222-2222-4222-8222-222222222222",
               model: request.model,
               prior: "PRIOR",
               input: "CURRENT",

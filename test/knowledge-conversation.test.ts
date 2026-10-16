@@ -25,7 +25,12 @@ it("the conversation inspects its empty knowledge schema and answers using the a
   let requests = 0
   const transport: ToolInferenceTransport = async (request) => {
     requests++
-    expect(request.tools.map((tool) => tool.name)).toEqual(["inspect_knowledge"])
+    expect(request.tools.map((tool) => tool.name).sort()).toEqual([
+      "apply_knowledge",
+      "inspect_knowledge",
+      "inspect_knowledge_operations",
+      "query_knowledge"
+    ])
     if (requests === 1) return new Response(toolResponse)
     const result = request.input.find((item) => "type" in item && item.type === "function_call_output")
     expect(result).toMatchObject({ call_id: "call-1" })

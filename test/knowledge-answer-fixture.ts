@@ -1,7 +1,7 @@
 import { Effect, Layer, Redacted } from "effect"
 import { subscriptionAnswerLayer } from "../src/answer-generation/index.ts"
 import { SqliteMemoryStorage } from "../src/memory/index.ts"
-import { sqliteKnowledgeLayer } from "../src/personal-knowledge/index.ts"
+import { DurableKnowledge, durableKnowledgeLayer, personalKnowledgeLayer } from "../src/personal-knowledge/index.ts"
 import { Subscription, subscriptionToolInferenceLayer } from "../src/subscription/index.ts"
 import type { ToolInferenceTransport } from "../src/subscription/index.ts"
 const subscription = Layer.succeed(Subscription, {
@@ -12,13 +12,19 @@ const subscription = Layer.succeed(Subscription, {
   models: () => Effect.succeed([]),
   disconnect: () => Effect.succeed({ revocation: "NotNeeded" })
 })
-export const knowledgeAnswerLayer = (transport: ToolInferenceTransport) =>
+export const knowledgeAnswerLayer = (
+  transport: ToolInferenceTransport,
+  decorate: (durable: typeof DurableKnowledge.Service) => typeof DurableKnowledge.Service = (durable) => durable
+) =>
   subscriptionAnswerLayer().pipe(
     Layer.provide(
       Layer.unwrap(
         Effect.gen(function* () {
           const resource = yield* SqliteMemoryStorage
-          return sqliteKnowledgeLayer(resource.storage.database)
+          const durable = Layer.effect(DurableKnowledge, Effect.map(DurableKnowledge, decorate)).pipe(
+            Layer.provide(durableKnowledgeLayer(resource.storage.database))
+          )
+          return personalKnowledgeLayer.pipe(Layer.provide(durable))
         })
       )
     ),

@@ -36,7 +36,7 @@ const request = (options: LanguageModel.ProviderOptions) =>
       name: tool.name,
       description: Tool.getDescription(tool) ?? "Explicit application tool",
       parameters: Tool.getJsonSchema(tool),
-      strict: true
+      strict: Tool.getStrictMode(tool) ?? true
     })),
     toolChoice:
       typeof options.toolChoice === "string"

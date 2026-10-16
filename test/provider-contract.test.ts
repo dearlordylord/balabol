@@ -6,6 +6,8 @@ import { AnswerGeneration, AnswerRequest, fakeAnswerLayer } from "../src/answer-
 import { SummaryGeneration, fakeSummaryLayer, configurableFakeSummaryLayer } from "../src/summary-generation/index.ts"
 
 const answerRequest: AnswerRequest = {
+  inputDeliveryId: "11111111-1111-4111-8111-111111111111",
+  responseId: "22222222-2222-4222-8222-222222222222",
   model: "sol",
   prior: "<chat>\n</chat>",
   input: "bonjour",
