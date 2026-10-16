@@ -5,6 +5,7 @@ import { Subscription } from "./service.ts"
 import { inferenceStream, responsesHttpTransport, safeFailure } from "./inference.ts"
 import type { ToolInput } from "./tool-model.ts"
 import { SubscriptionToolInference, ToolInferenceRequest } from "./tool-model.ts"
+import { boundReasoning } from "./tool-reasoning.ts"
 import { ToolResponseParser } from "./tool-parser.ts"
 export type ToolInferenceTransport = (
   request: ToolInferenceRequest,
@@ -20,6 +21,7 @@ export function toolInferenceHttpTransport(fetcher: typeof fetch = fetch): ToolI
         input: request.input,
         tools: request.tools,
         tool_choice: request.toolChoice,
+        include: ["reasoning.encrypted_content"],
         store: false,
         stream: true
       },
@@ -62,20 +64,36 @@ function validateRequest(request: ToolInferenceRequest) {
   if (new Set(request.tools.map((tool) => tool.name)).size !== request.tools.length) throw inferenceFailed("Protocol")
   const calls = new Map<string, string | undefined>()
   const results = new Set<string>()
-  for (const input of request.input) validateInput(input, calls, results)
+  const identities = new Set<string>()
+  for (const input of request.input) validateInput(input, calls, results, identities)
   if (calls.size !== results.size) throw inferenceFailed("Protocol")
   return request
 }
 
-function validateInput(input: ToolInput, calls: Map<string, string | undefined>, results: Set<string>) {
+function validateInput(
+  input: ToolInput,
+  calls: Map<string, string | undefined>,
+  results: Set<string>,
+  identities: Set<string>
+) {
   if ("role" in input) return
+  if (input.type === "reasoning") {
+    boundReasoning(input)
+    registerInputIdentity(input.id, identities)
+    return
+  }
   if (input.type === "function_call") {
-    if (calls.has(input.call_id) || (input.id !== undefined && [...calls.values()].includes(input.id)))
-      throw inferenceFailed("Protocol")
+    if (input.id !== undefined) registerInputIdentity(input.id, identities)
+    if (calls.has(input.call_id)) throw inferenceFailed("Protocol")
     Schema.decodeUnknownSync(Schema.JsonObject)(JSON.parse(input.arguments))
     calls.set(input.call_id, input.id)
   } else {
     if (!calls.has(input.call_id) || results.has(input.call_id)) throw inferenceFailed("Protocol")
     results.add(input.call_id)
   }
+}
+
+function registerInputIdentity(id: string, identities: Set<string>) {
+  if (identities.has(id)) throw inferenceFailed("Protocol")
+  identities.add(id)
 }

@@ -66,7 +66,13 @@ it.effect("releases completed structured calls only after a successful terminal"
     Effect.map((events) =>
       expect(events).toEqual([
         { kind: "ToolCall", id: "fc_1", callId: "call_1", name: "inspect_schema", arguments: "{}" },
-        { kind: "Completed", finishReason: "tool_calls" }
+        {
+          kind: "Completed",
+          finishReason: "tool_calls",
+          replay: [
+            { type: "function_call", id: call.id, call_id: call.call_id, name: call.name, arguments: call.arguments }
+          ]
+        }
       ])
     )
   )
@@ -123,6 +129,7 @@ it.effect("sends explicit full replay with function call and actual result witho
         input: replay.input,
         tools: request.tools,
         tool_choice: "auto",
+        include: ["reasoning.encrypted_content"],
         store: false,
         stream: true
       })
@@ -159,7 +166,15 @@ it.effect("continuation accepts omitted provider item identity and rejects unmat
         async () =>
           new Response(
             frame({ type: "response.output_text.delta", delta: "Empty schema" }) +
-              frame({ type: "response.completed", response: { status: "completed", output: [{ type: "message" }] } })
+              frame({
+                type: "response.completed",
+                response: {
+                  status: "completed",
+                  output: [
+                    { type: "message", role: "assistant", content: [{ type: "output_text", text: "Empty schema" }] }
+                  ]
+                }
+              })
           )
       ).pipe(Layer.provide(credentials))
     )

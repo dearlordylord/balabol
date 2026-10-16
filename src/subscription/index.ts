@@ -37,5 +37,6 @@ export {
   ToolInput,
   ToolDefinition
 } from "./tool-model.ts"
+export { ReasoningItem, ToolReplay } from "./tool-model.ts"
 export { subscriptionToolInferenceLayer, toolInferenceHttpTransport } from "./tool-inference.ts"
 export type { ToolInferenceTransport } from "./tool-inference.ts"
