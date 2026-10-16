@@ -59,8 +59,11 @@ describe("voice input uses the sole durable conversation", () => {
         expect((yield* Effect.flip(voice.authorize(joined.sessionId, "wrong"))).code).toBe("Unauthorized")
         expect((yield* Effect.flip(voice.start(startVoiceRequest()))).code).toBe("VoiceBusy")
         yield* fixture.segment
-        yield* settle
-        const snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        let snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        for (let attempt = 0; !snapshot.events.some((event) => event.kind === "Accepted") && attempt < 200; attempt++) {
+          yield* Effect.sleep(5)
+          snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        }
         expect(snapshot.events.filter((event) => event.kind !== "Output").map((event) => event.kind)).toEqual([
           "Interim",
           "Final",

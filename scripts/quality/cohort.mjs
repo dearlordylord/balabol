@@ -22,9 +22,9 @@ const read = (path, schema) => Schema.decodeUnknownSync(Schema.fromJsonString(sc
 export const checkCohort = (root) => {
   const manifest = read(resolve(root, "package.json"), Manifest);
   const expected = {
-    effect: "4.0.0",
-    "@effect/platform-node": "4.0.0",
-    "@effect/vitest": "4.0.0",
+    effect: "4.0.5",
+    "@effect/platform-node": "4.0.5",
+    "@effect/vitest": "4.0.5",
     "@effect/tsgo": "0.36.4",
     vitest: "5.0.1",
     "@vitest/coverage-v8": "5.0.1",
@@ -47,7 +47,7 @@ export const checkCohort = (root) => {
     ),
     Installed,
   );
-  if (shared.version !== "4.0.0") throw new Error("Effect transitive cohort mismatch");
+  if (shared.version !== "4.0.5") throw new Error("Effect transitive cohort mismatch");
   const tree = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Tree)))(
     command(root, "pnpm", ["list", "--depth", "Infinity", "--json"], true),
   );
@@ -58,7 +58,7 @@ export const checkCohort = (root) => {
       ...entry.optionalDependencies,
     })) {
       if (name === "effect" || name.startsWith("@effect/")) {
-        const required = name.startsWith("@effect/tsgo") ? "0.36.4" : "4.0.0";
+        const required = name.startsWith("@effect/tsgo") ? "0.36.4" : "4.0.5";
         if (["@effect/cli", "@effect/platform"].includes(name) || dependency.version !== required)
           throw new Error(`Incompatible Effect dependency: ${name}@${dependency.version}`);
       }

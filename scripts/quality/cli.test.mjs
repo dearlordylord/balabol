@@ -419,9 +419,9 @@ test("cohort allows a plain memory patch while rejecting every Effect patch", ()
     assert.equal(result.status, 0, result.stdout + result.stderr);
     for (const dependency of [
       "effect",
-      "effect@4.0.0",
-      "@effect/platform-node@4.0.0",
-      "@effect/platform-node-shared@4.0.0",
+      "effect@4.0.5",
+      "@effect/platform-node@4.0.5",
+      "@effect/platform-node-shared@4.0.5",
       "@effect/tsgo@0.36.4",
     ]) {
       manifest.pnpm.patchedDependencies[dependency] = "patches/forbidden.patch";

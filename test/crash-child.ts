@@ -13,6 +13,8 @@ const core = await Memory.open({
     appendNode: (node) => storage.appendNode(node),
     appendRecords: async (records) => {
       await storage.appendRecords(records)
+      // An unresolved Promise does not keep Node alive; hold IPC until the parent sends SIGKILL.
+      process.channel?.ref()
       process.send?.("raw-committed")
       await new Promise<void>(() => {})
     }
