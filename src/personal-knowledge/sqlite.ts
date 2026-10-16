@@ -11,6 +11,8 @@ import {
   OperationIdentity,
   ReceiptPage,
   ReceiptQuery,
+  RevisionQuery,
+  RevisionPage,
   StoredOutcome,
   changeIdentity,
   freezeKnowledge,
@@ -125,6 +127,35 @@ const receiptsByInput = (database: DatabaseSync, query: ReceiptQuery): ReceiptPa
   freezeKnowledge(result)
   return result
 }
+const HistoryRow = Schema.Struct({ revision: RevisionNumber, payload: Schema.NullOr(Schema.String) })
+const history = (database: DatabaseSync, query: RevisionQuery): RevisionPage => {
+  const parsed = Schema.decodeUnknownSync(RevisionQuery, { onExcessProperty: "error" })(query)
+  const rows = database
+    .prepare(
+      "SELECT versions.revision, CASE WHEN length(CAST(outcomes.receipt AS BLOB))<=? THEN outcomes.receipt ELSE NULL END AS payload FROM personal_knowledge_revisions AS versions LEFT JOIN personal_knowledge_receipts AS outcomes ON outcomes.revision=versions.revision WHERE versions.revision>? AND versions.revision<=? ORDER BY versions.revision LIMIT ?"
+    )
+    .all(
+      knowledgeLimits.receiptBytes,
+      parsed.afterRevision ?? beforeFirstRevision,
+      parsed.throughRevision ?? Number.MAX_SAFE_INTEGER,
+      parsed.limit + 1
+    )
+  const revisions = rows.slice(0, parsed.limit).map((raw) => {
+    const row = Schema.decodeUnknownSync(HistoryRow)(raw)
+    if (row.revision === 0) return { revision: 0, reason: null, context: null }
+    if (row.payload === null) throw unavailable()
+    const receipt = decode(KnowledgeReceipt, row)
+    if (receipt.revision !== row.revision) throw unavailable()
+    return { revision: row.revision, reason: receipt.reason, context: receipt.context }
+  })
+  const result = Schema.decodeUnknownSync(RevisionPage)({
+    revisions,
+    nextAfterRevision: rows.length > parsed.limit ? (revisions.at(beforeFirstRevision)?.revision ?? null) : null
+  })
+  if (bytes(JSON.stringify(result)) > knowledgeLimits.receiptBytes) throw unavailable()
+  freezeKnowledge(result)
+  return result
+}
 const persist = (database: DatabaseSync, revision: KnowledgeRevision, change: Change): KnowledgeReceipt => {
   const receipt = revision.receipt
   if (receipt === null || receipt.revision !== revision.snapshot.revision || receipt.reason !== change.reason)
@@ -212,6 +243,7 @@ export const durableKnowledgeLayer = (database: DatabaseSync) =>
       try: () => {
         initialize(database)
         return DurableKnowledge.of({
+          history: (query) => Effect.try({ try: () => history(database, query), catch: unavailable }),
           current: () => Effect.try({ try: () => current(database), catch: unavailable }),
           revision: (revision) => Effect.try({ try: () => readRevision(database, revision), catch: unavailable }),
           receiptsByInput: (query) => Effect.try({ try: () => receiptsByInput(database, query), catch: unavailable }),

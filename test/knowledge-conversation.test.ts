@@ -28,6 +28,8 @@ it("the conversation inspects its empty knowledge schema and answers using the a
     expect(request.tools.map((tool) => tool.name).sort()).toEqual([
       "apply_knowledge",
       "inspect_knowledge",
+      "inspect_knowledge_difference",
+      "inspect_knowledge_history",
       "inspect_knowledge_operations",
       "query_knowledge",
       "query_knowledge_neighborhood"

@@ -4,6 +4,10 @@ import { Tool, Toolkit } from "effect/ai"
 import {
   Change,
   HostContext,
+  RevisionQuery,
+  RevisionPage,
+  DifferenceQuery,
+  DifferencePage,
   KnowledgeRejected,
   KnowledgeReceipt,
   KnowledgeSnapshot,
@@ -35,7 +39,7 @@ export const knowledgeTools = Toolkit.make(
   }),
   Tool.make("apply_knowledge", {
     description:
-      "Atomically introduce explicit types and create or update typed entities and relations with declared endpoint kinds. Supply a reason. Operation identity is assigned by the host; never supply identity fields. Correct rejected changes before retrying.",
+      "Atomically introduce explicit types and create or update typed entities and relations with declared endpoint kinds. Use only supported AddField or RenameField migrations to evolve declared entity or relation fields atomically with ordinary writes. Required added fields need validated defaults for existing records. Supply a reason. Operation identity is assigned by the host; never supply identity fields. Correct rejected changes before retrying. Receipt updatedIds and updatedRelationIds report explicit writes; migration-affected identities and fields are available through paginated inspect_knowledge_difference, so empty receipt update lists do not mean a migration changed no records.",
     parameters: Change.annotate(strict),
     success: KnowledgeReceipt,
     failure: failures,
@@ -43,7 +47,7 @@ export const knowledgeTools = Toolkit.make(
   }).annotate(Tool.Strict, false),
   Tool.make("query_knowledge", {
     description:
-      "Read typed personal entities by stable identity, type or declared field values, with bounded pagination.",
+      "Read typed personal entities by stable identity, type or declared field values, with bounded pagination. Supply revision to read retained data against its original schema.",
     parameters: Query.annotate(strict),
     success: QueryPage,
     failure: failures,
@@ -51,9 +55,25 @@ export const knowledgeTools = Toolkit.make(
   }).annotate(Tool.Strict, false),
   Tool.make("query_knowledge_neighborhood", {
     description:
-      "Read a bounded one- or two-step relation neighborhood with stable identities, typed endpoint interpretation and explicit pagination or truncation. Distinguish personal mnemonics from asserted translations using their declared relation types.",
+      "Read a bounded one- or two-step relation neighborhood with stable identities, typed endpoint interpretation and explicit pagination or truncation. Supply revision for a matching historical schema and graph. Distinguish personal mnemonics from asserted translations using their declared relation types.",
     parameters: NeighborhoodQuery.annotate(strict),
     success: NeighborhoodPage,
+    failure: failures,
+    failureMode: "return"
+  }).annotate(Tool.Strict, false),
+  Tool.make("inspect_knowledge_history", {
+    description:
+      "List bounded retained knowledge revisions with their stored reasons and host context. Use the returned revision cursor to continue; this never reruns model calls or migrations.",
+    parameters: RevisionQuery.annotate(strict),
+    success: RevisionPage,
+    failure: failures,
+    failureMode: "return"
+  }).annotate(Tool.Strict, false),
+  Tool.make("inspect_knowledge_difference", {
+    description:
+      "Compare two retained knowledge revisions structurally, including schema changes, affected stable record IDs and changed field names. Use the returned cursor for bounded continuation.",
+    parameters: DifferenceQuery.annotate(strict),
+    success: DifferencePage,
     failure: failures,
     failureMode: "return"
   }).annotate(Tool.Strict, false),
@@ -88,6 +108,8 @@ export const knowledgeHandlers = (knowledge: typeof PersonalKnowledge.Service, r
         )
         return yield* knowledge.apply(change, host)
       }),
+    inspect_knowledge_history: (query) => knowledge.history(query),
+    inspect_knowledge_difference: (query) => knowledge.difference(query),
     query_knowledge: (query) => knowledge.query(query),
     query_knowledge_neighborhood: (query) => knowledge.neighborhood(query),
     inspect_knowledge_operations: (query) => knowledge.receipts({ ...query, inputDeliveryId: request.inputDeliveryId })

@@ -8,6 +8,8 @@ import type {
   OperationIdentity,
   ReceiptPage,
   ReceiptQuery,
+  RevisionQuery,
+  RevisionPage,
   StoredOutcome
 } from "./models.ts"
 
@@ -15,6 +17,7 @@ import type {
 export class DurableKnowledge extends Context.Service<
   DurableKnowledge,
   {
+    history: (query: RevisionQuery) => Effect.Effect<RevisionPage, KnowledgeUnavailable>
     current: () => Effect.Effect<KnowledgeRevision, KnowledgeUnavailable>
     revision: (revision: number) => Effect.Effect<KnowledgeRevision | undefined, KnowledgeUnavailable>
     receiptsByInput: (query: ReceiptQuery) => Effect.Effect<ReceiptPage, KnowledgeUnavailable>

@@ -34,7 +34,7 @@ const lostAcknowledgement = Layer.effect(
         return 0
       })
       storage.database.exec(
-        "CREATE TEMP TRIGGER crash_before_commit AFTER INSERT ON personal_knowledge_revisions WHEN NEW.revision=1 BEGIN SELECT crash_before_commit(); END"
+        "CREATE TEMP TRIGGER crash_before_commit AFTER INSERT ON personal_knowledge_revisions WHEN NEW.revision>0 BEGIN SELECT crash_before_commit(); END"
       )
     }
     return DurableKnowledge.of({

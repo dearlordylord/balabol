@@ -12,6 +12,7 @@ import {
   type KnowledgeReceipt
 } from "./models.ts"
 import { applyRelations } from "./relations.ts"
+import { migrateRevision } from "./migrations.ts"
 import { boundedKnowledge, reject, uniqueNames, validateValues } from "./validation.ts"
 export { boundedKnowledge } from "./validation.ts"
 
@@ -26,9 +27,12 @@ export const parseChange = (change: Change): Change => {
     change.updates.length +
     entryCount(change.relationTypes) +
     entryCount(change.relationCreates) +
-    entryCount(change.relationUpdates)
+    entryCount(change.relationUpdates) +
+    entryCount(change.migrations)
   if (count === 0) reject("InvalidEntity", "A change must introduce a type, create an entity or update an entity")
   if (count > knowledgeLimits.batchEntries) reject("LimitExceeded", "A change permits at most 100 total entries")
+  if (entryCount(change.migrations) > knowledgeLimits.migrations)
+    reject("LimitExceeded", "A change permits at most 20 migrations")
   if (
     [...change.types, ...(change.relationTypes ?? [])].some(
       (type) => type.fields.length > knowledgeLimits.fieldsPerType
@@ -78,13 +82,25 @@ const updateEntities = (entities: Map<string, Entity>, change: Change): void => 
   }
 }
 export const nextRevision = (current: KnowledgeRevision, change: Change, context: HostContext): KnowledgeRevision => {
-  const types = [...current.snapshot.schema.types, ...change.types]
+  const declared: KnowledgeRevision = {
+    ...current,
+    snapshot: {
+      ...current.snapshot,
+      schema: {
+        types: [...current.snapshot.schema.types, ...change.types],
+        relations: [...current.snapshot.schema.relations, ...(change.relationTypes ?? [])]
+      }
+    }
+  }
+  validateTypes(declared.snapshot.schema.types)
+  const migrated = migrateRevision(declared, change.migrations ?? [])
+  const types = migrated.snapshot.schema.types
   validateTypes(types)
-  const entities = createEntities(current.entities, change.creates)
+  const entities = createEntities(migrated.entities, change.creates)
   updateEntities(entities, change)
   const ordered = [...entities.values()].sort((left, right) => left.id.localeCompare(right.id))
   validateEntities(ordered, types)
-  const associations = applyRelations(current, change, ordered, types)
+  const associations = applyRelations(migrated, { ...change, relationTypes: [] }, ordered, types)
   const revision = current.snapshot.revision + 1
   const receipt: KnowledgeReceipt = {
     context,
