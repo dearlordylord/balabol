@@ -100,6 +100,9 @@ final class TextDeliveryUITests: XCTestCase {
     draft.typeText("A multiline draft\nwith a second line\nand a third line")
     XCTAssertTrue(draft.isHittable)
     XCTAssertTrue(app.buttons["send-message"].isHittable)
+    if app.keyboards.firstMatch.exists {
+      XCTAssertGreaterThan(draft.frame.minY - app.navigationBars.firstMatch.frame.maxY, 150)
+    }
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Accessibility text and keyboard"
     screenshot.lifetime = .keepAlways

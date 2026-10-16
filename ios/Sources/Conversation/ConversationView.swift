@@ -283,7 +283,7 @@
           if !model.draftStorageReady {
             Button("Retry saved draft") { Task { await model.reloadDraft() } }.frame(minHeight: 44)
           }
-          if typeSize.isAccessibilitySize {
+          if typeSize.isAccessibilitySize && model.pendingDelivery != nil {
             VStack(alignment: .trailing, spacing: 8) {
               draftField
               sendButton
@@ -323,16 +323,25 @@
         followsLatest = true
         Task { await model.send() }
       } label: {
-        Text(
-          model.isSending
-            ? "Sending…" : model.pendingDelivery == nil ? "Send" : "Retry same message"
-        )
-        .fontWeight(.semibold).frame(minWidth: 44, minHeight: 32)
-        .fixedSize(horizontal: false, vertical: true)
+        if typeSize.isAccessibilitySize && model.pendingDelivery == nil {
+          Image(systemName: "arrow.up")
+            .font(.system(size: 20, weight: .semibold))
+            .frame(minWidth: 24, minHeight: 32)
+        } else {
+          Text(
+            model.isSending
+              ? "Sending…" : model.pendingDelivery == nil ? "Send" : "Retry same message"
+          )
+          .fontWeight(.semibold).frame(minWidth: 44, minHeight: 32)
+          .fixedSize(horizontal: false, vertical: true)
+        }
       }
       .buttonStyle(.borderedProminent).controlSize(.large)
       .disabled(
         !model.canSendDraft || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      )
+      .accessibilityLabel(
+        model.isSending ? "Sending" : model.pendingDelivery == nil ? "Send" : "Retry same message"
       )
       .accessibilityIdentifier("send-message")
     }
