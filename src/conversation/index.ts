@@ -11,3 +11,6 @@ export type {
   SpeechFence,
   FenceAcknowledgement
 } from "./admission-contracts.ts"
+
+export { ReplyDeliveryUpdate } from "./delivery.ts"
+export type { ReplyDeliveryAuthorization, ReplyDeliverySubscription } from "./delivery.ts"

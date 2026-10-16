@@ -63,6 +63,15 @@ const waitRequests = (provider: ReturnType<typeof controlledRecognition>, count:
     expect(provider.requests).toHaveLength(count)
   })
 const page = () => Effect.flatMap(Conversation, (conversation) => conversation.page({ limit: 100 }))
+const waitAccepted = (voice: Voice["Service"], sessionId: string) =>
+  Effect.gen(function* () {
+    let snapshot = yield* voice.snapshot(sessionId, 0)
+    for (let poll = 0; !snapshot.events.some((event) => event.kind === "Accepted") && poll < 200; poll++) {
+      yield* Effect.sleep(5)
+      snapshot = yield* voice.snapshot(sessionId, 0)
+    }
+    expect(snapshot.events.some((event) => event.kind === "Accepted")).toBe(true)
+  })
 
 it("orders completed chunks, shifts multilingual spans and accepts only once after an empty final chunk", () => {
   const provider = controlledRecognition()
@@ -83,7 +92,7 @@ it("orders completed chunks, shifts multilingual spans and accepts only once aft
         yield* settle
         expect((yield* page()).messages).toEqual([])
         provider.requests[0]?.finish("bread")
-        yield* settle
+        yield* waitAccepted(voice, join.sessionId)
         const messages = (yield* page()).messages
         expect(messages.map((message) => message.text)).toEqual(["bread pain"])
         expect(messages[0]?.languageSpans).toEqual([
@@ -119,7 +128,7 @@ it("keeps resumed speech provisional when the previous quiet chunk finishes reco
         yield* frames(transport, 50, 0)
         yield* waitRequests(provider, 2)
         provider.requests[1]?.finish("second")
-        yield* settle
+        yield* waitAccepted(voice, join.sessionId)
         expect((yield* page()).messages.map((message) => message.text)).toEqual(["first second"])
         yield* voice.end(join.sessionId)
       }),
@@ -150,7 +159,7 @@ it("fails the whole incomplete turn once, ignores stale chunk errors and suppres
         yield* frames(transport, 50, 0)
         yield* waitRequests(provider, 3)
         provider.requests[2]?.finish("fresh")
-        yield* settle
+        yield* waitAccepted(voice, join.sessionId)
         expect((yield* page()).messages.map((message) => message.text)).toEqual(["fresh"])
         yield* voice.end(join.sessionId)
       }),

@@ -35,28 +35,37 @@ export const voiceTransportFixture = (joinImmediately = true) => {
             expiresAt: 120000
           },
           connection: {
-            openOutput: (outputEpoch) =>
+            openOutput: (outputEpoch, authorization) =>
               Effect.sync(() => {
-                let valid = true
+                let valid = authorization.isAuthorized() && !authorization.signal.aborted
                 const lifecycle = { outputEpoch, invalidated: false, closed: false }
                 publications.push(lifecycle)
+                const invalidate = () => {
+                  valid = false
+                  lifecycle.invalidated = true
+                }
+                authorization.signal.addEventListener("abort", invalidate, { once: true })
+                if (!valid) invalidate()
+                const active = () => valid && authorization.isAuthorized() && !authorization.signal.aborted
                 return {
                   publisherIdentity: backendParticipantIdentity,
                   trackSid: `TR_${randomUUID()}`,
-                  invalidate: () => {
-                    valid = false
-                    lifecycle.invalidated = true
-                  },
+                  invalidate,
                   close: () =>
                     Effect.sync(() => {
+                      authorization.signal.removeEventListener("abort", invalidate)
                       valid = false
                       lifecycle.closed = true
                     }),
-                  drain: () => Effect.void,
+                  drain: () => Effect.suspend(() => (active() ? Effect.void : Effect.interrupt)),
                   capture: (audio: SynthesisAudio) =>
-                    Effect.sync(() => {
-                      if (valid) captured.push({ outputEpoch, frames: audio.sampleFrames })
-                    })
+                    Effect.suspend(() =>
+                      active()
+                        ? Effect.sync(() => {
+                            captured.push({ outputEpoch, frames: audio.sampleFrames })
+                          })
+                        : Effect.interrupt
+                    )
                 }
               }),
             close: () =>

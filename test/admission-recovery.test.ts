@@ -179,11 +179,7 @@ it("settles a failed start after authorization is revoked during asynchronous de
             const conversation = yield* Conversation
             const scope = yield* Effect.scope
             const source = yield* conversation.openInputSource()
-            yield* conversation.registerReplyDelivery({
-              completionMillis: 60000,
-              started: () => {},
-              invalidated: () => {}
-            })
+            yield* conversation.registerReplyDelivery({ completionMillis: 60000 })
             const message = { deliveryId: crypto.randomUUID(), text: "fenced during preparation" }
             const reservation = yield* conversation.registerInput({
               message,

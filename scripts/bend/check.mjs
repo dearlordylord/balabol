@@ -7,6 +7,7 @@ const directory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(directory, "../..");
 const commands = ["qualify.mjs", "domain-qualify.mjs"];
 if (existsSync(resolve(root, "src/conversation/admission-core/core.bend"))) commands.push("check-admission.mjs");
+if (existsSync(resolve(root, "src/conversation/response-terminal-core/core.bend"))) commands.push("terminal-check.mjs");
 for (const command of commands) {
   const result = spawnSync(process.execPath, [resolve(directory, command)], {
     cwd: root,

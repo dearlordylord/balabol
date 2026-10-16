@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createHash } from "node:crypto"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Schema, Stream, Queue, Deferred } from "effect"
 import { expect, it } from "vitest"
 import {
   Voice,
@@ -18,7 +18,7 @@ import { SpeechSynthesis, SpeechSynthesisFailed, fakeSynthesisLayer } from "../s
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { diagnosticErrorCode } from "../src/voice/diagnostics.ts"
 import { parseConfig } from "../src/bootstrap/index.ts"
-import { Conversation, type ReplyDeliveryRegistration, type ResponseInvalidation } from "../src/conversation/index.ts"
+import { Conversation, type ReplyDeliveryUpdate } from "../src/conversation/index.ts"
 import { ReplyAudio } from "../src/voice/output.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { replyLayer, waitForReply } from "./reply-fixture.ts"
@@ -260,7 +260,7 @@ it("records audio failure separately from speech even when its durable receipt i
   }
 })
 
-it("attributes a stale invalidation to its requested response without borrowing the active epoch", async () => {
+it("ignores a replayed delivery projection without borrowing the active epoch", async () => {
   const database = await temporaryDatabase()
   const transport = voiceTransportFixture()
   const records: VoiceDiagnosticInput[] = []
@@ -271,12 +271,27 @@ it("attributes a stale invalidation to its requested response without borrowing 
         const synthesis = yield* SpeechSynthesis
         const media = yield* VoiceTransport
         const scope = yield* Effect.scope
-        let registration: ReplyDeliveryRegistration | undefined
+        const injected = yield* Queue.unbounded<ReplyDeliveryUpdate>()
+        const secondReady = yield* Deferred.make<void>()
+        let firstUpdate: ReplyDeliveryUpdate | undefined
         const observed = Conversation.of({
           ...conversation,
           registerReplyDelivery(input) {
-            registration = input
-            return conversation.registerReplyDelivery(input)
+            return conversation.registerReplyDelivery(input).pipe(
+              Effect.map((registration) => ({
+                ...registration,
+                updates: Stream.merge(
+                  registration.updates.pipe(
+                    Stream.tap((update) =>
+                      Effect.sync(() => {
+                        if (firstUpdate === undefined && update.kind === "Started") firstUpdate = update
+                      })
+                    )
+                  ),
+                  Stream.fromQueue(injected)
+                )
+              }))
+            )
           }
         })
         const opened = yield* media.open(
@@ -291,7 +306,11 @@ it("attributes a stale invalidation to its requested response without borrowing 
           synthesis,
           opened.connection,
           scope,
-          () => Effect.void,
+          (): Effect.Effect<void> =>
+            audio.snapshot?.inputDeliveryId === "22222222-2222-4222-8222-222222222222" &&
+            audio.snapshot.status === "AwaitingReady"
+              ? Deferred.succeed(secondReady, undefined).pipe(Effect.asVoid)
+              : Effect.void,
           defaultVoiceOutputSettings,
           {
             record(input) {
@@ -303,33 +322,23 @@ it("attributes a stale invalidation to its requested response without borrowing 
         yield* conversation.send({ deliveryId: identity, text: "First fixture" })
         const first = audio.snapshot
         if (first === null) throw new Error("Missing first output")
-        const target: ResponseInvalidation = {
-          responseId: first.responseId,
-          inputDeliveryId: first.inputDeliveryId,
-          reason: "Interrupted"
-        }
         yield* conversation.send({ deliveryId: "22222222-2222-4222-8222-222222222222", text: "Second fixture" })
+        yield* Deferred.await(secondReady).pipe(Effect.timeout("2 seconds"))
         const second = audio.snapshot
-        if (second === null || registration === undefined) throw new Error("Missing second output")
+        if (second === null || firstUpdate === undefined || firstUpdate.kind !== "Started")
+          throw new Error("Missing second output")
         records.length = 0
-        registration.invalidated(target)
-        expect(records).toEqual([
-          {
-            cause: "conversationInvalidation",
-            applied: false,
-            sessionId: identity,
-            responseId: first.responseId,
-            inputDeliveryId: first.inputDeliveryId
-          }
-        ])
+        yield* Queue.offer(injected, { ...firstUpdate, kind: "Invalidated", reason: "Interrupted" })
+        yield* Effect.sleep(1)
+        expect(records).toEqual([])
         expect(audio.snapshot).toEqual(second)
         expect(second.responseId).not.toBe(first.responseId)
         yield* audio.close()
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           Layer.mergeAll(replyLayer(database.path, fakeAnswerLayer(0)), fakeSynthesisLayer(), transport.layer)
-        ),
-        Effect.scoped
+        )
       )
     )
   } finally {

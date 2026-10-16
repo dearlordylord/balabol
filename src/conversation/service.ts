@@ -1,17 +1,21 @@
 import { fakeAnswerLayer, AnswerGeneration, AnswerCapabilities, AnswerFailed } from "../answer-generation/index.ts"
 import { makeAdmissions } from "./admission.ts"
 import type { AdmissionService } from "./admission-contracts.ts"
-import { Replies } from "./replies.ts"
 import { defaultReplySettings, ReplyConfiguration } from "./reply-configuration.ts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
-import { ReplyDelivery, DeliverySettlement, ResponseTarget } from "./delivery.ts"
-import type { DeliveryTicket, ReplyDeliveryRegistration } from "./delivery.ts"
+import { DeliverySettlement, ResponseTarget } from "./delivery.ts"
+import type {
+  DeliveryTicket,
+  ReplyDeliveryRegistration,
+  ReplyDeliverySubscription,
+  ReplyDeliveryAuthorization
+} from "./delivery.ts"
 import { DeliveryId, Memory } from "../memory/index.ts"
 import {
   type SendMessage,
   type DeliveryConflict,
   type CurrentTurn,
-  ReplyBusy,
+  type ReplyBusy,
   InvalidInput,
   type Reply,
   type ReplyNotFound,
@@ -48,7 +52,8 @@ export class Conversation extends Context.Service<
     readonly replyLanguages: readonly string[]
     registerReplyDelivery: (
       input: ReplyDeliveryRegistration
-    ) => Effect.Effect<{ registrationId: string }, InvalidInput | ReplyBusy>
+    ) => Effect.Effect<ReplyDeliverySubscription, InvalidInput | ReplyBusy>
+    replyDeliveryAuthorization: (ticket: DeliveryTicket) => ReplyDeliveryAuthorization
     deliverySnapshot: (registrationId: string) => Effect.Effect<DeliveryTicket | null, InvalidInput>
     interruptResponse: (target: ResponseTarget) => Effect.Effect<Reply | null, InvalidInput | StorageUnavailable>
     settleReplyDelivery: (ticket: DeliverySettlement) => Effect.Effect<Reply | null, InvalidInput | StorageUnavailable>
@@ -79,11 +84,14 @@ export class Conversation extends Context.Service<
       const scope = yield* Effect.scope
       const settings = yield* ReplyConfiguration
       const semaphore = yield* Semaphore.make(1)
-      const delivery = new ReplyDelivery()
-      const deadline = (target: ResponseTarget): Effect.Effect<void, StorageUnavailable> =>
-        replies.expire(target).pipe(Effect.asVoid, Effect.uninterruptible, semaphore.withPermits(1))
-      const replies = new Replies(memory, answer, scope, settings, delivery, deadline)
-      const admissions = yield* makeAdmissions(memory, replies, scope, semaphore, answer.capabilities.languages)
+      const { admissions, replies } = yield* makeAdmissions(
+        memory,
+        answer,
+        settings,
+        scope,
+        semaphore,
+        answer.capabilities.languages
+      )
       const send = Effect.fn("Conversation.send")(function* (message: SendMessage) {
         const reservation = yield* admissions.registerInput({ message })
         return yield* admissions.submitInput(reservation)
@@ -105,52 +113,33 @@ export class Conversation extends Context.Service<
       const currentTurn = Effect.gen(function* () {
         const input = yield* memory.latestInput()
         return input === undefined ? null : { input, reply: yield* replies.current(input.deliveryId) }
-      }).pipe(semaphore.withPermits(1))
+      })
       const retryReply = (id: string) =>
         parseId(id).pipe(
-          Effect.flatMap((parsed) =>
-            Effect.gen(function* () {
-              const input = yield* memory.latestInput()
-              if (input?.deliveryId !== parsed)
-                return yield* new ReplyBusy({ message: "Only the latest accepted input can be retried" })
-              const state = yield* replies.current(parsed)
-              if (state.state !== "Failed") return state
-              return yield* replies.retry(input)
-            })
-          ),
-          semaphore.withPermits(1),
+          Effect.flatMap((parsed) => replies.retry(parsed)),
           Effect.uninterruptible
         )
       return Conversation.of({
         ...admissions,
         replyLanguages: answer.capabilities.languages,
-        registerReplyDelivery: (input) => delivery.register(input).pipe(semaphore.withPermits(1)),
-        deliverySnapshot: (id) => parseId(id).pipe(Effect.map((parsed) => delivery.snapshot(parsed))),
+        replyDeliveryAuthorization: replies.authorization,
+        registerReplyDelivery: (input) => replies.register(input),
+        deliverySnapshot: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.snapshot(parsed))),
         interruptResponse: (target) =>
           Schema.decodeUnknownEffect(ResponseTarget)(target).pipe(
             Effect.mapError(invalidIdentity),
             Effect.flatMap((parsed) => replies.interrupt(parsed)),
-            semaphore.withPermits(1),
             Effect.uninterruptible
           ),
         settleReplyDelivery: (ticket) =>
           Schema.decodeUnknownEffect(DeliverySettlement)(ticket).pipe(
             Effect.mapError(invalidIdentity),
             Effect.flatMap((parsed) => replies.settle(parsed)),
-            semaphore.withPermits(1),
             Effect.uninterruptible
           ),
         unregisterReplyDelivery: (id) =>
           parseId(id).pipe(
-            Effect.flatMap((parsed) =>
-              Effect.gen(function* () {
-                const active = delivery.snapshot(parsed)
-                yield* (active === null ? Effect.void : replies.interrupt(active).pipe(Effect.asVoid)).pipe(
-                  Effect.ensuring(Effect.sync(() => delivery.detach(parsed)))
-                )
-              })
-            ),
-            semaphore.withPermits(1),
+            Effect.flatMap((parsed) => replies.unregister(parsed)),
             Effect.uninterruptible
           ),
         receipt: (id) =>
@@ -161,20 +150,12 @@ export class Conversation extends Context.Service<
         currentTurn: () => currentTurn,
         retryReply,
         observeReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.observe(parsed))),
-        releaseReply: (id, token) =>
-          parseId(id).pipe(
-            Effect.flatMap((parsed) => replies.release(parsed, token)),
-            semaphore.withPermits(1)
-          ),
+        releaseReply: (id, token) => parseId(id).pipe(Effect.flatMap((parsed) => replies.release(parsed, token))),
         page,
         olderPage,
         send,
         reply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.current(parsed))),
-        cancelReply: (id) =>
-          parseId(id).pipe(
-            Effect.flatMap((parsed) => replies.cancel(parsed)),
-            semaphore.withPermits(1)
-          )
+        cancelReply: (id) => parseId(id).pipe(Effect.flatMap((parsed) => replies.cancel(parsed)))
       })
     })
   )

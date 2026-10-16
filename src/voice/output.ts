@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto"
 import { Deferred, Effect, Fiber, Queue, Stream, Schema } from "effect"
 import type { Scope } from "effect"
-import type { Conversation, DeliveryTicket, ResponseInvalidation, ResponseTarget } from "../conversation/index.ts"
+import type {
+  Conversation,
+  DeliveryTicket,
+  ReplyDeliveryUpdate,
+  ResponseInvalidation,
+  ResponseTarget
+} from "../conversation/index.ts"
 import { SynthesisEvent, SynthesisCapabilities } from "../speech-synthesis/index.ts"
 import type { SpeechSynthesis } from "../speech-synthesis/index.ts"
 import { failed } from "./contracts.ts"
@@ -22,6 +28,7 @@ const sampleRate = 24000
 const readinessMillis = 5000
 const pollMillis = 20
 const maximumError = 1000
+const unobservedSequence = -1
 const invalidationMessage = (target: ResponseInvalidation, previous: { message: string } | null) =>
   target.reason === "Deadline"
     ? "Reply audio delivery exceeded its deadline"
@@ -45,6 +52,8 @@ export class ReplyAudio {
   #publication: AudioPublication | undefined
   #ready: Deferred.Deferred<void> | undefined
   #registration: string | undefined
+  #updates: Fiber.Fiber<void> | undefined
+  #sequence = unobservedSequence
   #worker: Fiber.Fiber<void> | undefined
   #notices: Queue.Queue<boolean> | undefined
   constructor(
@@ -70,7 +79,11 @@ export class ReplyAudio {
     return this.#state
   }
   #active(ticket: DeliveryTicket) {
-    return !this.#fenced && this.#ticket?.deliveryId === ticket.deliveryId
+    return (
+      !this.#fenced &&
+      this.#ticket?.deliveryId === ticket.deliveryId &&
+      this.conversation.replyDeliveryAuthorization(ticket).isAuthorized()
+    )
   }
   #notify() {
     if (this.#notices !== undefined) Queue.offerUnsafe(this.#notices, true)
@@ -127,28 +140,54 @@ export class ReplyAudio {
         Effect.forkIn(this.scope)
       )
       const registration = yield* this.conversation
-        .registerReplyDelivery({
-          completionMillis: this.settings.completionMillis,
-          started: (ticket) => {
-            this.#ticket = ticket
-            this.#fenced = false
-            this.#state = {
-              responseId: ticket.responseId,
-              inputDeliveryId: ticket.inputDeliveryId,
-              outputEpoch: randomUUID(),
-              status: "Preparing",
-              manifest: null,
-              error: null
-            }
-            if (this.#suppressedAdmissions.has(ticket.inputDeliveryId))
-              this.#invalidated({ ...ticket, reason: "Interrupted" })
-            else this.#notify()
-          },
-          invalidated: (target) => this.#invalidated(target)
-        })
+        .registerReplyDelivery({ completionMillis: this.settings.completionMillis })
         .pipe(Effect.mapError((error) => failed("AudioUnavailable", error.message)))
       this.#registration = registration.registrationId
+      this.#updateDelivery(registration.snapshot)
+      this.#updates = yield* registration.updates.pipe(
+        Stream.runForEach((update) => Effect.sync(() => this.#updateDelivery(update))),
+        Effect.forkIn(this.scope)
+      )
     })
+  }
+  #projectTicket(ticket: DeliveryTicket) {
+    if (this.#ticket?.deliveryId === ticket.deliveryId) return
+    this.#publication?.invalidate()
+    this.#ticket = ticket
+    this.#fenced = false
+    this.#state = {
+      responseId: ticket.responseId,
+      inputDeliveryId: ticket.inputDeliveryId,
+      outputEpoch: randomUUID(),
+      status: "Preparing",
+      manifest: null,
+      error: null
+    }
+  }
+  #delivered() {
+    this.#fenced = true
+    if (this.#state !== null && this.#state.manifest !== null)
+      this.#state = { ...this.#state, manifest: this.#state.manifest, status: "Delivered", error: null }
+    this.#notify()
+  }
+  #updateDelivery(update: ReplyDeliveryUpdate) {
+    if (update.registrationId !== this.#registration || update.sequence <= this.#sequence) return
+    this.#sequence = update.sequence
+    if (update.kind === "Idle") return
+    const ticket = update.ticket
+    this.#projectTicket(ticket)
+    switch (update.kind) {
+      case "Invalidated":
+        this.#invalidated({ ...ticket, reason: update.reason })
+        return
+      case "Delivered":
+        this.#delivered()
+        return
+      case "Started":
+        if (this.#suppressedAdmissions.has(ticket.inputDeliveryId))
+          this.#invalidated({ ...ticket, reason: "Interrupted" })
+        else this.#notify()
+    }
   }
   #changed() {
     return Effect.gen({ self: this }, function* () {
@@ -271,33 +310,37 @@ export class ReplyAudio {
       if (state === null) return
       const ready = yield* Deferred.make<void>()
       this.#ready = ready
-      const publication = yield* this.connection.openOutput(state.outputEpoch)
-      this.#publication = publication
-      yield* Effect.gen({ self: this }, function* () {
-        const manifest: AudioManifest = {
-          sessionId: this.sessionId,
-          responseId: ticket.responseId,
-          inputDeliveryId: ticket.inputDeliveryId,
-          outputEpoch: state.outputEpoch,
-          publisherIdentity: publication.publisherIdentity,
-          trackSid: publication.trackSid,
-          sourceAudio: { encoding: "pcm-s16le" as const, sampleRateHz: sampleRate, channels: 1 as const }
-        }
-        yield* this.#set(ticket, { ...state, status: "AwaitingReady", manifest, error: null })
-        yield* Deferred.await(ready).pipe(
-          Effect.timeout(readinessMillis),
-          Effect.mapError(() => failed("AudioUnavailable", "Reply audio readiness exceeded its deadline"))
-        )
-        yield* this.#set(ticket, { ...state, status: "Playing", manifest, error: null })
-        yield* this.#stream(ticket, publication)
-        yield* publication.drain()
-        if (!this.#active(ticket)) return yield* Effect.interrupt
-        yield* this.conversation
-          .settleReplyDelivery({ ...ticket, outcome: "Completed" })
-          .pipe(Effect.mapError((error) => failed("AudioUnavailable", error.message)))
-        yield* this.#set(ticket, { ...state, status: "Delivered", manifest, error: null })
-      }).pipe(
-        Effect.ensuring(
+      yield* Effect.acquireUseRelease(
+        this.connection.openOutput(state.outputEpoch, this.conversation.replyDeliveryAuthorization(ticket)),
+        (publication) =>
+          Effect.gen({ self: this }, function* () {
+            if (!this.#active(ticket)) return yield* Effect.interrupt
+            this.#publication = publication
+            const manifest: AudioManifest = {
+              sessionId: this.sessionId,
+              responseId: ticket.responseId,
+              inputDeliveryId: ticket.inputDeliveryId,
+              outputEpoch: state.outputEpoch,
+              publisherIdentity: publication.publisherIdentity,
+              trackSid: publication.trackSid,
+              sourceAudio: { encoding: "pcm-s16le" as const, sampleRateHz: sampleRate, channels: 1 as const }
+            }
+            yield* this.#set(ticket, { ...state, status: "AwaitingReady", manifest, error: null })
+            yield* Deferred.await(ready).pipe(
+              Effect.timeout(readinessMillis),
+              Effect.mapError(() => failed("AudioUnavailable", "Reply audio readiness exceeded its deadline"))
+            )
+            if (!this.#active(ticket)) return yield* Effect.interrupt
+            yield* this.#set(ticket, { ...state, status: "Playing", manifest, error: null })
+            yield* this.#stream(ticket, publication)
+            yield* publication.drain()
+            if (!this.#active(ticket)) return yield* Effect.interrupt
+            yield* this.conversation
+              .settleReplyDelivery({ ...ticket, outcome: "Completed" })
+              .pipe(Effect.mapError((error) => failed("AudioUnavailable", error.message)))
+            yield* this.#set(ticket, { ...state, status: "Delivered", manifest, error: null })
+          }),
+        (publication) =>
           publication.close().pipe(
             Effect.andThen(
               Effect.sync(() => {
@@ -305,7 +348,6 @@ export class ReplyAudio {
               })
             )
           )
-        )
       )
     })
   }
@@ -362,6 +404,7 @@ export class ReplyAudio {
   close() {
     return Effect.gen({ self: this }, function* () {
       this.retire()
+      if (this.#updates !== undefined) yield* Fiber.interrupt(this.#updates)
       if (this.#registration !== undefined)
         yield* this.conversation.unregisterReplyDelivery(this.#registration).pipe(Effect.ignore)
       this.#publication?.invalidate()

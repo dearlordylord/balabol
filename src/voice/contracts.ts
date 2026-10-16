@@ -2,6 +2,7 @@ import { Context, Schema, SchemaGetter } from "effect"
 import type { SynthesisAudio } from "../speech-synthesis/index.ts"
 import type { Effect } from "effect"
 import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
+import type { ReplyDeliveryAuthorization } from "../conversation/index.ts"
 import { Message } from "../conversation/index.ts"
 const maximumTrackSid = 128
 const outputSampleRate = 24000
@@ -217,7 +218,10 @@ export interface AudioPublication {
   close: () => Effect.Effect<void>
 }
 export interface MediaConnection {
-  openOutput: (outputEpoch: string) => Effect.Effect<AudioPublication, VoiceFailed>
+  openOutput: (
+    outputEpoch: string,
+    authorization: ReplyDeliveryAuthorization
+  ) => Effect.Effect<AudioPublication, VoiceFailed>
   close: () => Effect.Effect<void>
   publish: (event: VoiceEvent) => Effect.Effect<void, VoiceFailed>
 }

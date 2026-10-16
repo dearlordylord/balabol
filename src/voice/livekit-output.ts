@@ -1,8 +1,9 @@
 import { AudioFrame, AudioSource, LocalAudioTrack, TrackPublishOptions, TrackSource } from "@livekit/rtc-node"
-import type { LocalParticipant, LocalTrackPublication } from "@livekit/rtc-node"
+import type { LocalTrack } from "@livekit/rtc-node"
 import { Effect, Scope, Exit, Schema } from "effect"
 import { SynthesisAudio } from "../speech-synthesis/index.ts"
 import { failed } from "./contracts.ts"
+import type { ReplyDeliveryAuthorization } from "../conversation/index.ts"
 import type { AudioPublication, VoiceFailed } from "./contracts.ts"
 const sampleRate = 24000
 const queueMillis = 100
@@ -11,14 +12,28 @@ const publicationMillis = 5000
 const sampleBytes = 2
 const io = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: () => failed("AudioUnavailable", "Reply audio transport failed") })
+/** Narrow RTC publication port; native source/track lifetimes remain owned here. */
+export type ReplyPublisher = {
+  publishTrack: (track: LocalTrack, options: TrackPublishOptions) => Promise<{ readonly sid: string | undefined }>
+  unpublishTrack: (sid: string, stopOnUnpublish?: boolean) => Promise<void>
+}
+const decodeAudioFrame = (audio: SynthesisAudio) => {
+  const data = new Int16Array(audio.sampleFrames)
+  const view = new DataView(audio.bytes.buffer, audio.bytes.byteOffset, audio.bytes.byteLength)
+  for (let index = 0; index < data.length; index++) data[index] = view.getInt16(index * sampleBytes, true)
+  return new AudioFrame(data, sampleRate, 1, audio.sampleFrames)
+}
 export const openLiveKitOutput = (
-  local: LocalParticipant,
+  local: ReplyPublisher,
   parent: Scope.Scope,
   publisherIdentity: string,
   outputEpoch: string,
+  authorization: ReplyDeliveryAuthorization,
   abortConnection: () => Effect.Effect<void>
 ): Effect.Effect<AudioPublication, VoiceFailed> =>
   Effect.gen(function* () {
+    if (!authorization.isAuthorized() || authorization.signal.aborted)
+      return yield* failed("AudioUnavailable", "Reply publication authorization was revoked")
     const scope = yield* Scope.fork(parent)
     return yield* Effect.gen(function* () {
       const source = new AudioSource(sampleRate, 1, queueMillis)
@@ -27,7 +42,7 @@ export const openLiveKitOutput = (
       let closing = false
       let pending: Promise<void> | undefined
       const identity = { sid: "" }
-      const acquisition: { pending?: Promise<LocalTrackPublication> } = {}
+      const acquisition: { pending?: Promise<{ readonly sid: string | undefined }> } = {}
       let acquired = false
       let released = false
       const releaseNative = async () => {
@@ -48,10 +63,14 @@ export const openLiveKitOutput = (
         valid = false
         clear()
       }
+      const authorized = () => valid && !closing && !authorization.signal.aborted && authorization.isAuthorized()
+      authorization.signal.addEventListener("abort", invalidate, { once: true })
+      if (!authorization.isAuthorized() || authorization.signal.aborted) invalidate()
       yield* Scope.addFinalizer(
         scope,
         Effect.gen(function* () {
           invalidate()
+          authorization.signal.removeEventListener("abort", invalidate)
           closing = true
           if (acquisition.pending !== undefined && !acquired) {
             // Keep borrowed handles alive for the SDK's queued publish until its promise settles.
@@ -68,7 +87,7 @@ export const openLiveKitOutput = (
           yield* io(releaseNative).pipe(Effect.timeout(captureMillis), Effect.ignore)
         })
       )
-      if (closing) return yield* failed("AudioUnavailable", "The reply publication scope is closed")
+      if (!authorized()) return yield* failed("AudioUnavailable", "The reply publication scope is closed")
       const operation = local.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }))
       acquisition.pending = operation
       void operation.then(
@@ -86,7 +105,7 @@ export const openLiveKitOutput = (
         Effect.timeout(publicationMillis),
         Effect.mapError(() => failed("AudioUnavailable", "Reply publication failed or exceeded its deadline"))
       )
-      if (closing) return yield* failed("AudioUnavailable", "Reply publication was retired before readiness")
+      if (!authorized()) return yield* failed("AudioUnavailable", "Reply publication was retired before readiness")
       const sid = publication.sid
       if (sid === undefined) return yield* failed("AudioUnavailable", "Reply audio publication lacks an identity")
       identity.sid = sid
@@ -94,15 +113,14 @@ export const openLiveKitOutput = (
         SchemaAudio(raw).pipe(
           Effect.flatMap((audio) =>
             io(async () => {
-              if (!valid || closing || pending !== undefined)
-                throw new Error("Output is invalidated or capture is busy")
-              const data = new Int16Array(audio.sampleFrames)
-              const view = new DataView(audio.bytes.buffer, audio.bytes.byteOffset, audio.bytes.byteLength)
-              for (let index = 0; index < data.length; index++) data[index] = view.getInt16(index * sampleBytes, true)
-              const operation = source.captureFrame(new AudioFrame(data, sampleRate, 1, audio.sampleFrames))
+              if (!authorized() || pending !== undefined) throw new Error("Output is invalidated or capture is busy")
+              const frame = decodeAudioFrame(audio)
+              if (!authorized()) throw new Error("Output authorization was revoked")
+              const operation = source.captureFrame(frame)
               pending = operation
               try {
                 await operation
+                if (!authorized()) throw new Error("Output authorization was revoked during capture")
               } finally {
                 if (pending === operation) pending = undefined
                 if (!valid) clear()
@@ -119,7 +137,11 @@ export const openLiveKitOutput = (
         invalidate,
         capture,
         drain: () =>
-          io(() => source.waitForPlayout()).pipe(
+          io(async () => {
+            if (!authorized()) throw new Error("Output authorization was revoked")
+            await source.waitForPlayout()
+            if (!authorized()) throw new Error("Output authorization was revoked during drain")
+          }).pipe(
             Effect.timeout(captureMillis),
             Effect.mapError(() => failed("AudioUnavailable", "Reply audio drain exceeded its deadline"))
           ),

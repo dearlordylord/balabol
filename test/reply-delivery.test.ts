@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Deferred, Effect, Stream } from "effect"
 import { expect, it } from "vitest"
 import { Conversation } from "../src/conversation/index.ts"
 import type { DeliveryTicket } from "../src/conversation/index.ts"
@@ -12,19 +12,23 @@ it("enrolls delivery before generation and defers the sole completed receipt unt
       Effect.scoped(
         Effect.gen(function* () {
           const conversation = yield* Conversation
-          const tickets: DeliveryTicket[] = []
-          const registration = yield* conversation.registerReplyDelivery({
-            completionMillis: 5000,
-            started: (ticket) => tickets.push(ticket),
-            invalidated: () => undefined
-          })
+          const started = yield* Deferred.make<DeliveryTicket>()
+          const registration = yield* conversation.registerReplyDelivery({ completionMillis: 5000 })
+          yield* registration.updates.pipe(
+            Stream.runForEach((update) =>
+              update.kind === "Started" ? Deferred.succeed(started, update.ticket).pipe(Effect.asVoid) : Effect.void
+            ),
+            Effect.forkIn(yield* Effect.scope)
+          )
           yield* conversation.send(input)
-          expect(tickets[0]?.inputDeliveryId).toBe(input.deliveryId)
+          const announced = yield* Deferred.await(started).pipe(Effect.timeout("2 seconds"))
+          expect(announced.inputDeliveryId).toBe(input.deliveryId)
           yield* Effect.sleep(100)
           const generated = yield* conversation.reply(input.deliveryId)
           expect(generated.state).toBe("Delivering")
           expect(generated.receipt).toBeNull()
           const ticket = yield* conversation.deliverySnapshot(registration.registrationId)
+          expect(ticket).toEqual(announced)
           if (ticket === null) throw new Error("Missing enrolled reply")
           const completed = yield* conversation.settleReplyDelivery({ ...ticket, outcome: "Completed" })
           expect(completed?.state).toBe("Completed")

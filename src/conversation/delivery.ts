@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto"
-import { Clock, Effect, Schema } from "effect"
+import { Effect, Schema, type Stream } from "effect"
 import { DeliveryId } from "../memory/index.ts"
-import { InvalidInput, ReplyBusy } from "./contracts.ts"
+import { InvalidInput } from "./contracts.ts"
 const maximumDeadlineMillis = 300000
 const Timing = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(maximumDeadlineMillis))
 export const ResponseTarget = Schema.Struct({ responseId: DeliveryId, inputDeliveryId: DeliveryId })
@@ -25,69 +24,41 @@ export const ResponseInvalidation = Schema.Struct({
 })
 export type ResponseInvalidation = typeof ResponseInvalidation.Type
 export interface ReplyDeliveryRegistration {
-  completionMillis: number
-  started: (ticket: DeliveryTicket) => void
-  invalidated: (target: ResponseInvalidation) => void
+  readonly completionMillis: number
 }
-export class ReplyDelivery {
-  #registration: (ReplyDeliveryRegistration & { registrationId: string }) | undefined
-  #ticket: DeliveryTicket | undefined
-  register(input: ReplyDeliveryRegistration) {
-    return Schema.decodeUnknownEffect(Timing)(input.completionMillis).pipe(
-      Effect.mapError(() => new InvalidInput({ message: "Invalid delivery deadline" })),
-      Effect.flatMap(() =>
-        Effect.suspend(() => {
-          if (this.#registration !== undefined)
-            return Effect.fail(new ReplyBusy({ message: "Reply delivery is already registered" }))
-          const registrationId = randomUUID()
-          this.#registration = { ...input, registrationId }
-          return Effect.succeed({ registrationId })
-        })
-      )
-    )
-  }
-  begin(target: ResponseTarget, authorized: () => boolean = () => true) {
-    return Effect.gen({ self: this }, function* () {
-      const registration = this.#registration
-      if (registration === undefined) return undefined
-      const now = yield* Clock.currentTimeMillis
-      if (!authorized()) return undefined
-      const ticket = {
-        ...target,
-        registrationId: registration.registrationId,
-        deliveryId: randomUUID(),
-        deadlineAt: now + registration.completionMillis
-      }
-      this.#ticket = ticket
-      registration.started(ticket)
-      return ticket
-    })
-  }
-  snapshot(registrationId: string) {
-    return this.#registration?.registrationId === registrationId ? (this.#ticket ?? null) : null
-  }
-  matches(target: ResponseTarget) {
-    return this.#ticket?.responseId === target.responseId && this.#ticket.inputDeliveryId === target.inputDeliveryId
-  }
-  accepts(ticket: DeliveryTicket) {
-    return (
-      this.#ticket?.deliveryId === ticket.deliveryId &&
-      this.#ticket.registrationId === ticket.registrationId &&
-      this.matches(ticket)
-    )
-  }
-  invalidate(target: ResponseTarget, reason: ResponseInvalidation["reason"] = "Interrupted") {
-    if (!this.matches(target)) return
-    this.#ticket = undefined
-    this.#registration?.invalidated({ ...target, reason })
-  }
-  complete(target: ResponseTarget) {
-    if (this.matches(target)) this.#ticket = undefined
-  }
-  detach(registrationId: string) {
-    if (this.#registration?.registrationId === registrationId) {
-      this.#registration = undefined
-      this.#ticket = undefined
-    }
-  }
+export const ReplyDeliveryUpdate = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("Idle"), registrationId: DeliveryId, sequence: Schema.Int }),
+  Schema.Struct({
+    kind: Schema.Literal("Started"),
+    registrationId: DeliveryId,
+    sequence: Schema.Int,
+    ticket: DeliveryTicket
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("Invalidated"),
+    registrationId: DeliveryId,
+    sequence: Schema.Int,
+    ticket: DeliveryTicket,
+    reason: ResponseInvalidation.fields.reason
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("Delivered"),
+    registrationId: DeliveryId,
+    sequence: Schema.Int,
+    ticket: DeliveryTicket
+  })
+])
+export type ReplyDeliveryUpdate = typeof ReplyDeliveryUpdate.Type
+export interface ReplyDeliveryAuthorization {
+  readonly isAuthorized: () => boolean
+  readonly signal: AbortSignal
 }
+export interface ReplyDeliverySubscription {
+  readonly registrationId: string
+  readonly snapshot: ReplyDeliveryUpdate
+  readonly updates: Stream.Stream<ReplyDeliveryUpdate>
+}
+export const parseDeliveryTiming = (value: number) =>
+  Schema.decodeUnknownEffect(Timing)(value).pipe(
+    Effect.mapError(() => new InvalidInput({ message: "Invalid delivery deadline" }))
+  )

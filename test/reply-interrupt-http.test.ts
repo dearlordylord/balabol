@@ -37,17 +37,18 @@ it("interrupts an enrolled Waiting reply over HTTP without releasing a newer exa
           yield* Effect.gen(function* () {
             const address = yield* HttpServer.addressFormattedWith(Effect.succeed)
             const conversation = yield* Conversation
-            const tickets: DeliveryTicket[] = []
-            yield* conversation.registerReplyDelivery({
-              completionMillis: 5000,
-              started: (ticket) => tickets.push(ticket),
-              invalidated: () => undefined
-            })
+            const started = yield* Deferred.make<DeliveryTicket>()
+            const registration = yield* conversation.registerReplyDelivery({ completionMillis: 5000 })
+            yield* registration.updates.pipe(
+              Stream.runForEach((update) =>
+                update.kind === "Started" ? Deferred.succeed(started, update.ticket).pipe(Effect.asVoid) : Effect.void
+              ),
+              Effect.forkIn(yield* Effect.scope)
+            )
             const input = { deliveryId: "ABCDEF11-1111-4111-8111-111111111111", text: "Accepted input" }
             yield* conversation.send(input)
             yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"))
-            const target = tickets[0]
-            if (target === undefined) throw new Error("Missing enrolled response")
+            const target = yield* Deferred.await(started).pipe(Effect.timeout("2 seconds"))
             expect((yield* conversation.reply(input.deliveryId)).state).toBe("Waiting")
             const deleted = yield* Effect.tryPromise(() =>
               fetch(`${address}/conversation/replies/${input.deliveryId}`, { method: "DELETE" })
@@ -98,7 +99,7 @@ it("interrupts an enrolled Waiting reply over HTTP without releasing a newer exa
             expect(yield* Effect.tryPromise(() => oldAttempt.json())).toBeNull()
             expect((yield* conversation.reply(retryInput.deliveryId)).responseId).toBe(retried.responseId)
             expect((yield* conversation.reply(retryInput.deliveryId)).state).toBe("Waiting")
-          }).pipe(Effect.provide(server))
+          }).pipe(Effect.scoped, Effect.provide(server))
         })
       )
     )

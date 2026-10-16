@@ -2,14 +2,17 @@ import { Deferred, Effect, Queue } from "effect"
 import type { Scope, Semaphore } from "effect"
 import { samePayload, type Memory } from "../memory/index.ts"
 import { DeliveryConflict, type Message } from "./contracts.ts"
-import type { Replies } from "./replies.ts"
+import { retainAdmissionResources, type RevocationResult } from "./admission-resources.ts"
+import { makeResponses } from "./response-runtime.ts"
+import type { AnswerGeneration } from "../answer-generation/index.ts"
+import type { ReplySettings } from "./reply-configuration.ts"
 import type { Command, AdmissionEvent } from "./admission-core/generated/core.mjs"
 import type { AdmissionFailure } from "./admission-contracts.ts"
 import { admissionClient, invalid, maximumToken, type Request } from "./admission-api.ts"
 import * as admission from "./admission-state.ts"
 import type { Entry } from "./admission-state.ts"
 import { executeAdmissionStart } from "./admission-execution.ts"
-import { checkInputIdentity, persistInput } from "./admission-persistence.ts"
+import { classifyInput, persistInput } from "./admission-persistence.ts"
 
 import {
   isOperationCompletion,
@@ -23,7 +26,8 @@ import {
 /** Conversation's mailbox is the only admission writer. Its I/O lane never owns eligibility. */
 export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
   memory: Memory["Service"],
-  replies: Replies,
+  answer: AnswerGeneration["Service"],
+  settings: ReplySettings,
   scope: Scope.Scope,
   lane: Semaphore.Semaphore,
   languages: readonly string[]
@@ -32,10 +36,7 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
   let state = admission.emptyAdmission
   let leases: readonly Lease[] = []
   let gates: readonly Gate[] = []
-  let revocationResults: readonly {
-    readonly operation: bigint
-    readonly result: Deferred.Deferred<void, AdmissionFailure>
-  }[] = []
+  let revocationResults: readonly RevocationResult[] = []
   const revocationResult = (operation: bigint) => revocationResults.find((item) => item.operation === operation)?.result
   const leaseOf = (operation: bigint) => leases.find((lease) => lease.operation === operation)
   const commandLease = (operation: bigint) => {
@@ -45,6 +46,7 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
   }
   const entryOf = (operation: bigint) => state.entries.find((entry) => entry.core.operation === operation)
   const post = (event: Envelope) => Queue.offer(mailbox, event).pipe(Effect.asVoid)
+  const replies = yield* makeResponses(memory, answer, settings, scope, (event) => post({ kind: "Response", event }))
   const launch = (work: Effect.Effect<void>) => work.pipe(Effect.forkIn(scope), Effect.asVoid)
   const authorized = (operation: bigint) => () => gates.some((gate) => gate.operation === operation && gate.open)
   const revoke = (operation: bigint) => {
@@ -52,14 +54,10 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
   }
   const prune = () => {
     state = admission.retireSettled(state)
-    const retained = (operation: bigint) => state.entries.some((entry) => entry.core.operation === operation)
-    leases = leases.filter((lease) => retained(lease.operation))
-    gates = gates.filter((gate) => retained(gate.operation))
-    revocationResults = revocationResults.filter(
-      (item) =>
-        state.revocations.some((work) => work.command.operation === item.operation) ||
-        state.entries.some((entry) => entry.prerequisites.includes(item.operation))
-    )
+    const resources = retainAdmissionResources(state, leases, gates, revocationResults)
+    leases = resources.leases
+    gates = resources.gates
+    revocationResults = resources.results
   }
   const settleFailure = (operation: bigint, error: AdmissionFailure) => {
     const lease = leaseOf(operation)
@@ -76,15 +74,7 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
       ? Effect.void
       : Deferred.succeed(lease.result, receipt).pipe(Effect.asVoid)
   }
-  const lookup = (entry: Entry) =>
-    launch(
-      memory.find(entry.message.deliveryId).pipe(
-        Effect.tap((evidence) => checkInputIdentity(evidence, entry.message)),
-        Effect.flatMap((evidence) => post({ kind: "Classified", operation: entry.core.operation, evidence })),
-        Effect.catch((error) => post({ kind: "Failed", operation: entry.core.operation, error })),
-        Effect.uninterruptible
-      )
-    )
+  const lookup = (entry: Entry) => launch(classifyInput(memory, entry).pipe(Effect.flatMap(post)))
   const sendCommand = (command: Command, operation?: bigint) => {
     const lease = commandLease("operation" in command ? command.operation : (operation ?? 0n))
     return Queue.offer(lease.commands, command).pipe(Effect.asVoid)
@@ -163,6 +153,11 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
         })
       }
       case "RevokeStart": {
+        const joinRevision = state.revocations.some(
+          (item) => item.command.operation === command.operation && item.failed
+        )
+          ? undefined
+          : state.revision
         revoke(command.operation)
         const entry = admission.requireEntry(state, command.operation)
         state = admission.retainRevocation(state, command)
@@ -172,7 +167,7 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
         ]
         return launch(
           replies.current(entry.message.deliveryId).pipe(
-            Effect.flatMap((reply) => replies.interrupt(reply)),
+            Effect.flatMap((reply) => replies.interrupt(reply, "Interrupted", joinRevision)),
             lane.withPermits(1),
             Effect.andThen(post({ kind: "Revoked", operation: command.operation })),
             Effect.catch((error) =>
@@ -408,7 +403,22 @@ export const makeAdmissions = Effect.fn("Conversation.admissions")(function* (
         return acknowledge(request.operation)
     }
   }
-  const handle = (request: Envelope) => ("result" in request ? handleRequest(request) : handleCompletion(request))
+  const handle = (request: Envelope) => {
+    if (request.kind === "Response") return replies.handle(request.event)
+    const previousRevision = state.revision
+    return ("result" in request ? handleRequest(request) : handleCompletion(request)).pipe(
+      Effect.andThen(
+        Effect.suspend(() =>
+          state.revision === previousRevision ? Effect.void : replies.intentAdvanced(state.revision)
+        )
+      )
+    )
+  }
   yield* Effect.forever(Queue.take(mailbox).pipe(Effect.flatMap(handle))).pipe(Effect.forkIn(scope))
-  return admissionClient(post)
+  const current = (id: string) =>
+    replies.current(
+      id,
+      state.entries.some((entry) => entry.message.deliveryId === id)
+    )
+  return { admissions: admissionClient(post), replies: { ...replies, current } }
 })

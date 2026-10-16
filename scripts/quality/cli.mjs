@@ -5,7 +5,7 @@ import { checkCohort } from "./cohort.mjs";
 import { command } from "./commands.mjs";
 import { sourceFiles } from "./files.mjs";
 import { withLiveKitFixture } from "./livekit-fixture.mjs";
-import { prepareAdmissionCore, copyAdmissionCore } from "./bend.mjs";
+import { prepareConversationCores, copyConversationCores } from "./bend.mjs";
 
 const [gate, option, directory] = process.argv.slice(2);
 const root = resolve(option === "--root" ? directory : ".");
@@ -27,16 +27,16 @@ const actions = {
   architecture: () => checkArchitecture(root, sourceFiles(resolve(root, "src"))),
   build: () => {
     if (!product.length) return absent();
-    prepareAdmissionCore(root);
+    prepareConversationCores(root);
     run("tsc", ["-p", "tsconfig.build.json"]);
-    copyAdmissionCore(root);
+    copyConversationCores(root);
   },
   compiler: () => {
-    prepareAdmissionCore(root);
+    prepareConversationCores(root);
     run("tsc", ["-p", "tsconfig.json", "--noEmit"]);
   },
   effect: () => {
-    prepareAdmissionCore(root);
+    prepareConversationCores(root);
     run("effect-tsgo", ["diagnostics", "--project", "tsconfig.json", "--strict", "--severity", "error,warning"]);
   },
   cycles: () =>
@@ -60,7 +60,7 @@ const actions = {
     if (!product.length) return absent();
     if (!typescript.some((file) => file.endsWith(".test.ts")))
       throw new Error("Product source exists without behavioral tests");
-    prepareAdmissionCore(root);
+    prepareConversationCores(root);
     rmSync(resolve(root, "coverage/coverage-final.json"), { force: true });
     if (existsSync(resolve(root, "src/voice/livekit.ts"))) {
       await withLiveKitFixture((environment) =>

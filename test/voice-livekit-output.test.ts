@@ -10,6 +10,10 @@ const sampleRate = 24000
 const frameSamples = 1200
 const pollMillis = 10
 const pollLimit = 300
+const authorization = () => {
+  const controller = new AbortController()
+  return { signal: controller.signal, isAuthorized: () => !controller.signal.aborted, revoke: () => controller.abort() }
+}
 const io = <A>(operation: () => Promise<A>) => Effect.promise(operation)
 describe.skipIf(liveKitFixturePath === undefined)(
   "actual reply publication transport (synthetic PCM, not acoustic evidence)",
@@ -29,8 +33,9 @@ describe.skipIf(liveKitFixturePath === undefined)(
             const client = new Room()
             yield* Effect.addFinalizer(() => io(() => client.disconnect()))
             yield* io(() => client.connect(config.url, opened.join.token, { autoSubscribe: false, dynacast: false }))
+            const permit = authorization()
             const outputEpoch = randomUUID()
-            const output = yield* opened.connection.openOutput(outputEpoch)
+            const output = yield* opened.connection.openOutput(outputEpoch, permit)
             expect(output.publisherIdentity).toBe(opened.join.backendParticipantIdentity)
             const subscribed = yield* Deferred.make<void>()
             let frames = 0
@@ -83,7 +88,8 @@ describe.skipIf(liveKitFixturePath === undefined)(
             for (let attempt = 0; frames === 0 && attempt < pollLimit; attempt++) yield* Effect.sleep(pollMillis)
             expect(frames).toBeGreaterThan(0)
             expect(samples).toBeGreaterThan(0)
-            output.invalidate()
+            permit.revoke()
+            expect((yield* Effect.flip(output.drain())).code).toBe("AudioUnavailable")
             yield* Fiber.interrupt(capturing)
             expect(Exit.isFailure(yield* Fiber.await(capturing))).toBe(true)
             yield* output.close()
@@ -91,7 +97,7 @@ describe.skipIf(liveKitFixturePath === undefined)(
             output.invalidate()
             expect((yield* Effect.flip(output.capture(audio))).code).toBe("AudioUnavailable")
             if (cancelReader !== undefined) yield* io(cancelReader)
-            const replacement = yield* opened.connection.openOutput(randomUUID())
+            const replacement = yield* opened.connection.openOutput(randomUUID(), authorization())
             expect(replacement.trackSid).not.toBe(output.trackSid)
             yield* replacement.drain()
             yield* replacement.close()
@@ -115,10 +121,12 @@ describe.skipIf(liveKitFixturePath === undefined)("actual pending publication re
             () => undefined,
             () => undefined
           )
-          const opening = yield* room.connection.openOutput(randomUUID()).pipe(Effect.forkChild)
+          const opening = yield* room.connection.openOutput(randomUUID(), authorization()).pipe(Effect.forkChild)
           yield* room.connection.close().pipe(Effect.timeout(5000))
           yield* Fiber.interrupt(opening).pipe(Effect.timeout(5000))
-          expect((yield* Effect.flip(room.connection.openOutput(randomUUID()))).code).toBe("AudioUnavailable")
+          expect((yield* Effect.flip(room.connection.openOutput(randomUUID(), authorization()))).code).toBe(
+            "AudioUnavailable"
+          )
           yield* room.connection.close()
         })
       ).pipe(Effect.provide(liveKitLayer(config)))

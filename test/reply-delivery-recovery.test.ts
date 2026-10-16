@@ -1,12 +1,24 @@
 import type { Storage } from "@firfi/unii"
-import { Effect, Layer, Fiber, Stream } from "effect"
+import { Deferred, Effect, Layer, Fiber, Stream } from "effect"
 import { expect, it } from "vitest"
 import { fakeAnswerLayer, AnswerGeneration } from "../src/answer-generation/index.ts"
 import { Conversation, defaultReplySettings, ReplyConfiguration } from "../src/conversation/index.ts"
+import type { ReplyDeliverySubscription, ReplyDeliveryUpdate } from "../src/conversation/index.ts"
 import { Memory, DurableMemory, sqliteLayer, uniiLayer } from "../src/memory/index.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { waitForReply } from "./reply-fixture.ts"
 
+const watchInvalidation = (subscription: ReplyDeliverySubscription) =>
+  Effect.gen(function* () {
+    const result = yield* Deferred.make<Extract<ReplyDeliveryUpdate, { kind: "Invalidated" }>>()
+    yield* subscription.updates.pipe(
+      Stream.runForEach((update) =>
+        update.kind === "Invalidated" ? Deferred.succeed(result, update).pipe(Effect.asVoid) : Effect.void
+      ),
+      Effect.forkIn(yield* Effect.scope)
+    )
+    return result
+  })
 const first = { deliveryId: "11111111-1111-4111-8111-111111111111", text: "Hello" }
 const second = { deliveryId: "22222222-2222-4222-8222-222222222222", text: "Next" }
 const failingLayer = (path: string, fault: { failing: boolean }) => {
@@ -47,11 +59,7 @@ it("recovers a completed delivery after a pre-write failure before admitting ano
       Effect.scoped(
         Effect.gen(function* () {
           const conversation = yield* Conversation
-          const registration = yield* conversation.registerReplyDelivery({
-            completionMillis: 60000,
-            started: () => undefined,
-            invalidated: () => undefined
-          })
+          const registration = yield* conversation.registerReplyDelivery({ completionMillis: 60000 })
           yield* conversation.send(first)
           expect((yield* waitForReply(conversation, first.deliveryId)).state).toBe("Delivering")
           const ticket = yield* conversation.deliverySnapshot(registration.registrationId)
@@ -87,27 +95,23 @@ it("detaches failed unregister and recovers the exact interrupted reply before t
       Effect.scoped(
         Effect.gen(function* () {
           const conversation = yield* Conversation
-          let invalidated = false
-          const registration = yield* conversation.registerReplyDelivery({
-            completionMillis: 60000,
-            started: () => undefined,
-            invalidated: () => {
-              invalidated = true
-            }
-          })
+          const registration = yield* conversation.registerReplyDelivery({ completionMillis: 60000 })
+          const invalidation = yield* watchInvalidation(registration)
           yield* conversation.send(first)
           const generated = yield* waitForReply(conversation, first.deliveryId)
+          const ticket = yield* conversation.deliverySnapshot(registration.registrationId)
+          expect(ticket).not.toBeNull()
           fault.failing = true
           expect(
             (yield* conversation.unregisterReplyDelivery(registration.registrationId).pipe(Effect.result))._tag
           ).toBe("Failure")
-          expect(invalidated).toBe(true)
+          const invalidated = yield* Deferred.await(invalidation).pipe(Effect.timeout("2 seconds"))
+          expect(invalidated.registrationId).toBe(registration.registrationId)
+          expect(invalidated.ticket).toEqual(ticket)
+          expect(invalidated.reason).toBe("Detached")
+          expect(invalidated.sequence).toBeGreaterThan(1)
           expect(yield* conversation.deliverySnapshot(registration.registrationId)).toBeNull()
-          const replacement = yield* conversation.registerReplyDelivery({
-            completionMillis: 60000,
-            started: () => undefined,
-            invalidated: () => undefined
-          })
+          const replacement = yield* conversation.registerReplyDelivery({ completionMillis: 60000 })
           expect(replacement.registrationId).not.toBe(registration.registrationId)
           fault.failing = false
           yield* conversation.send(second)
@@ -236,19 +240,15 @@ it("invalidates queued delivery on provider terminal failure and rejects late co
       Effect.scoped(
         Effect.gen(function* () {
           const conversation = yield* Conversation
-          let invalidated = false
-          const registration = yield* conversation.registerReplyDelivery({
-            completionMillis: 60000,
-            started: () => undefined,
-            invalidated: () => {
-              invalidated = true
-            }
-          })
+          const registration = yield* conversation.registerReplyDelivery({ completionMillis: 60000 })
+          const invalidation = yield* watchInvalidation(registration)
           yield* conversation.send(first)
           const failed = yield* waitForReply(conversation, first.deliveryId)
           expect(failed.state).toBe("Failed")
           expect(failed.error?.code).toBe("ProviderFailed")
-          expect(invalidated).toBe(true)
+          const invalidated = yield* Deferred.await(invalidation).pipe(Effect.timeout("2 seconds"))
+          expect(invalidated.registrationId).toBe(registration.registrationId)
+          expect(invalidated.ticket.inputDeliveryId).toBe(first.deliveryId)
           expect(yield* conversation.deliverySnapshot(registration.registrationId)).toBeNull()
         })
       ).pipe(Effect.provide(layer))

@@ -64,3 +64,4 @@ models-cache
 
 # Rebuilt and qualified Bend compiler artifacts
 src/conversation/admission-core/generated/
+src/conversation/response-terminal-core/generated/

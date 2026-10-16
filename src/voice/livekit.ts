@@ -4,6 +4,7 @@ import { AccessToken, TrackSource as GrantSource } from "livekit-server-sdk"
 import { Effect, Layer, Redacted, Schema, Scope, Clock, Exit } from "effect"
 import { openLiveKitOutput } from "./livekit-output.ts"
 import { VoiceTransport, failed } from "./contracts.ts"
+import type { ReplyDeliveryAuthorization } from "../conversation/index.ts"
 import type { AudioFrame } from "@livekit/rtc-node"
 import type { VoiceEvent, VoiceFailed } from "./contracts.ts"
 const secretMinimum = 32
@@ -142,11 +143,16 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
                   expiresAt: now + tokenLifetimeMillis
                 },
                 connection: {
-                  openOutput: (outputEpoch: string) =>
+                  openOutput: (outputEpoch: string, authorization: ReplyDeliveryAuthorization) =>
                     closed || closingRoom
                       ? Effect.fail(failed("AudioUnavailable", "The media connection is closed"))
-                      : openLiveKitOutput(local, roomScope, backendParticipantIdentity, outputEpoch, () =>
-                          Effect.sync(disconnected).pipe(Effect.andThen(disconnect))
+                      : openLiveKitOutput(
+                          local,
+                          roomScope,
+                          backendParticipantIdentity,
+                          outputEpoch,
+                          authorization,
+                          () => Effect.sync(disconnected).pipe(Effect.andThen(disconnect))
                         ),
                   close: () => close,
                   publish: (event: VoiceEvent) =>

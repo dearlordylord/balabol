@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { samePayload, type Memory, type DeliveryEvidence } from "../memory/index.ts"
 import { DeliveryConflict, type SendMessage } from "./contracts.ts"
-import type { Replies } from "./replies.ts"
+import type { Responses } from "./response-runtime.ts"
 import type { Entry } from "./admission-state.ts"
 import { selectResponseLanguage } from "./response-language.ts"
 
@@ -13,7 +13,7 @@ export const checkInputIdentity = (existing: DeliveryEvidence | undefined, messa
 }
 export const persistInput = Effect.fn("Conversation.persistInput")(function* (
   memory: Memory["Service"],
-  replies: Replies,
+  replies: Responses,
   entry: Entry,
   languages: readonly string[]
 ) {
@@ -23,7 +23,7 @@ export const persistInput = Effect.fn("Conversation.persistInput")(function* (
   if (existing?.state === "Accepted")
     return { receipt: existing.receipt, existing: entry.classification === "Existing" }
   const payload = existing?.payload
-  yield* replies.admit()
+  yield* replies.admit("Interrupted", entry.result === "Failed" ? undefined : entry.originRevision)
   const receipt = yield* memory.append({
     ...message,
     role: "user",
@@ -33,3 +33,12 @@ export const persistInput = Effect.fn("Conversation.persistInput")(function* (
   })
   return { receipt, existing: false }
 })
+
+/** Classification reports storage evidence to the owner; it never creates fresh intent itself. */
+export const classifyInput = (memory: Memory["Service"], entry: Entry) =>
+  memory.find(entry.message.deliveryId).pipe(
+    Effect.tap((evidence) => checkInputIdentity(evidence, entry.message)),
+    Effect.map((evidence) => ({ kind: "Classified" as const, operation: entry.core.operation, evidence })),
+    Effect.catch((error) => Effect.succeed({ kind: "Failed" as const, operation: entry.core.operation, error })),
+    Effect.uninterruptible
+  )

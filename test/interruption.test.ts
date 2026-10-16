@@ -11,6 +11,22 @@ import { replyLayer } from "./reply-fixture.ts"
 
 const first = { deliveryId: "11111111-1111-4111-8111-111111111111", text: "first" }
 const second = { deliveryId: "22222222-2222-4222-8222-222222222222", text: "second" }
+const maximumStatePolls = 2000
+const awaitReplyState = (
+  conversation: Conversation["Service"],
+  inputDeliveryId: string,
+  state: "Streaming" | "Completed"
+) =>
+  Effect.gen(function* () {
+    let reply = yield* conversation.reply(inputDeliveryId)
+    for (let poll = 0; reply.state !== state && poll < maximumStatePolls; poll++) {
+      yield* TestClock.adjust(1)
+      reply = yield* conversation.reply(inputDeliveryId)
+    }
+    expect(reply.state).toBe(state)
+    return reply
+  })
+
 it.effect(
   "settles collected output before the next input and duplicate delivery cannot interrupt the newer reply",
   () =>
@@ -20,8 +36,7 @@ it.effect(
         const conversation = yield* Conversation
         yield* conversation.send({ ...first, languageSpans: [{ language: "fr", start: 0, end: first.text.length }] })
         yield* conversation.observeReply(first.deliveryId)
-        yield* TestClock.adjust(100)
-        const streaming = yield* conversation.reply(first.deliveryId)
+        const streaming = yield* awaitReplyState(conversation, first.deliveryId, "Streaming")
         expect(streaming.state).toBe("Streaming")
         yield* conversation.send(second)
         yield* conversation.observeReply(second.deliveryId)
@@ -89,11 +104,10 @@ it.effect("passes interrupted generated text and its honest semantic marker into
       const conversation = yield* Conversation
       yield* conversation.send(first)
       yield* conversation.observeReply(first.deliveryId)
-      yield* TestClock.adjust(1)
+      yield* awaitReplyState(conversation, first.deliveryId, "Streaming")
       yield* conversation.send(second)
       yield* conversation.observeReply(second.deliveryId)
-      yield* TestClock.adjust(1)
-      const reply = yield* conversation.reply(second.deliveryId)
+      const reply = yield* awaitReplyState(conversation, second.deliveryId, "Completed")
       expect(reply.state).toBe("Completed")
       expect(reply.text).toContain("assistant_interrupted: Generated proposal")
       expect(reply.text).toContain("generated text may not have been heard; no user agreement implied")
@@ -167,13 +181,19 @@ it.effect("blocks new admission on interrupted storage failure and resumes its f
 it.effect("freezes before cancellation acknowledgement and rejects delayed provider output", () =>
   Effect.gen(function* () {
     const fixture = yield* Effect.promise(temporaryDatabase)
+    const firstProviderEntered = yield* Deferred.make<void>()
+    const secondProviderEntered = yield* Deferred.make<void>()
     const answer = Layer.succeed(AnswerGeneration, {
       capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
-      generate: () =>
+      generate: (request) =>
         Stream.concat(
           Stream.succeed({ kind: "Delta", text: "collected", languageSpans: [] } satisfies AnswerEvent),
           Stream.fromEffect(
-            Effect.sleep(100).pipe(
+            Deferred.succeed(
+              request.input === first.text ? firstProviderEntered : secondProviderEntered,
+              undefined
+            ).pipe(
+              Effect.andThen(Effect.sleep(100)),
               Effect.as({ kind: "Delta", text: "late", languageSpans: [] } satisfies AnswerEvent),
               Effect.uninterruptible
             )
@@ -184,7 +204,8 @@ it.effect("freezes before cancellation acknowledgement and rejects delayed provi
       const conversation = yield* Conversation
       yield* conversation.send(first)
       yield* conversation.observeReply(first.deliveryId)
-      yield* TestClock.adjust(1)
+      yield* Deferred.await(firstProviderEntered)
+      yield* awaitReplyState(conversation, first.deliveryId, "Streaming")
       const sending = yield* Effect.forkChild(conversation.send(second))
       yield* TestClock.adjust(1)
       const frozen = yield* conversation.reply(first.deliveryId)
@@ -196,6 +217,7 @@ it.effect("freezes before cancellation acknowledgement and rejects delayed provi
       expect(interrupted.state).toBe("Interrupted")
       expect(interrupted.text).toBe("collected")
       expect((yield* conversation.page({ limit: 100 })).messages[1]?.text).toBe("collected")
+      yield* Deferred.await(secondProviderEntered)
       yield* TestClock.adjust(100)
     }).pipe(
       Effect.provide(replyLayer(fixture.path, answer)),
