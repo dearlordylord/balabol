@@ -21,6 +21,10 @@ Source authority: sibling jev's source organization policy, accepted 2026-10-10.
 - Extract packages for real consumption/build/enforcement needs, not one package per folder.
 - Substantial ownership/interface changes require architectural agent review; tests do not replace it.
 
+## Conversation lifecycle refactor
+
+The accepted [functional lifecycle specification](../product/functional-conversation-spec.md) defines the target for Conversation, Voice and Swift state changes: immutable pure transitions, one writer per owner, explicit command interpretation and selective Bend laws for consequential safety and conditional progress. Follow its staged migration; existing code is not evidence that the target is already implemented. Proofs do not establish provider, scheduler or physical audio guarantees.
+
 ## TypeScript / Effect
 
 Source authority: sibling hulymcp CLAUDE.md, review rules and its Effect reference policy. Port generic rules, not Huly/MCP product semantics:

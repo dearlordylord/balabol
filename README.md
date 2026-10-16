@@ -15,6 +15,7 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 - [Yielded agent runtime](docs/adr/0002-yielded-agent-runtime.md)
 - [Personal knowledge specification — implementation in progress](https://github.com/dearlordylord/balabol/issues/40)
 - [Wayfinder map](.scratch/voice-prototype/map.md)
+- [Functional conversation lifecycle specification](docs/product/functional-conversation-spec.md) — implementation pending
 - [Engineering standards](docs/engineering/standards.md)
 - [Deferred real-model qualification](.scratch/followups/issues/01-create-real-model-check-task.md)
 
