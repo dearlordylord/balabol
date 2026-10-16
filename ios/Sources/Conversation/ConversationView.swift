@@ -1,150 +1,138 @@
 #if canImport(SwiftUI)
   import SwiftUI
 
-  public struct ConversationView<Details: View>: View {
+  public struct ConversationView<Controls: View, Details: View>: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    #if os(iOS)
+      @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
+    @FocusState private var draftFocused: Bool
+    @State private var followsLatest = true
     @Bindable private var model: ConversationViewModel
+    private let controls: Controls
     private let details: Details
-    /// Composition supplies feature-owned details inside this single flexible
-    /// list. Conversation does not acquire another feature's model or imports.
-    public init(model: ConversationViewModel, @ViewBuilder details: () -> Details) {
+
+    /// Composition supplies feature-owned controls and details; only their placement belongs here.
+    public init(
+      model: ConversationViewModel,
+      @ViewBuilder controls: () -> Controls,
+      @ViewBuilder details: () -> Details
+    ) {
       self.model = model
+      self.controls = controls()
       self.details = details()
     }
+
+    private var scrollsControls: Bool {
+      #if os(iOS)
+        typeSize.isAccessibilitySize || verticalSizeClass == .compact || draftFocused
+      #else
+        typeSize.isAccessibilitySize || draftFocused
+      #endif
+    }
+
     public var body: some View {
-      VStack {
+      VStack(spacing: 0) {
+        if !scrollsControls { controls.padding(.horizontal, 16) }
         ScrollViewReader { proxy in
-          List {
-            details
-            Text("Demo provider · scripted replies").font(.caption).foregroundStyle(.secondary)
-              .accessibilityIdentifier("demo-provider")
-            ForEach(model.messages) { message in
-              VStack(alignment: .leading) {
-                HStack(alignment: .firstTextBaseline) {
-                  Text(message.role == .user ? "You" : "Assistant").font(.caption)
-                    .foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false)
-                  if !message.languageSpans.isEmpty {
-                    Text(LanguageSpan.displayNames(message.languageSpans)).font(.caption)
-                      .foregroundStyle(.secondary)
-                      .accessibilityIdentifier("message-languages-\(message.position)")
-                  }
-                }
-                if message.outcome == .interrupted {
-                  Text("Interrupted").font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("interrupted-message-\(message.position)")
-                }
-                Text(
-                  message.text.isEmpty && message.outcome == .interrupted
-                    ? "Interrupted before a reply appeared" : message.text
-                ).accessibilityIdentifier(
-                  message.role == .assistant
-                    ? "assistant-message-\(message.position)" : "message-\(message.position)")
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+              if scrollsControls {
+                controls
               }
-            }
-            if model.replyIsWaiting || !model.replyText.isEmpty {
-              VStack(alignment: .leading) {
-                Text("Assistant").font(.caption).foregroundStyle(.secondary)
-                if model.replyIsWaiting {
-                  Text(
-                    model.state.isRetryingReply
-                      ? "Retrying reply…"
-                      : "Preparing your reply…"
-                  ).accessibilityIdentifier("reply-waiting")
+              if model.messages.isEmpty && !model.replyIsWaiting && model.replyText.isEmpty {
+                introduction
+              }
+              ForEach(model.messages) { message in
+                messageRow(message).id(message.deliveryId)
+              }
+              details
+              if model.replyIsWaiting || !model.replyText.isEmpty {
+                replyProjection.id("reply-projection")
+              }
+              replyNotices
+              historyNotices
+              draftNotices
+              if model.nextAfter != nil {
+                Button {
+                  followsLatest = false
+                  Task { await model.loadHistory() }
+                } label: {
+                  Label("Load more", systemImage: "arrow.down.circle")
+                    .frame(minHeight: 44)
                 }
-                if !model.state.replyLanguageSpans.isEmpty {
-                  Text(LanguageSpan.displayNames(model.state.replyLanguageSpans)).font(.caption)
-                    .foregroundStyle(.secondary).accessibilityIdentifier("reply-languages")
-                }
-                if !model.replyText.isEmpty {
-                  Text(model.replyText).accessibilityIdentifier("reply-progress")
-                }
-              }.id("reply-projection")
-            }
-            if model.nextAfter != nil {
-              Button("Load more") { Task { await model.loadHistory() } }
                 .disabled(model.isLoading)
+              }
+              DisclosureGroup("About this prototype") {
+                Text(
+                  "Providers are configured on your Mac. Scripted replies and speech may be enabled."
+                )
+                .font(.footnote).foregroundStyle(.primary.opacity(0.75))
+                .accessibilityIdentifier("demo-provider")
+              }
+              .font(.footnote).foregroundStyle(.primary.opacity(0.75))
+              Color.clear.frame(height: 1).id("latest-message").accessibilityHidden(true)
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
           }
           .accessibilityIdentifier("conversation-transcript")
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .layoutPriority(1)
+          .scrollDismissesKeyboard(.interactively)
+          .simultaneousGesture(
+            DragGesture(minimumDistance: 12).onChanged { value in
+              if value.translation.height > 12 { followsLatest = false }
+            }
+          )
+          .overlay(alignment: .bottomTrailing) {
+            if !followsLatest
+              && (!model.messages.isEmpty || model.replyIsWaiting || !model.replyText.isEmpty)
+            {
+              Button {
+                followsLatest = true
+                proxy.scrollTo("latest-message", anchor: .bottom)
+              } label: {
+                Label("Latest message", systemImage: "arrow.down")
+                  .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+              }
+              .buttonStyle(.borderedProminent)
+              .padding(8)
+              .accessibilityIdentifier("latest-message")
+            }
+          }
           .onChange(of: model.messages.count) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyText) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyIsWaiting) { _, _ in scrollToLatest(proxy) }
-        }
-        if let failure = model.replyProviderFailure {
-          Text(
-            failure.code == .memoryFailed || failure.code == .memoryPending
-              ? "Message saved. Conversation context couldn’t be prepared."
-              : "Message saved. Reply unavailable."
-          )
-          .foregroundStyle(.red).accessibilityIdentifier("reply-provider-status")
-        }
-        if model.canRetryReply {
-          Button("Retry reply") { Task { await model.retryReply() } }
-            .accessibilityIdentifier("retry-reply")
-        }
-        if model.state.currentFailure != nil && model.messages.isEmpty {
-          Text("Reply status unavailable. Refresh to recover.")
-            .foregroundStyle(.red).accessibilityIdentifier("current-turn-status")
-        }
-        if model.replyObservationFailure != nil {
-          Text("Reply status unavailable. Refresh to recover.")
-            .foregroundStyle(.red).accessibilityIdentifier("reply-observation-status")
-        }
-        if let failure = model.deliveryFailure {
-          Text(description(failure)).foregroundStyle(.red)
-            .accessibilityIdentifier("delivery-status")
-        }
-        if model.state.isWaitingForInterruptionRecovery {
-          Text("Restoring interrupted replies before sending…")
-            .accessibilityIdentifier("interrupted-receipt-waiting")
-        }
-        if model.state.interruptedReceiptFailure != nil {
-          Text("Interrupted reply could not be restored. Refresh conversation to recover it.")
-            .foregroundStyle(.red).accessibilityIdentifier("interrupted-receipt-status")
-        }
-        if model.historyFailure != nil {
-          Text("History could not refresh. Retry without changing your draft.")
-            .foregroundStyle(.red).accessibilityIdentifier("history-status")
-        }
-        if model.draftFailure != nil {
-          Text("Draft could not be saved. Retry local saving before sending.")
-            .foregroundStyle(.red).accessibilityIdentifier("draft-status")
-        }
-        if model.isSavingDraft { Text("Saving draft…") }
-        if !model.draftStorageReady {
-          Button("Retry saved draft") { Task { await model.reloadDraft() } }
-        }
-        HStack(alignment: .bottom) {
-          TextField(
-            "Message", text: Binding(get: { model.draft }, set: model.editDraft), axis: .vertical
-          )
-          .lineLimit(1...4)
-          .textFieldStyle(.roundedBorder)
-          .disabled(!model.canEditDraft)
-          .accessibilityIdentifier("message-draft")
-          Button(
-            model.isSending
-              ? "Sending…" : model.pendingDelivery == nil ? "Send" : "Retry same message"
-          ) {
-            Task { await model.send() }
-          }
-          .disabled(
-            !model.canSendDraft
-              || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          )
-          .accessibilityIdentifier("send-message")
+          .onChange(of: model.replyProviderFailure) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.replyObservationFailure) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.historyFailure) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.deliveryFailure) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.draftFailure) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: model.state.interruptedReceiptFailure) { _, _ in scrollToLatest(proxy) }
         }
       }
-      .padding()
-      .navigationTitle("Conversation")
+      .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+      .navigationTitle("Balabol")
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
       #endif
       .toolbar {
-        Button("Refresh conversation") { Task { await model.refreshHistory() } }
+        ToolbarItem {
+          Button {
+            Task { await model.refreshHistory() }
+          } label: {
+            Label("Refresh conversation", systemImage: "arrow.clockwise")
+              .frame(minWidth: 44, minHeight: 44)
+          }
           .disabled(model.isLoading)
+        }
+        #if os(iOS)
+          ToolbarItemGroup(placement: .keyboard) {
+            Spacer()
+            Button("Done") { draftFocused = false }
+          }
+        #endif
       }
       .task {
         await model.start()
@@ -155,27 +143,238 @@
         if phase == .background { Task { await model.flushDraft() } }
       }
     }
-    private func scrollToLatest(_ proxy: ScrollViewProxy) {
-      if model.replyIsWaiting || !model.replyText.isEmpty {
-        proxy.scrollTo("reply-projection", anchor: .bottom)
-      } else if let last = model.messages.last {
-        proxy.scrollTo(last.deliveryId, anchor: .bottom)
+
+    @ViewBuilder private var introduction: some View {
+      if model.isLoading || !model.hasLoadedHistory && model.historyFailure == nil {
+        HStack(spacing: 12) {
+          ProgressView()
+          Text("Loading conversation…").foregroundStyle(.primary.opacity(0.75))
+        }.padding(.vertical, 24)
+      } else if model.historyFailure == nil {
+        VStack(alignment: .leading, spacing: 12) {
+          Image(systemName: "bubble.left.and.bubble.right")
+            .font(.largeTitle).foregroundStyle(.tint).accessibilityHidden(true)
+          Text("One conversation, always here").font(.title2).fontWeight(.semibold)
+          Text("Start voice above, or write a message below.")
+            .foregroundStyle(.primary.opacity(0.75))
+        }
+        .padding(.vertical, 24)
+        .accessibilityIdentifier("conversation-empty")
       }
     }
+
+    private func messageRow(_ message: ConversationMessage) -> some View {
+      HStack {
+        if message.role == .user { Spacer(minLength: 24) }
+        VStack(alignment: .leading, spacing: 8) {
+          Text(message.role == .user ? "You" : "Assistant")
+            .font(.footnote).fontWeight(.semibold).foregroundStyle(.primary.opacity(0.75))
+          if !message.languageSpans.isEmpty {
+            Text(LanguageSpan.displayNames(message.languageSpans)).font(.caption)
+              .foregroundStyle(.primary.opacity(0.75))
+              .accessibilityIdentifier("message-languages-\(message.position)")
+          }
+          if message.outcome == .interrupted {
+            HStack(spacing: 6) {
+              Image(systemName: "pause.circle").accessibilityHidden(true)
+              Text("Interrupted").accessibilityIdentifier("interrupted-message-\(message.position)")
+            }
+            .font(.caption).foregroundStyle(.primary.opacity(0.75))
+            Text("Generated text may include audio you did not hear.")
+              .font(.caption).foregroundStyle(.primary.opacity(0.75))
+          }
+          Text(
+            message.text.isEmpty && message.outcome == .interrupted
+              ? "Interrupted before a reply appeared" : message.text
+          )
+          .textSelection(.enabled)
+          .accessibilityIdentifier(
+            message.role == .assistant
+              ? "assistant-message-\(message.position)" : "message-\(message.position)")
+        }
+        .frame(maxWidth: 680, alignment: .leading)
+        .padding(message.role == .user ? 14 : 0)
+        .background {
+          if message.role == .user {
+            RoundedRectangle(cornerRadius: 18).fill(.quaternary)
+          }
+        }
+        .accessibilityElement(children: .contain)
+        if message.role == .assistant { Spacer(minLength: 0) }
+      }
+      .frame(maxWidth: 720)
+      .frame(maxWidth: .infinity)
+      .padding(.vertical, 6)
+    }
+
+    private var replyProjection: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Assistant").font(.footnote).fontWeight(.semibold).foregroundStyle(
+          .primary.opacity(0.75))
+        if model.replyIsWaiting {
+          HStack(spacing: 10) {
+            ProgressView()
+            Text(model.state.isRetryingReply ? "Retrying reply…" : "Preparing your reply…")
+              .foregroundStyle(.primary.opacity(0.75)).accessibilityIdentifier("reply-waiting")
+          }
+        }
+        if !model.state.replyLanguageSpans.isEmpty {
+          Text(LanguageSpan.displayNames(model.state.replyLanguageSpans)).font(.caption)
+            .foregroundStyle(.primary.opacity(0.75)).accessibilityIdentifier("reply-languages")
+        }
+        if !model.replyText.isEmpty {
+          Text(model.replyText).textSelection(.enabled).accessibilityIdentifier("reply-progress")
+        }
+      }
+      .frame(maxWidth: 680, alignment: .leading)
+      .padding(.vertical, 6)
+    }
+
+    @ViewBuilder private var replyNotices: some View {
+      if let failure = model.replyProviderFailure {
+        notice(
+          failure.code == .memoryFailed || failure.code == .memoryPending
+            ? "Message saved. Conversation context couldn’t be prepared."
+            : "Message saved. Reply unavailable.", id: "reply-provider-status")
+      }
+      if model.canRetryReply {
+        Button("Retry reply") { Task { await model.retryReply() } }
+          .frame(minHeight: 44).buttonStyle(.bordered)
+          .accessibilityIdentifier("retry-reply")
+      }
+      if model.state.currentFailure != nil && model.messages.isEmpty {
+        notice("Reply status unavailable. Refresh to recover.", id: "current-turn-status")
+      }
+      if model.replyObservationFailure != nil {
+        notice("Reply status unavailable. Refresh to recover.", id: "reply-observation-status")
+      }
+      if model.state.interruptedReceiptFailure != nil {
+        notice(
+          "Interrupted reply could not be restored. Refresh to recover it.",
+          id: "interrupted-receipt-status")
+      }
+    }
+
+    @ViewBuilder private var historyNotices: some View {
+      if model.historyFailure != nil {
+        notice("History could not refresh. Your draft is kept.", id: "history-status")
+        Button("Refresh conversation") { Task { await model.refreshHistory() } }
+          .frame(minHeight: 44).buttonStyle(.bordered)
+      }
+    }
+
+    @ViewBuilder private var draftNotices: some View {
+      if let failure = model.deliveryFailure {
+        notice(description(failure), id: "delivery-status")
+      }
+      if model.state.isWaitingForInterruptionRecovery {
+        Label("Restoring interrupted replies before sending…", systemImage: "clock")
+          .font(.footnote).accessibilityIdentifier("interrupted-receipt-waiting")
+      }
+      if model.draftFailure != nil {
+        notice("Draft could not be saved. Retry local saving before sending.", id: "draft-status")
+      }
+    }
+
+    private var composer: some View {
+      VStack(alignment: .leading, spacing: 10) {
+        Divider()
+        VStack(alignment: .leading, spacing: 10) {
+          if !model.draftStorageReady {
+            Button("Retry saved draft") { Task { await model.reloadDraft() } }.frame(minHeight: 44)
+          }
+          if typeSize.isAccessibilitySize {
+            VStack(alignment: .trailing, spacing: 8) {
+              draftField
+              sendButton
+            }
+          } else {
+            HStack(alignment: .bottom, spacing: 12) {
+              draftField
+              sendButton
+            }
+          }
+        }
+        .padding(.horizontal, 16).padding(.bottom, 12)
+        .frame(maxWidth: 720)
+        .frame(maxWidth: .infinity)
+      }
+      .background(.regularMaterial)
+    }
+
+    private var draftField: some View {
+      TextField(
+        "Message", text: Binding(get: { model.draft }, set: model.editDraft),
+        prompt: Text("Message").foregroundColor(.primary.opacity(0.75)), axis: .vertical
+      )
+      .lineLimit(1...(typeSize.isAccessibilitySize ? (draftFocused ? 1 : 2) : 5))
+      .padding(.horizontal, 12).padding(.vertical, 10)
+      .frame(minHeight: 44)
+      .background(.background, in: RoundedRectangle(cornerRadius: 16))
+      .overlay(RoundedRectangle(cornerRadius: 16).stroke(.secondary.opacity(0.3), lineWidth: 0.5))
+      .focused($draftFocused)
+      .disabled(!model.canEditDraft)
+      .accessibilityLabel("Message")
+      .accessibilityIdentifier("message-draft")
+    }
+
+    private var sendButton: some View {
+      Button {
+        followsLatest = true
+        Task { await model.send() }
+      } label: {
+        Text(
+          model.isSending
+            ? "Sending…" : model.pendingDelivery == nil ? "Send" : "Retry same message"
+        )
+        .fontWeight(.semibold).frame(minWidth: 44, minHeight: 32)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      .buttonStyle(.borderedProminent).controlSize(.large)
+      .disabled(
+        !model.canSendDraft || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      )
+      .accessibilityIdentifier("send-message")
+    }
+
+    private func notice(_ text: String, id: String) -> some View {
+      Label {
+        Text(text).accessibilityIdentifier(id)
+      } icon: {
+        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange).accessibilityHidden(
+          true)
+      }
+      .font(.footnote)
+      .padding(12).frame(maxWidth: 680, alignment: .leading)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+      guard followsLatest && !voiceOverEnabled else { return }
+      proxy.scrollTo("latest-message", anchor: .bottom)
+    }
+
     private func description(_ failure: ConversationFailure) -> String {
       switch failure {
       case .invalidInput: "Enter a nonempty message up to 100,000 characters."
-      case .invalidResponse:
-        "Invalid server response. Your message is retained; retry the same message."
-      case .unavailable:
-        "Delivery is unconfirmed. Your message is retained; retry the same message."
-      case .rejected(let code, _): "Delivery failed (\(code)). Your message is retained."
+      case .invalidResponse, .unavailable:
+        "Delivery is unconfirmed. Your message is kept; retry the same message."
+      case .rejected:
+        "Message wasn’t accepted. Your draft is kept. Review it and try again."
       case .draftStorageUnavailable: "Saved draft is unavailable. Reload it before sending."
       }
     }
   }
 
-  extension ConversationView where Details == EmptyView {
-    public init(model: ConversationViewModel) { self.init(model: model) { EmptyView() } }
+  extension ConversationView where Controls == EmptyView {
+    public init(model: ConversationViewModel, @ViewBuilder details: () -> Details) {
+      self.init(model: model, controls: { EmptyView() }, details: details)
+    }
+  }
+
+  extension ConversationView where Controls == EmptyView, Details == EmptyView {
+    public init(model: ConversationViewModel) {
+      self.init(model: model, controls: { EmptyView() }, details: { EmptyView() })
+    }
   }
 #endif

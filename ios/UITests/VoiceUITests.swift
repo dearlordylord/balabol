@@ -59,7 +59,7 @@ final class VoiceCaptureUITests: XCTestCase {
     let endResult = await XCTWaiter.fulfillment(
       of: [ended], timeout: max(0, endDeadline.timeIntervalSinceNow))
     XCTAssertEqual(endResult, .completed, "End did not settle: " + status.label)
-    XCTAssertTrue(app.textFields["message-draft"].isEnabled)
+    XCTAssertTrue(app.descendants(matching: .any)["message-draft"].firstMatch.isEnabled)
   }
   func testRealSDKFixtureAudioPlaysAndTextIntentInterruptsBeforeAnotherInput() async throws {
     let app = try await launchVoiceFixture(test: self)
@@ -81,7 +81,7 @@ final class VoiceCaptureUITests: XCTestCase {
       predicate: NSPredicate(format: "label == %@", "Microphone muted"), object: status)
     let muteResult = await XCTWaiter.fulfillment(of: [muted], timeout: 10)
     XCTAssertEqual(muteResult, .completed)
-    let draft = app.textFields["message-draft"]
+    let draft = app.descendants(matching: .any)["message-draft"].firstMatch
     draft.tap()
     draft.typeText("Fixture audio " + UUID().uuidString)
     app.buttons["send-message"].tap()
@@ -120,7 +120,7 @@ final class VoiceCaptureUITests: XCTestCase {
       XCTFail("Real microphone publication failed")
       return
     }
-    let draft = app.textFields["message-draft"]
+    let draft = app.descendants(matching: .any)["message-draft"].firstMatch
     let text = "Acoustic interruption " + UUID().uuidString
     draft.tap()
     draft.typeText(text)
@@ -199,7 +199,7 @@ final class VoiceCaptureUITests: XCTestCase {
       XCTFail("Capture must be muted before fixture playback")
       return
     }
-    let draft = app.textFields["message-draft"]
+    let draft = app.descendants(matching: .any)["message-draft"].firstMatch
     let suffix = String(UUID().uuidString.prefix(8))
     let sent = "Restart fixture " + suffix
     let unsent = "Keep " + suffix
@@ -278,7 +278,7 @@ final class VoiceCaptureUITests: XCTestCase {
     XCTAssertEqual(app.staticTexts["assistant-message-\(receipt.position)"].label, receipt.text)
     app.terminate()
     app.launch()
-    let restoredDraft = app.textFields["message-draft"]
+    let restoredDraft = app.descendants(matching: .any)["message-draft"].firstMatch
     let draftRestored = XCTNSPredicateExpectation(
       predicate: NSPredicate(format: "value == %@", unsent), object: restoredDraft)
     let draftResult = await XCTWaiter.fulfillment(of: [draftRestored], timeout: 10)
@@ -353,7 +353,7 @@ final class VoiceCaptureUITests: XCTestCase {
       app.terminate()
     }
     if restoreDraftFocus {
-      let draft = app.textFields["message-draft"]
+      let draft = app.descendants(matching: .any)["message-draft"].firstMatch
       draft.tap()
       draft.typeText("Language draft " + String(UUID().uuidString.prefix(8)))
     }
@@ -428,8 +428,8 @@ final class VoiceCaptureUITests: XCTestCase {
     let capabilities = app.staticTexts["voice-languages"]
     XCTAssertTrue(capabilities.waitForExistence(timeout: 10))
     XCTAssertEqual(
-      capabilities.label, "Scripted languages: " + fixtureLanguageNames(["ru", "fr", "en"]))
-    let draft = app.textFields["message-draft"]
+      capabilities.label, "Voice languages: " + fixtureLanguageNames(["ru", "fr", "en"]))
+    let draft = app.descendants(matching: .any)["message-draft"].firstMatch
     let unsent = "Language draft " + String(UUID().uuidString.prefix(8))
     draft.tap()
     draft.typeText(unsent)
@@ -539,7 +539,7 @@ final class VoiceCaptureUITests: XCTestCase {
     XCTAssertEqual(endResult, .completed)
     app.terminate()
     app.launch()
-    let restoredDraft = app.textFields["message-draft"]
+    let restoredDraft = app.descendants(matching: .any)["message-draft"].firstMatch
     let restored = XCTNSPredicateExpectation(
       predicate: NSPredicate(format: "value == %@", unsent), object: restoredDraft)
     let draftResult = await XCTWaiter.fulfillment(of: [restored], timeout: 10)
@@ -557,7 +557,7 @@ final class VoiceCaptureUITests: XCTestCase {
   func testActualMicrophoneUtteranceIsSavedWithoutChangingDraftAndSurvivesRelaunch() async throws {
     let app = try await launchVoiceFixture(test: self)
     defer { app.terminate() }
-    let draft = app.textFields["message-draft"]
+    let draft = app.descendants(matching: .any)["message-draft"].firstMatch
     let unsent = "Independent text draft " + UUID().uuidString
     draft.tap()
     draft.typeText(unsent)
@@ -598,7 +598,8 @@ final class VoiceCaptureUITests: XCTestCase {
     app.launch()
     XCTAssertTrue(message.waitForExistence(timeout: 10))
     XCTAssertEqual(message.label, receipt.text)
-    XCTAssertEqual(app.textFields["message-draft"].value as? String, unsent)
+    XCTAssertEqual(
+      app.descendants(matching: .any)["message-draft"].firstMatch.value as? String, unsent)
     XCTAssertEqual(app.staticTexts["voice-status"].label, "Voice is off")
   }
 
@@ -687,12 +688,12 @@ final class VoiceCaptureUITests: XCTestCase {
   test.add(screenshot)
 }
 
-@MainActor private func revealInterruptedReceipt(
+@MainActor func revealInterruptedReceipt(
   _ app: XCUIApplication, position: Int, test: XCTestCase
 ) async -> Bool {
   let marker = app.staticTexts["interrupted-message-\(position)"]
   let text = app.staticTexts["assistant-message-\(position)"]
-  let transcript = app.collectionViews.firstMatch
+  let transcript = app.scrollViews["conversation-transcript"]
   guard transcript.exists else { return false }
   // SwiftUI List creates only visible rows. The latest response and focused
   // keyboard can hide this earlier receipt; scroll within the transcript only.
@@ -705,13 +706,9 @@ final class VoiceCaptureUITests: XCTestCase {
       return Int(element.identifier.dropFirst("assistant-message-".count))
     }
     if let latest = visiblePositions.max(), latest < position {
-      let start = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-      let end = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-      start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+      transcript.swipeUp(velocity: .slow)
     } else {
-      let start = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-      let end = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-      start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+      transcript.swipeDown(velocity: .slow)
     }
     try? await Task.sleep(for: .milliseconds(200))
   }
@@ -719,6 +716,10 @@ final class VoiceCaptureUITests: XCTestCase {
   attachment.name = "Interrupted receipt visibility failure"
   attachment.lifetime = .keepAlways
   test.add(attachment)
+  let hierarchy = XCTAttachment(string: app.debugDescription)
+  hierarchy.name = "Interrupted receipt accessibility hierarchy"
+  hierarchy.lifetime = .keepAlways
+  test.add(hierarchy)
   return false
 }
 
@@ -876,7 +877,7 @@ private func fixtureLanguageNames(_ languages: [String]) -> String {
 ) async -> Bool {
   let body = app.staticTexts[(assistant ? "assistant-message-" : "message-") + String(position)]
   let caption = app.staticTexts["message-languages-\(position)"]
-  let transcript = app.collectionViews.firstMatch
+  let transcript = app.scrollViews["conversation-transcript"]
   guard transcript.exists else { return false }
   for _ in 0..<24 {
     if body.exists, caption.exists, body.isHittable, caption.isHittable { return true }

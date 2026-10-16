@@ -8,12 +8,18 @@
     @Bindable private var model: VoiceViewModel
     public init(model: VoiceViewModel) { self.model = model }
     public var body: some View {
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(status).accessibilityIdentifier("voice-status")
-          Spacer()
-          Text("Voice conversation").font(.caption).foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Voice").font(.subheadline).foregroundStyle(.primary.opacity(0.75))
             .accessibilityIdentifier("voice-conversation")
+            .fixedSize(horizontal: false, vertical: true)
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(status).font(.headline).accessibilityIdentifier("voice-status")
+              .fixedSize(horizontal: false, vertical: true)
+            if isBusy {
+              ProgressView().controlSize(.small).accessibilityHidden(true)
+            }
+          }
         }
         if model.state.unrecognizedUtterance != nil,
           model.state.capture == .listening || model.state.capture == .muted
@@ -38,7 +44,7 @@
         } else if case .saved = model.state.admission {
           Text("Voice message saved").font(.caption).accessibilityIdentifier("voice-saved")
         } else if case .failed = model.state.admission {
-          Text("Please repeat the speech").font(.caption).foregroundStyle(.red)
+          Text("Please repeat the speech").font(.caption).foregroundStyle(.primary)
         }
         if model.output.locallyInterrupted {
           Text("Interrupted").font(.caption)
@@ -53,40 +59,82 @@
             Text("Replying…").font(.caption).accessibilityIdentifier("voice-output-replying")
           }
         }
-        HStack {
-          if model.state.canStart {
-            Button(model.state.capture == .idle ? "Start voice" : "Try again") { model.start() }
-              .accessibilityIdentifier("start-voice")
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 12) {
+            primaryControls
+            Spacer(minLength: 12)
+            endControl
           }
-          if model.state.canResume {
-            Button("Resume") { model.resume() }.accessibilityIdentifier("resume-voice")
-          }
-          if model.state.wantsListening {
-            Button(model.state.wantsMuted ? "Unmute" : "Mute") { model.toggleMute() }
-              .accessibilityIdentifier("mute-voice")
-              .disabled(model.state.isChangingMute)
-          }
-          if [
-            .requestingMicrophone, .connecting, .reconnecting, .hostUnavailable,
-            .checkingPreviousSpeech, .listening, .muted, .paused, .resuming,
-          ].contains(model.state.capture) {
-            Button("End") { model.end() }.accessibilityIdentifier("end-voice")
-          }
-          if model.state.capture == .failed(.permissionDenied) {
-            Button("Open Settings") {
-              if let url = URL(string: UIApplication.openSettingsURLString) {
-                UIApplication.shared.open(url)
-              }
-            }
+          VStack(alignment: .leading, spacing: 12) {
+            primaryControls
+            endControl
           }
         }
       }
+      .fixedSize(horizontal: false, vertical: true)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal)
+      .padding(16)
+      .background(
+        Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16)
+      )
       .task {
         await model.restore()
         await model.loadLanguages()
       }
+    }
+    @ViewBuilder private var primaryControls: some View {
+      if model.state.canStart && model.state.capture != .failed(.permissionDenied) {
+        Button(model.state.capture == .idle ? "Start voice" : "Try again") { model.start() }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .frame(minWidth: 44, minHeight: 44)
+          .accessibilityIdentifier("start-voice")
+      }
+      if model.state.canResume {
+        Button("Resume") { model.resume() }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .frame(minWidth: 44, minHeight: 44)
+          .accessibilityIdentifier("resume-voice")
+      }
+      if model.state.wantsListening {
+        Button(model.state.wantsMuted ? "Unmute" : "Mute") { model.toggleMute() }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .frame(minWidth: 44, minHeight: 44)
+          .accessibilityIdentifier("mute-voice")
+          .disabled(model.state.isChangingMute)
+      }
+      if model.state.capture == .failed(.permissionDenied) {
+        Button("Open Settings") {
+          if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .frame(minWidth: 44, minHeight: 44)
+      }
+    }
+    @ViewBuilder private var endControl: some View {
+      if [
+        .requestingMicrophone, .connecting, .reconnecting, .hostUnavailable,
+        .checkingPreviousSpeech, .listening, .muted, .paused, .resuming,
+      ].contains(model.state.capture) {
+        Button("End") { model.end() }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .frame(minWidth: 44, minHeight: 44)
+          .accessibilityLabel("End voice session")
+          .accessibilityIdentifier("end-voice")
+      }
+    }
+    private var isBusy: Bool {
+      model.state.isChangingMute
+        || [
+          .requestingMicrophone, .connecting, .reconnecting, .hostUnavailable,
+          .checkingPreviousSpeech, .resuming, .ending,
+        ].contains(model.state.capture)
     }
     private var status: String {
       if model.state.hasPendingAdmission && model.state.wantsListening,
@@ -124,36 +172,28 @@
     public var body: some View {
       VStack(alignment: .leading, spacing: 6) {
         if let languages = model.state.languages {
-          Text("Scripted languages: " + languages.displayNames()).font(.caption)
-            .foregroundStyle(.secondary).accessibilityIdentifier("voice-languages")
+          Text("Voice languages: " + languages.displayNames()).font(.caption)
+            .foregroundStyle(.primary.opacity(0.75)).accessibilityIdentifier("voice-languages")
         }
         if let failure = model.state.languageFailure {
-          Text(languageFailure(failure)).font(.caption).foregroundStyle(.secondary)
+          Text(languageFailure(failure)).font(.caption).foregroundStyle(.primary.opacity(0.75))
             .accessibilityIdentifier("voice-language-unavailable")
         }
         if model.output.locallyInterrupted {
           Text("Interrupted: generated text may include audio not heard").accessibilityIdentifier(
             "voice-output-interrupted")
-        } else if model.output.unavailable {
-          Text("Audio unavailable").accessibilityIdentifier("voice-output-unavailable-detail")
-        } else if let output = model.output.current {
-          if output.status == .playing && model.output.receivedAudio {
-            Text("Playing audio").accessibilityIdentifier("voice-output-playing-detail")
-          } else if output.status == .preparing || output.status == .awaitingReady
-            || output.status == .playing
-          {
-            Text("Replying…").accessibilityIdentifier("voice-output-replying-detail")
-          }
         }
         if !model.state.tentative.isEmpty {
-          Text("Tentative: \(model.state.tentative)").foregroundStyle(.secondary)
+          Text("Recognizing: \(model.state.tentative)").foregroundStyle(.primary.opacity(0.75))
             .accessibilityIdentifier("voice-tentative")
         }
         ForEach(model.state.utterances, id: \.self) { id in
           if let admission = model.state.admissions[id] {
             if let spans = model.state.admissionLanguageSpans[id], !spans.isEmpty {
-              Text(LanguageSpan.displayNames(spans)).font(.caption).foregroundStyle(.secondary)
-                .accessibilityIdentifier("voice-input-languages")
+              Text(LanguageSpan.displayNames(spans)).font(.caption).foregroundStyle(
+                .primary.opacity(0.75)
+              )
+              .accessibilityIdentifier("voice-input-languages")
             }
             switch admission {
             case .saving(_, let text):
@@ -162,14 +202,14 @@
               Text("Checking whether saved: \(text)").accessibilityIdentifier(
                 "voice-checking-detail")
             case .failed(let text, _):
-              Text("Please repeat the speech: \(text)").foregroundStyle(.red)
-            case .saved: Text("Voice message saved").accessibilityIdentifier("voice-saved-detail")
+              Text("Please repeat the speech: \(text)").foregroundStyle(.primary)
+            case .saved: EmptyView()
             }
           }
         }
         if model.state.admissionFailure != nil && model.state.hasPendingAdmission {
           Text("Unable to check whether previous speech was saved")
-            .foregroundStyle(.secondary).accessibilityIdentifier(
+            .foregroundStyle(.primary.opacity(0.75)).accessibilityIdentifier(
               "voice-admission-unavailable-detail")
         }
       }.frame(maxWidth: .infinity, alignment: .leading)
@@ -178,9 +218,9 @@
       if case .backend(let code, let message) = failure,
         ["InvalidLanguageConfiguration", "UnsupportedLanguage"].contains(code)
       {
-        return "Scripted language configuration unavailable: " + message
+        return "Voice languages couldn’t load: " + message
       }
-      return "Scripted language capabilities unavailable"
+      return "Voice languages couldn’t load."
     }
   }
 #endif

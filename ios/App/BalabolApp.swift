@@ -33,8 +33,9 @@ private struct ClientLocalState {
     #else
       let voiceDiagnostics = false
     #endif
-    return ClientLocalState(defaults: .standard, testNamespace: nil, launchControlURL: nil,
-                            voiceDiagnostics: voiceDiagnostics)
+    return ClientLocalState(
+      defaults: .standard, testNamespace: nil, launchControlURL: nil,
+      voiceDiagnostics: voiceDiagnostics)
   }
 
   func draftURL(in applicationSupport: URL) -> URL {
@@ -60,6 +61,8 @@ private struct ConversationRoot: View {
   @State private var voice: VoiceViewModel?
   @State private var session: URLSession?
   @State private var configurationError: String?
+  @State private var showingServer = false
+  @State private var switchingServer = false
   private let localState: ClientLocalState
 
   init(localState: ClientLocalState) {
@@ -71,48 +74,47 @@ private struct ConversationRoot: View {
     NavigationStack {
       Group {
         if let model {
-          VStack(spacing: 0) {
+          ConversationView(model: model) {
             if let voice { VoiceView(model: voice) }
-            ConversationView(model: model) {
-              if let voice {
-                Section("Voice details") { VoiceDetailsView(model: voice) }
-              }
-            }
+          } details: {
+            if let voice { VoiceDetailsView(model: voice) }
           }
+          // A replacement model must start fresh view-owned lifecycle tasks.
+          .id(ObjectIdentifier(model))
         } else {
-          Form {
-            Text(
-              "On Simulator, use http://127.0.0.1:8787. On iPhone, use your Mac's private Tailscale HTTPS address with port 8444."
-            )
-            TextField("http://127.0.0.1:8787", text: $urlInput)
-              .accessibilityIdentifier("server-url")
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .keyboardType(.URL)
-            Button("Connect") { connect() }
-            if let configurationError { Text(configurationError).foregroundStyle(.red) }
-          }
-          .navigationTitle("Connect to Balabol")
+          serverForm
+            .navigationTitle("Connect to Balabol")
         }
       }
+      .disabled(switchingServer)
       .toolbar {
         if model != nil {
-          Button("Server") {
-            Task {
-              guard let current = model, current.canSwitchServer,
-                voice?.state.canSwitchServer != false
-              else { return }
-              await voice?.shutdown()
-              voice = nil
-              await current.shutdown()
-              session?.invalidateAndCancel()
-              session = nil
-              model = nil
-            }
+          Button {
+            urlInput = configuredURL
+            configurationError = nil
+            showingServer = true
+          } label: {
+            Label("Server", systemImage: "server.rack")
+              .frame(minWidth: 44, minHeight: 44)
           }
           .disabled(model?.canSwitchServer != true || voice?.state.canSwitchServer == false)
         }
       }
+    }
+    .tint(Color(uiColor: .systemIndigo))
+    .sheet(isPresented: $showingServer) {
+      NavigationStack {
+        serverForm
+          .navigationTitle("Server")
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button("Cancel") { showingServer = false }
+                .disabled(switchingServer)
+            }
+          }
+      }
+      .interactiveDismissDisabled(switchingServer)
     }
     .onAppear {
       guard model == nil else { return }
@@ -139,6 +141,85 @@ private struct ConversationRoot: View {
       }
     }
   }
+  private var serverForm: some View {
+    Form {
+      Section {
+        Label("Your conversation, on your Mac", systemImage: "desktopcomputer")
+          .font(.headline)
+        Text("Connect Balabol to the server where your conversation is stored.")
+          .foregroundStyle(.primary.opacity(0.75))
+      }
+      Section {
+        TextField("https://your-mac:8444", text: $urlInput)
+          .accessibilityLabel("Server address")
+          .accessibilityIdentifier("server-url")
+          .textContentType(.URL)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .keyboardType(.URL)
+          .disabled(switchingServer)
+        if let configurationError {
+          Label(configurationError, systemImage: "exclamationmark.circle")
+            .font(.callout).accessibilityIdentifier("server-error")
+        }
+      } header: {
+        Text("Server address")
+      } footer: {
+        Text(
+          "On iPhone, use your Mac’s private Tailscale HTTPS address, including port 8444. On Simulator, use http://127.0.0.1:8787."
+        )
+      }
+      Section {
+        Button {
+          if model == nil { connect() } else { Task { await changeServer() } }
+        } label: {
+          HStack {
+            if switchingServer { ProgressView() }
+            Text(switchingServer ? "Connecting…" : "Connect")
+              .frame(maxWidth: .infinity, minHeight: 44)
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(
+          urlInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || switchingServer)
+      } footer: {
+        Text(
+          "Keep the server running on your Mac. Connecting selects its address; it doesn’t start the server."
+        )
+      }
+    }
+  }
+
+  private func changeServer() async {
+    guard !switchingServer, let current = model, current.canSwitchServer,
+      voice?.state.canSwitchServer != false
+    else { return }
+    // Validate before retiring the current connection; Cancel never changes it.
+    let validationSession = URLSession(configuration: .ephemeral)
+    defer { validationSession.invalidateAndCancel() }
+    do {
+      guard let url = URL(string: urlInput) else { throw ConversationFailure.invalidInput }
+      _ = try HTTPConversationTransport(baseURL: url, session: validationSession)
+    } catch {
+      configurationError = "Enter a valid HTTP or HTTPS server URL without credentials or a path."
+      return
+    }
+    if urlInput == configuredURL {
+      showingServer = false
+      return
+    }
+    switchingServer = true
+    await voice?.shutdown()
+    voice = nil
+    await current.shutdown()
+    session?.invalidateAndCancel()
+    session = nil
+    model = nil
+    connect()
+    switchingServer = false
+    showingServer = model == nil
+  }
+
   private func connect() {
     // Live connections are retired only through the awaited Server action.
     guard model == nil, session == nil else { return }
