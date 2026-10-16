@@ -110,6 +110,14 @@ it.effect("blocks new admission on interrupted storage failure and resumes its f
   Effect.gen(function* () {
     const fixture = yield* Effect.promise(temporaryDatabase)
     let failInterrupted = true
+    const answer = Layer.succeed(AnswerGeneration, {
+      capabilities: { languages: ["en"], output: "text-deltas" },
+      generate: () =>
+        Stream.concat(
+          Stream.succeed({ kind: "Delta", text: "frozen generated text", languageSpans: [] } satisfies AnswerEvent),
+          Stream.never
+        )
+    })
     const decorate = (storage: Storage): Storage => ({
       open: () => storage.open(),
       close: () => storage.close(),
@@ -128,13 +136,15 @@ it.effect("blocks new admission on interrupted storage failure and resumes its f
       yield* conversation.observeReply(first.deliveryId)
       yield* TestClock.adjust(80)
       const frozen = yield* conversation.reply(first.deliveryId)
+      expect(frozen.state).toBe("Streaming")
+      expect(frozen.text).toBe("frozen generated text")
       expect((yield* Effect.flip(conversation.send(second)))._tag).toBe("StorageUnavailable")
       yield* TestClock.adjust(1000)
       expect((yield* Effect.flip(conversation.send(second)))._tag).toBe("StorageUnavailable")
       expect((yield* conversation.reply(first.deliveryId)).text).toBe(frozen.text)
       expect((yield* conversation.page({ limit: 100 })).messages.map((message) => message.text)).toEqual(["first"])
       return frozen.text
-    }).pipe(Effect.provide(decoratedConversation(fixture.path, decorate)), Effect.scoped)
+    }).pipe(Effect.provide(decoratedConversation(fixture.path, decorate, answer)), Effect.scoped)
     yield* Effect.gen(function* () {
       const frozenText = yield* attempt
       failInterrupted = false
@@ -150,7 +160,7 @@ it.effect("blocks new admission on interrupted storage failure and resumes its f
           frozenText,
           "second"
         ])
-      }).pipe(Effect.provide(decoratedConversation(fixture.path, decorate)), Effect.scoped)
+      }).pipe(Effect.provide(decoratedConversation(fixture.path, decorate, answer)), Effect.scoped)
     }).pipe(Effect.ensuring(Effect.promise(() => fixture.close())))
   })
 )

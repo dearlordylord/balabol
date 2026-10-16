@@ -46,11 +46,12 @@ export class ReplyDelivery {
       )
     )
   }
-  begin(target: ResponseTarget) {
+  begin(target: ResponseTarget, authorized: () => boolean = () => true) {
     return Effect.gen({ self: this }, function* () {
       const registration = this.#registration
       if (registration === undefined) return undefined
       const now = yield* Clock.currentTimeMillis
+      if (!authorized()) return undefined
       const ticket = {
         ...target,
         registrationId: registration.registrationId,

@@ -23,6 +23,8 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 
 The backend is a Terminal process; the interface is a separate native iOS app. Opening the backend URL in a browser shows setup instructions, not a chat.
 
+Backend builds and checks require Bend **2.0.36** and `timeout` or `gtimeout`, in addition to Node 24 and the pinned pnpm. The [proof/build boundary](docs/engineering/conversation-lifecycle.md#qualified-compilation-boundary) explains the required native tools and generated artifacts; builds install nothing automatically.
+
 1. Use Node 24 and the pinned pnpm. On first setup, install gitleaks and run `pnpm install --strict-peer-dependencies` as described below.
 2. In Terminal at this repository, run `pnpm build`, then `pnpm start`. Keep that process running; it listens at `http://127.0.0.1:8787` by default.
 3. Open `ios/Balabol.xcodeproj` in Xcode. Select the `Balabol` scheme and an iOS 17+ Simulator, then press Run.

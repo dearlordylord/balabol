@@ -53,7 +53,8 @@ for (const concurrency of [1, 2])
             yield* conversation.send({ deliveryId, text: "long source requiring actual summary work ".repeat(100) })
             yield* conversation.cancelReply(deliveryId)
           }
-          yield* TestClock.adjust(10)
+          // Let the independent memory pump schedule jobs; answer cancellation must not be its clock driver.
+          yield* TestClock.adjust(100)
           expect(maximum).toBe(concurrency)
           expect(active).toBe(concurrency)
           yield* TestClock.adjust(5000)

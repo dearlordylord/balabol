@@ -2,6 +2,7 @@ import type { Storage } from "@firfi/unii"
 import { Effect } from "effect"
 import { expect, it } from "vitest"
 import { Conversation } from "../src/conversation/index.ts"
+import { waitForReply } from "./reply-fixture.ts"
 import { SqliteStorage } from "../src/memory/sqlite.ts"
 import { decoratedConversation, temporaryDatabase } from "./memory-fixture.ts"
 
@@ -90,16 +91,20 @@ it("bounds persistent recovery to one reopen per request and resumes after the s
           expect((yield* Effect.flip(conversation.send(first)))._tag).toBe("StorageUnavailable")
           expect(fault.state.loads).toBe(1)
           expect((yield* conversation.send(first)).recordId).toBe(0)
-          expect((yield* Effect.flip(conversation.send(second)))._tag).toBe("StorageUnavailable")
+          // This is the original uncertain attempt, so acceptance starts its eligible response.
+          const reply = yield* waitForReply(conversation, first.deliveryId)
+          expect(reply.error?.code).toBe("StorageUnavailable")
           expect(fault.state.loads).toBe(2)
           expect((yield* Effect.flip(conversation.send(second)))._tag).toBe("StorageUnavailable")
           expect(fault.state.loads).toBe(3)
+          expect((yield* Effect.flip(conversation.send(second)))._tag).toBe("StorageUnavailable")
+          expect(fault.state.loads).toBe(4)
           expect(() => new SqliteStorage(fixture.path)).toThrow()
           yield* Effect.sync(() => {
             fault.state.failing = false
           })
           expect((yield* conversation.send(second)).recordId).toBe(1)
-          expect(fault.state.loads).toBe(4)
+          expect(fault.state.loads).toBe(5)
           expect(fault.state.opens).toBe(1)
           expect(fault.state.closes).toBe(0)
         })

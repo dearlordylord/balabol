@@ -34,10 +34,10 @@ it("bounds the union of failed unresolved admissions and reservations before the
           const session = new Session(
             Conversation.of({
               ...conversation,
-              send: (input) =>
+              submitInput: (input) =>
                 input.deliveryId === failedId
                   ? Effect.fail(new StorageUnavailable({ message: "controlled storage failure" }))
-                  : conversation.send(input)
+                  : conversation.submitInput(input)
             }),
             provider,
             scope,

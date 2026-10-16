@@ -144,6 +144,9 @@ export class Voice extends Context.Service<
             }
             const sessionScope = yield* Scope.fork(scope)
             const activityStream = yield* activity.open().pipe(Scope.provide(sessionScope))
+            const inputSource = yield* conversation
+              .openInputSource()
+              .pipe(Effect.mapError((error) => failed("InvalidInput", error.message)))
             const session = new Session(
               conversation,
               provider,
@@ -153,7 +156,8 @@ export class Voice extends Context.Service<
               request.muted,
               languages.allowedLanguages,
               activityStream,
-              diagnostics
+              diagnostics,
+              inputSource
             )
             const startedAt = yield* Clock.currentTimeMillis
             session.joinDeadlineAt = startedAt + joinMillis
@@ -191,7 +195,11 @@ export class Voice extends Context.Service<
                   session.joined = true
                 }
               )
-              .pipe(Effect.onError(() => session.release))
+              .pipe(
+                Effect.onError(() =>
+                  conversation.closeInputSource(inputSource).pipe(Effect.ignore, Effect.andThen(session.release))
+                )
+              )
             yield* Effect.gen(function* () {
               while (session.status === "active") {
                 yield* Effect.sleep(disconnectPollMillis)
@@ -224,7 +232,11 @@ export class Voice extends Context.Service<
               Effect.onError(() =>
                 Effect.sync(() => {
                   session.status = "ended"
-                }).pipe(Effect.andThen(opened.connection.close()), Effect.andThen(session.release))
+                }).pipe(
+                  Effect.andThen(opened.connection.close()),
+                  Effect.andThen(conversation.closeInputSource(inputSource).pipe(Effect.ignore)),
+                  Effect.andThen(session.release)
+                )
               )
             )
             const join = {

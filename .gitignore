@@ -61,3 +61,6 @@ models-cache
 *.m4a
 *.pcm
 
+
+# Rebuilt and qualified Bend compiler artifacts
+src/conversation/admission-core/generated/

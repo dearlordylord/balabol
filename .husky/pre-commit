@@ -3,5 +3,6 @@ set -eu
 command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks is required; install it before committing."; exit 1; }
 pnpm secrets:staged
 pnpm exec lint-staged
+pnpm check:bend
 pnpm typecheck
 pnpm test:fast

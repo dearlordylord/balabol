@@ -1,17 +1,18 @@
 import { fakeAnswerLayer, AnswerGeneration, AnswerCapabilities, AnswerFailed } from "../answer-generation/index.ts"
-import { selectResponseLanguage } from "./response-language.ts"
+import { makeAdmissions } from "./admission.ts"
+import type { AdmissionService } from "./admission-contracts.ts"
 import { Replies } from "./replies.ts"
 import { defaultReplySettings, ReplyConfiguration } from "./reply-configuration.ts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { ReplyDelivery, DeliverySettlement, ResponseTarget } from "./delivery.ts"
 import type { DeliveryTicket, ReplyDeliveryRegistration } from "./delivery.ts"
-import { DeliveryId, Memory, samePayload, type DeliveryPayload } from "../memory/index.ts"
+import { DeliveryId, Memory } from "../memory/index.ts"
 import {
+  type SendMessage,
+  type DeliveryConflict,
   type CurrentTurn,
   ReplyBusy,
   InvalidInput,
-  SendMessage,
-  DeliveryConflict,
   type Reply,
   type ReplyNotFound,
   type Message,
@@ -41,20 +42,9 @@ export {
 } from "./contracts.ts"
 const invalidIdentity = () => new InvalidInput({ message: "Invalid conversation identity or input" })
 const parseId = (id: string) => Schema.decodeUnknownEffect(DeliveryId)(id).pipe(Effect.mapError(invalidIdentity))
-const assertIdentity = (payload: Message | DeliveryPayload | undefined, message: SendMessage) =>
-  payload !== undefined && (!samePayload(payload, { ...message, role: "user" }) || payload.role === "assistant")
-    ? Effect.fail(new DeliveryConflict({ message: "Delivery identity already belongs to another payload" }))
-    : Effect.void
-// Accepted response preference belongs to the durable input, not a later provider configuration.
-const acceptedResponseLanguage = (
-  payload: DeliveryPayload | undefined,
-  message: SendMessage,
-  languages: readonly string[]
-) =>
-  payload?.responseLanguage ?? selectResponseLanguage(message.languageSpans ?? [], message.detectedLanguage, languages)
 export class Conversation extends Context.Service<
   Conversation,
-  {
+  AdmissionService & {
     readonly replyLanguages: readonly string[]
     registerReplyDelivery: (
       input: ReplyDeliveryRegistration
@@ -93,26 +83,11 @@ export class Conversation extends Context.Service<
       const deadline = (target: ResponseTarget): Effect.Effect<void, StorageUnavailable> =>
         replies.expire(target).pipe(Effect.asVoid, Effect.uninterruptible, semaphore.withPermits(1))
       const replies = new Replies(memory, answer, scope, settings, delivery, deadline)
-      const send = Effect.fn("Conversation.send")(
-        function* (raw: SendMessage) {
-          const parsed = yield* Schema.decodeUnknownEffect(SendMessage)(raw).pipe(Effect.mapError(invalidIdentity))
-          const message = { ...parsed, languageSpans: parsed.languageSpans ?? [] }
-          const existing = yield* memory.find(message.deliveryId)
-          const payload = existing?.state === "Accepted" ? existing.receipt : existing?.payload
-          yield* assertIdentity(payload, message)
-          if (existing?.state === "Accepted") return existing.receipt
-          yield* replies.admit()
-          const receipt = yield* memory.append({
-            ...message,
-            role: "user",
-            responseLanguage: acceptedResponseLanguage(payload, message, answer.capabilities.languages)
-          })
-          yield* replies.start(receipt)
-          return receipt
-        },
-        semaphore.withPermits(1),
-        Effect.uninterruptible
-      )
+      const admissions = yield* makeAdmissions(memory, replies, scope, semaphore, answer.capabilities.languages)
+      const send = Effect.fn("Conversation.send")(function* (message: SendMessage) {
+        const reservation = yield* admissions.registerInput({ message })
+        return yield* admissions.submitInput(reservation)
+      }, Effect.uninterruptible)
       const page = Effect.fn("Conversation.page")(function* (raw: PageRequest) {
         const request = yield* Schema.decodeUnknownEffect(PageRequest)(raw).pipe(Effect.mapError(invalidIdentity))
         const messages = yield* memory.page(request.after, request.limit)
@@ -147,6 +122,7 @@ export class Conversation extends Context.Service<
           Effect.uninterruptible
         )
       return Conversation.of({
+        ...admissions,
         replyLanguages: answer.capabilities.languages,
         registerReplyDelivery: (input) => delivery.register(input).pipe(semaphore.withPermits(1)),
         deliverySnapshot: (id) => parseId(id).pipe(Effect.map((parsed) => delivery.snapshot(parsed))),

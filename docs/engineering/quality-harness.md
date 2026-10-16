@@ -39,7 +39,7 @@ CRAP combines complexity and measured coverage: `complexity² × (1 − coverage
 
 ## Bend bridge qualification
 
-`pnpm check:bend` qualifies the installed native compiler and typed Effect call separately from product behavior. See the [lifecycle protocol](conversation-lifecycle.md#qualified-compilation-boundary) for exact supported versions, ABI scope, numeric boundary, proof controls and later production integration. It installs nothing and uses synthetic temporary fixtures only. ABI generator self-checks run in `test:harness`; this milestone does not add native-tool prerequisites to ordinary fast application tests.
+`pnpm check:bend` qualifies the installed native compiler and typed Effect call separately from product behavior. See the [lifecycle protocol](conversation-lifecycle.md#qualified-compilation-boundary) for exact supported versions, ABI scope, numeric boundary, proof controls and later production integration. It installs nothing. Synthetic temporary fixtures qualify the compiler and ABI; the production admission core additionally runs approved proofs, finite cases and semantic-mutant controls. ABI/build self-checks run in `test:harness`. Build, compiler, Effect and fast behavior gates prove and compile the production core; pre-commit runs `check:bend` before those checks. Bend 2.0.36 and a supported timeout executable are therefore required for normal product checks. Generated modules are ignored by Git and copied into the built distribution.
 
 ## Exact Effect evidence
 

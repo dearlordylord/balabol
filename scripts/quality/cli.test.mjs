@@ -346,6 +346,7 @@ test("secret scan accepts safe input and rejects a synthetic token", () => {
 test("actual commit hook scans secrets before formatting and rejects secret history on push", () =>
   configured({ "safe.md": "# Safe fixture\n" }, (root) => {
     cpSync(resolve("scripts/quality"), join(root, "scripts/quality"), { recursive: true });
+    cpSync(resolve("scripts/bend"), join(root, "scripts/bend"), { recursive: true });
     for (const name of [".gitleaks.toml", ".prettierignore", ".prettierrc.json"]) copyFileSync(name, join(root, name));
     const git = (args) => spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 60_000 });
     assert.equal(git(["init", "--quiet"]).status, 0);
@@ -693,6 +694,43 @@ test("fast behavior excludes slow tests and explicit slow invocation excludes fa
       assert.notEqual(slow.status, 0);
       assert.match(slow.stdout + slow.stderr, /SLOW_SENTINEL/);
       assert.doesNotMatch(slow.stdout + slow.stderr, /FAST_SENTINEL/);
+    },
+  );
+});
+
+test("build ships the proved native core and rejects a changed unproved implementation", () => {
+  configured(
+    {
+      "src/conversation/index.ts":
+        'import core from "./admission-core/generated/core.mjs"; export const token = core.token;',
+      "src/conversation/admission-core/core.bend": "import Base\n\ndef token(n: Nat) -> Nat:\n  n\n",
+      "src/conversation/admission-core/Spec.bend": "import Base\n",
+      "src/conversation/admission-core/LAWS.bend":
+        "import Base\nimport ./core.bend as Core\n\nlaw identity:\n  for +n: Nat\n  {Core.token(n) == n : Nat}\n",
+      "src/conversation/admission-core/PROOF.bend":
+        "import Base\nimport ./LAWS.bend as Laws\n\ndef Laws.identity(n):\n  {==}\n",
+    },
+    (root) => {
+      const built = run(root, "build");
+      assert.equal(built.status, 0, built.stdout + built.stderr);
+      rmSync(join(root, "src/conversation/admission-core/generated"), { recursive: true });
+      const executed = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import assert from "node:assert/strict"; import { token } from ${JSON.stringify(join(root, "dist/conversation/index.js"))}; assert.equal(token(281474976710655n), 281474976710655n);`,
+        ],
+        { encoding: "utf8", timeout: 15000 },
+      );
+      assert.equal(executed.status, 0, executed.stdout + executed.stderr);
+      writeFileSync(
+        join(root, "src/conversation/admission-core/core.bend"),
+        "import Base\n\ndef token(n: Nat) -> Nat:\n  0n\n",
+      );
+      const rejected = run(root, "compiler");
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /Admission proof gate failed/);
     },
   );
 });

@@ -1,25 +1,26 @@
 import { waitForPriorMemory } from "./prior-context.ts"
+import { appendReply } from "./reply-persistence.ts"
 import { randomUUID } from "node:crypto"
 import { Effect, Fiber, Schema, Stream, Clock } from "effect"
 import type { Scope } from "effect"
 import { LanguageSpans, validLanguageSpans, type LanguageSpan } from "../language/index.ts"
 import { AnswerFailed, type AnswerGeneration } from "../answer-generation/index.ts"
-import {
-  samePayload,
-  type DeliveryPayload,
-  type Memory,
-  type Receipt,
-  type StorageUnavailable
-} from "../memory/index.ts"
+import { type DeliveryPayload, type Memory, type Receipt, StorageUnavailable } from "../memory/index.ts"
 import type { ReplyDelivery, ResponseTarget, ResponseInvalidation, DeliverySettlement } from "./delivery.ts"
 import { parseAnswerEvent, validateAnswerLanguages } from "./answer-languages.ts"
-import { selectResponseLanguage } from "./response-language.ts"
+import {
+  languageField,
+  maximumReplyLength,
+  waitingReply,
+  restoredReply,
+  restartedReply,
+  type ResponseBase
+} from "./reply-projection.ts"
 import { responseIdentity } from "./response-identity.ts"
 import type { ReplySettings } from "./reply-configuration.ts"
 import { Reply, ReplyNotFound } from "./contracts.ts"
 
-const maximumReplyLength = 100_000
-const languageField = (language: string | null | undefined) => (language == null ? {} : { responseLanguage: language })
+const requireAuthorization = (authorized: () => boolean) => (authorized() ? Effect.void : Effect.interrupt)
 const replySpans = (reply: Reply) => reply.languageSpans ?? []
 const completeAnswer = (completed: boolean, text: string) => completed && text.length > 0
 /** Conversation owns responses; observers never launch generation or own Memory. */
@@ -83,7 +84,7 @@ export class Replies {
     return Effect.gen({ self: this }, function* () {
       const payload = this.#pendingCompletion
       if (payload === undefined) return
-      const receipt = yield* this.#appendReply(payload)
+      const receipt = yield* appendReply(this.memory, payload)
       this.#pendingCompletion = undefined
       const state = this.#state
       if (state === undefined) return
@@ -97,61 +98,21 @@ export class Replies {
       })
     }).pipe(Effect.tapError((error) => Effect.sync(() => this.#storageFailure(error))))
   }
-  #appendReply(payload: DeliveryPayload) {
-    return this.memory
-      .append(payload)
-      .pipe(
-        Effect.catch((error) =>
-          this.memory
-            .find(payload.deliveryId)
-            .pipe(
-              Effect.flatMap((found) =>
-                found?.state === "Accepted" && samePayload(found.receipt, payload)
-                  ? Effect.succeed(found.receipt)
-                  : Effect.fail(error)
-              )
-            )
-        )
-      )
-  }
   current(inputDeliveryId: string): Effect.Effect<Reply, ReplyNotFound | StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
       const local = this.#local(inputDeliveryId)
       if (local !== undefined && local.state !== "Failed") return local
       const receipt = yield* this.memory.findReply(inputDeliveryId)
-      if (receipt !== undefined) return this.#restored(receipt, inputDeliveryId)
+      if (receipt !== undefined) return restoredReply(receipt, inputDeliveryId)
       if (local !== undefined) return local
       const input = yield* this.memory.find(inputDeliveryId)
       if (input?.state !== "Accepted" || input.receipt.role === "assistant")
         return yield* new ReplyNotFound({ message: "Unknown accepted input" })
-      return {
-        ...languageField(input.receipt.responseLanguage),
-        responseId: responseIdentity(inputDeliveryId),
-        inputDeliveryId,
-        sequence: 0,
-        state: "Failed",
-        languageSpans: [],
-        text: "",
-        error: { code: "Restarted", message: "Reply state was lost at backend restart; retry the accepted input" },
-        receipt: null
-      }
+      return restartedReply(input.receipt)
     })
   }
   #local(inputDeliveryId: string): Reply | undefined {
     return this.#state?.inputDeliveryId === inputDeliveryId ? this.#state : undefined
-  }
-  #restored(receipt: Receipt, inputDeliveryId: string): Reply {
-    return Schema.decodeUnknownSync(Reply)({
-      ...languageField(receipt.responseLanguage),
-      responseId: receipt.deliveryId,
-      inputDeliveryId,
-      sequence: maximumReplyLength + 1,
-      state: receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
-      text: receipt.text,
-      languageSpans: receipt.languageSpans,
-      error: null,
-      receipt
-    })
   }
   #acceptsUpdate(previous: Reply, next: Omit<Reply, "sequence">): boolean {
     if (this.#phase === "Terminal" || this.#phase === "Interrupting") return false
@@ -176,23 +137,39 @@ export class Replies {
       return yield* this.current(input.deliveryId)
     })
   }
-  // Conversation serializes new input admission and returns duplicates before starting a reply.
-  start(input: Receipt, retry = false): Effect.Effect<void> {
+  #initialize(input: Receipt, retry: boolean): ResponseBase {
+    const responseId = retry ? randomUUID() : responseIdentity(input.deliveryId)
+    const { base, state } = waitingReply(input, responseId, this.answer.capabilities.languages)
+    this.#phase = "Generating"
+    this.#observer = undefined
+    this.#state = state
+    return base
+  }
+  recordSuperseded(input: Receipt): Effect.Effect<void, StorageUnavailable> {
     return Effect.gen({ self: this }, function* () {
-      const responseId = retry ? randomUUID() : responseIdentity(input.deliveryId)
-      const base = {
-        responseId,
-        inputDeliveryId: input.deliveryId,
-        responseLanguage:
-          input.responseLanguage ??
-          selectResponseLanguage(input.languageSpans, input.detectedLanguage, this.answer.capabilities.languages)
-      }
-      this.#phase = "Generating"
-      this.#observer = undefined
-      this.#state = { ...base, sequence: 0, state: "Waiting", languageSpans: [], text: "", error: null, receipt: null }
+      const persisted = yield* this.memory.findReply(input.deliveryId)
+      if (persisted !== undefined) return
+      if (this.#state !== undefined && this.#state.inputDeliveryId !== input.deliveryId && this.#phase !== "Terminal")
+        return yield* new StorageUnavailable({
+          message: "A newer response owns the executor; retain the pending superseded settlement"
+        })
+      yield* this.admit()
+      this.#initialize(input, false)
+      yield* this.admit()
+    })
+  }
+  // The admission owner supplies a revocable execution gate; this adapter does not decide eligibility.
+  #begin(
+    input: Receipt,
+    retry: boolean,
+    authorized: () => boolean
+  ): Effect.Effect<ResponseBase | undefined, StorageUnavailable> {
+    return Effect.gen({ self: this }, function* () {
+      const base = this.#initialize(input, retry)
       if (this.#deliveryDeadline !== undefined) yield* Fiber.interrupt(this.#deliveryDeadline)
       this.#deliveryDeadline = undefined
-      const ticket = yield* this.delivery.begin(base)
+      if (!authorized()) return yield* this.admit().pipe(Effect.as(undefined))
+      const ticket = yield* this.delivery.begin(base, authorized)
       if (ticket !== undefined) {
         this.#deliveryDeadline = yield* Effect.sleep(
           Math.max(0, ticket.deadlineAt - (yield* Clock.currentTimeMillis))
@@ -202,7 +179,20 @@ export class Replies {
           Effect.forkIn(this.scope)
         )
       }
-      const task = this.#generate(input, base).pipe(
+      if (!authorized()) return yield* this.admit().pipe(Effect.as(undefined))
+      return base
+    })
+  }
+  start(
+    input: Receipt,
+    retry = false,
+    authorized: () => boolean = () => true
+  ): Effect.Effect<void, StorageUnavailable> {
+    return Effect.gen({ self: this }, function* () {
+      const base = yield* this.#begin(input, retry, authorized)
+      if (base === undefined) return
+      const responseId = base.responseId
+      const task = this.#generate(input, base, authorized).pipe(
         Effect.interruptible,
         Effect.catch((error) =>
           Effect.sync(() => {
@@ -236,12 +226,14 @@ export class Replies {
       )
     })
   }
-  #canCommit(responseId: string): boolean {
-    return this.#phase === "Generating" && this.#state?.responseId === responseId
+  #canCommit(responseId: string, authorized: () => boolean): boolean {
+    return authorized() && this.#phase === "Generating" && this.#state?.responseId === responseId
   }
-  #generate(input: Receipt, base: { responseId: string; inputDeliveryId: string; responseLanguage: string }) {
+  #generate(input: Receipt, base: ResponseBase, authorized: () => boolean) {
     return Effect.gen({ self: this }, function* () {
+      yield* requireAuthorization(authorized)
       const snapshot = yield* waitForPriorMemory(this.memory, input.recordId, this.settings)
+      yield* requireAuthorization(authorized)
       if (snapshot.state !== "ready") {
         this.#update({
           ...base,
@@ -260,6 +252,7 @@ export class Replies {
       let text = ""
       let languageSpans: readonly LanguageSpan[] = []
       let completed = false
+      yield* requireAuthorization(authorized)
       yield* this.answer
         .generate({
           inputDeliveryId: input.deliveryId,
@@ -276,6 +269,7 @@ export class Replies {
         .pipe(
           Stream.runForEach((raw) =>
             Effect.gen({ self: this }, function* () {
+              yield* requireAuthorization(authorized)
               const event = yield* parseAnswerEvent(raw, this.answer.capabilities)
               if (completed) return yield* new AnswerFailed({ message: "Provider emitted after terminal" })
               if (event.kind === "Completed") {
@@ -304,7 +298,7 @@ export class Replies {
         )
       if (!completeAnswer(completed, text))
         return yield* new AnswerFailed({ message: "Provider stream lacks nonempty completed answer" })
-      if (!this.#canCommit(base.responseId)) return
+      if (!this.#canCommit(base.responseId, authorized)) return
       if (this.delivery.matches(base)) {
         this.#phase = "Delivering"
         this.#update({ ...base, state: "Delivering", text, languageSpans, error: null, receipt: null })
@@ -322,7 +316,7 @@ export class Replies {
         languageSpans
       }
       yield* Effect.gen({ self: this }, function* () {
-        const receipt = yield* this.#appendReply({
+        const receipt = yield* appendReply(this.memory, {
           deliveryId: base.responseId,
           role: "assistant",
           outcome: "completed",

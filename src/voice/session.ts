@@ -1,7 +1,7 @@
 import { randomUUID, randomBytes } from "node:crypto"
 import type { Scope } from "effect"
 import { Effect, Schema, Redacted } from "effect"
-import type { Message, Conversation } from "../conversation/index.ts"
+import type { Message, Conversation, InputSource } from "../conversation/index.ts"
 import {
   RecognitionFailed,
   type RecognitionFailureReason,
@@ -44,6 +44,7 @@ export class Session {
   generation = 0
   admissions = 0
   speechRevision = 0
+  inputSource: InputSource | undefined
   readonly admitting = new Set<string>()
   audioFramesReceived = 0
   sampleFramesReceived = 0
@@ -65,9 +66,11 @@ export class Session {
     readonly initialMuted: boolean,
     readonly allowedLanguages: readonly string[],
     readonly activity: ActivityStream,
-    readonly diagnostics: VoiceDiagnostics["Service"] = disabledVoiceDiagnostics
+    readonly diagnostics: VoiceDiagnostics["Service"] = disabledVoiceDiagnostics,
+    source?: InputSource
   ) {
     this.muted = initialMuted
+    this.inputSource = source
     this.utterances = new Utterances(provider, allowedLanguages, scope, {
       final: (id, text, spans, language) =>
         this.admit(id, text, spans, language).pipe(
@@ -133,6 +136,7 @@ export class Session {
     })
   }
   admit(utteranceId: string, text: string, languageSpans: readonly LanguageSpan[], detectedLanguage: string | null) {
+    const sourceSequence = this.speechRevision
     return Effect.gen({ self: this }, function* () {
       const association = {
         backendIncarnationId: this.backendIncarnationId,
@@ -141,16 +145,38 @@ export class Session {
       }
       if (new Set([...this.admitting, ...this.unresolved.keys()]).size >= maximumPending)
         return yield* failed("RecognitionFailed", "Speech admission capacity exceeded; repeat this utterance")
-      const revision = this.speechRevision
       this.admissions += 1
       this.admitting.add(utteranceId)
+      this.inputSource ??= yield* this.conversation
+        .openInputSource()
+        .pipe(Effect.mapError((error) => failed("InvalidInput", error.message)))
+      const reservation = yield* this.conversation
+        .registerInput({
+          message: { deliveryId: utteranceId, text, languageSpans, detectedLanguage },
+          source: { capability: this.inputSource, sequence: sourceSequence }
+        })
+        .pipe(
+          Effect.mapError((error) => failed("StorageUnavailable", error.message)),
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              this.admissions -= 1
+              this.admitting.delete(utteranceId)
+              this.audio?.releaseAdmission(utteranceId)
+            })
+          )
+        )
       yield* this.admissionStore.begin({ ...association, text, languageSpans, detectedLanguage }).pipe(
         Effect.tapError(() =>
-          Effect.sync(() => {
-            this.admissions -= 1
-            this.admitting.delete(utteranceId)
-            this.audio?.releaseAdmission(utteranceId)
-          })
+          this.conversation.abandonInput(reservation).pipe(
+            Effect.ignore,
+            Effect.andThen(
+              Effect.sync(() => {
+                this.admissions -= 1
+                this.admitting.delete(utteranceId)
+                this.audio?.releaseAdmission(utteranceId)
+              })
+            )
+          )
         )
       )
       const deliveryId = utteranceId
@@ -169,19 +195,8 @@ export class Session {
         const accepted = [...this.finals.values()].find((input) => input.receipt !== null)
         if (accepted !== undefined) this.finals.delete(accepted.utteranceId)
       }
-      const send = this.conversation.send({ deliveryId, text, languageSpans, detectedLanguage }).pipe(
-        Effect.flatMap((receipt) =>
-          Effect.suspend(() =>
-            revision !== this.speechRevision
-              ? this.conversation.reply(utteranceId).pipe(
-                  Effect.flatMap((reply) =>
-                    this.conversation.interruptResponse({ inputDeliveryId: utteranceId, responseId: reply.responseId })
-                  ),
-                  Effect.ignore
-                )
-              : Effect.void
-          ).pipe(Effect.andThen(this.accept(utteranceId, receipt)))
-        ),
+      const send = this.conversation.submitInput(reservation).pipe(
+        Effect.flatMap((receipt) => this.accept(utteranceId, receipt)),
         Effect.catch((error) => {
           if (this.finals.get(utteranceId)?.receipt != null) return Effect.void
           this.finals.set(utteranceId, {
@@ -297,8 +312,17 @@ export class Session {
   startUtterance() {
     if (!this.utterances.start()) return Effect.void
     this.speechRevision += 1
+    const sequence = this.speechRevision
     for (const id of this.admitting) this.audio?.suppressDelivery(id)
-    return this.interruptOnSpeech()
+    const interrupted = this.interruptOnSpeech()
+    return Effect.gen({ self: this }, function* () {
+      this.inputSource ??= yield* this.conversation
+        .openInputSource()
+        .pipe(Effect.mapError((error) => failed("InvalidInput", error.message)))
+      yield* this.conversation
+        .fenceSpeech({ capability: this.inputSource, sequence, fenceId: randomUUID() })
+        .pipe(Effect.mapError((error) => failed("InvalidInput", error.message)))
+    }).pipe(Effect.ensuring(interrupted))
   }
   fenceInput() {
     this.generation += 1
@@ -309,6 +333,8 @@ export class Session {
   stop() {
     return Effect.gen({ self: this }, function* () {
       this.fenceInput()
+      if (this.status === "ended" && this.inputSource !== undefined)
+        yield* this.conversation.closeInputSource(this.inputSource).pipe(Effect.ignore)
       yield* this.utterances.close()
     })
   }

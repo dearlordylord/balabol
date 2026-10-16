@@ -2,7 +2,7 @@
 
 **Purpose:** Define lifecycle authority, ordering and execution contracts for the functional conversation migration.
 **Audience:** Implementers and architectural reviewers.
-**Status:** Accepted target protocol; #52 qualifies the boundary, #53–#58 migrate product behavior.
+**Status:** Accepted target protocol; the admission core is integrated in #53, while #54–#58 migrate the remaining owners.
 **Authority:** [Specification #51](https://github.com/dearlordylord/balabol/issues/51), its child issues and owner-delegated Astra review.
 **Expected use:** Start Conversation or Voice state changes here, then follow the owner-local transition and interpreter.
 **Lifecycle:** Update this protocol with changes to ownership, command acknowledgement or cancellation semantics. Do not describe planned guarantees as implemented.
@@ -105,13 +105,19 @@ Run `pnpm check:bend` with Node 24, Bend **2.0.36** and `timeout` or `gtimeout` 
 
 This compiler natively emits an ES module with a default export through its `.mjs` output option. The earlier skill reference requiring a separate `bend-emit` wrapper does not describe this installed version. No additional emitter dependency is selected.
 
-The current qualification covers the complete, exact synthetic identity-fixture grammar with one exported `Nat → Nat` function. Internal TypeScript declarations derive the export/binder names from that shape and reject changed bodies, whitespace variants, extra declarations and other signatures. Richer decision types require explicit ABI extension and qualification before product use; this is not a general-purpose binding generator.
+The synthetic identity fixture remains a compiler smoke check. The production admission boundary additionally supports the concrete source-derived admission ADTs, constructor tags, `Bool` and `Nat`; unsupported declarations fail closed. Generated declarations and the native module come from the same source snapshot. This is a deliberately restricted binding generator, not a general-purpose Bend SDK.
 
-The native JS numeric guard and its error wording disagree at the upper range. The qualified host accepts bigint tokens only within the conservative documented interval **0 through 2^48 − 1**, validates generated output and tests the endpoint. No wider numeric support is claimed.
+The native JS numeric guard and its error wording disagree at the upper range. The qualified host accepts bigint tokens only within the conservative documented interval **0 through 2^48 − 1**, validates boundary values and tests the endpoint. No wider numeric support is claimed.
 
-The command materializes its approved pure identity law, proof, false-claim control, compiling semantic mutant, generated module and typed Effect consumer in a temporary directory and removes it afterward. Every proof check uses the five-second wrapper with hard process-group termination; a noncooperative compiler/child fixture checks this deadline. It proves the pure fixture identity and tests the real generated host mapping; it does not prove lifecycle policy or host correctness. It tests malformed inputs and repeated maximum-token calls without transcript, audio or credentials.
+`src/conversation/admission-core` owns the production transition, independent specification, approved laws and proofs. Conversation interprets its commands; TypeScript does not independently select eligibility. Origin source sequence and Conversation revision are both checked by the core. A processed fresh text intent or speech fence can invalidate a delayed voice acceptance. Repeated accepted deliveries do not create a new response or advance eligibility.
 
-`test:harness` checks the narrow ABI generator. `check:bend` runs the real native qualification explicitly in #52. Production compilation/proof integration belongs to #53 onward, so current application startup and ordinary fast-test prerequisites are unchanged by #52.
+The host reserves an immutable payload claim before durable lookup and retains it through uncertain storage failure. A matching durable receipt acknowledges input independently of capture closure. Superseded input is retained and settles as Interrupted without starting a provider or media delivery. Pending persistence and revocation commands remain recovery obligations until settlement; dispatch alone does not discharge them. Existing Replies still executes responses during this migration; #54 replaces that lifecycle authority separately. Conversation permits at most two unresolved fresh input reservations, reusing the prototype’s capacity of two pending voice inputs. New identities receive typed ReplyBusy while capacity is full or an uncertain operation requires recovery; an existing matching identity remains retryable, and fences remain processable. This bounds retained payload claims without discarding obligations.
+
+`check:bend` runs native fixture qualification, concrete ADT qualification, bounded production proofs, finite transition/clock cases and compiling semantic-mutant controls. Each proof check has a five-second hard process-group deadline. False claims and mutant proofs must fail while their original controls pass. Temporary controls are removed afterward. No transcript, audio or credentials enter these checks.
+
+Build, compiler, Effect and behavior gates prove and compile the current production core before use. Build copies the compiled module into `dist`; generated source artifacts are ignored by Git. Pre-commit also runs `check:bend`. Contributors therefore need the already-qualified native tools for normal product checks. The harness tests that changing the implementation without a valid proof blocks compilation and that the built distribution runs independently of source-generated files.
+
+The approved laws establish selected transition safety and conditional single-step progress. They do not establish Effect scheduling, payload-byte correspondence, eventual storage recovery or unconditional liveness. Application tests through Conversation and Voice with real Memory/SQLite cover runtime ordering and correspondence separately.
 
 ## Migration receipts and checks
 
