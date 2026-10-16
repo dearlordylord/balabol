@@ -127,7 +127,7 @@ it("ignores low-RMS sparse breath peaks while a reply waits but interrupts on su
     waitingAnswer
   ))
 
-it("retains the ten-second maximum utterance bound for continuous speech", () => {
+it("keeps bounded recognition chunks separate from a twenty-five-second spoken turn", () => {
   const recognizedFrames: number[] = []
   return withVoiceOutput(
     (transport) =>
@@ -135,12 +135,16 @@ it("retains the ten-second maximum utterance bound for continuous speech", () =>
         const voice = yield* Voice
         const conversation = yield* Conversation
         const join = yield* voice.start(startVoiceRequest())
-        for (let frame = 0; frame < 499; frame++) yield* transport.send(transport.audio(1200))
-        expect(recognizedFrames).toEqual([])
-        yield* transport.send(transport.audio(1200))
-        for (let attempt = 0; recognizedFrames.length === 0 && attempt < 200; attempt++) yield* Effect.sleep(5)
-        expect(recognizedFrames).toEqual([160000])
-        expect((yield* acceptedPage(conversation)).messages.map((message) => message.text)).toEqual([fullInput])
+        for (let frame = 0; frame < 1250; frame++) yield* transport.send(transport.audio(1200))
+        expect(recognizedFrames).toEqual([160000, 160000])
+        expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
+        expect(transport.published.filter((event) => event.kind === "Final")).toEqual([])
+        for (let frame = 0; frame < 50; frame++) yield* transport.send(transport.audio(0))
+        expect((yield* acceptedPage(conversation)).messages.map((message) => message.text)).toEqual([
+          `${fullInput} ${fullInput} ${fullInput}`
+        ])
+        expect(recognizedFrames).toEqual([160000, 160000, 96000])
+        expect(transport.published.filter((event) => event.kind === "Final")).toHaveLength(1)
         yield* voice.end(join.sessionId)
       }),
     fakeSynthesisLayer(),

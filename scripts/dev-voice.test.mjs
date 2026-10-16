@@ -25,6 +25,7 @@ test("real opt-in selects subscription models and local speech while check prese
     BALABOL_RECOGNITION_PROVIDER: "whisper",
     BALABOL_SYNTHESIS_PROVIDER: "apple",
     BALABOL_ACTIVITY_PROVIDER: "silero",
+    BALABOL_VOICE_DIAGNOSTICS: "1",
     BALABOL_ANSWER_MODEL: "gpt-6.1-sol",
     BALABOL_SUMMARY_MODEL: "gpt-6-luna",
   });
@@ -56,6 +57,12 @@ test("explicit provider, model and local executable overrides survive real opt-i
   );
   assert.match(providerDescription(selected), /^answers=fake, memory summaries=subscription/);
   assert.equal(source.BALABOL_SUMMARY_PROVIDER, undefined);
+});
+
+test("real voice keeps an explicit diagnostics opt-out", () => {
+  const source = { BALABOL_VOICE_DIAGNOSTICS: "0" };
+  assert.equal(providerEnvironment(["--real"], source).BALABOL_VOICE_DIAGNOSTICS, "0");
+  assert.deepEqual(source, { BALABOL_VOICE_DIAGNOSTICS: "0" });
 });
 
 test("unknown options fail selection before prerequisite commands can run", () => {

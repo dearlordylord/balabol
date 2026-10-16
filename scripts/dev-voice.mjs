@@ -22,6 +22,7 @@ export const providerEnvironment = (args, environment) => {
     BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "whisper",
     BALABOL_SYNTHESIS_PROVIDER: environment.BALABOL_SYNTHESIS_PROVIDER ?? "apple",
     BALABOL_ACTIVITY_PROVIDER: environment.BALABOL_ACTIVITY_PROVIDER ?? "silero",
+    BALABOL_VOICE_DIAGNOSTICS: environment.BALABOL_VOICE_DIAGNOSTICS ?? "1",
   };
   if (selected.BALABOL_ANSWER_PROVIDER === "subscription")
     selected.BALABOL_ANSWER_MODEL = environment.BALABOL_ANSWER_MODEL ?? "gpt-6.1-sol";

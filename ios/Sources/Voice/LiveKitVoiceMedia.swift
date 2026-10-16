@@ -108,6 +108,7 @@
               center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                 Task { @MainActor in
                   guard let self, self.observationEpoch == epoch, self.room != nil else { return }
+                  VoiceTransitionTrace.shared.record(.lifecycle, status: stage)
                   self.audioDiagnostic(stage)
                 }
               })

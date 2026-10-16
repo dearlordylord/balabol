@@ -29,7 +29,7 @@ private struct ClientLocalState {
       }
     #endif
     #if DEBUG
-      let voiceDiagnostics = ProcessInfo.processInfo.environment["BALABOL_VOICE_DIAGNOSTICS"] == "1"
+      let voiceDiagnostics = ProcessInfo.processInfo.environment["BALABOL_VOICE_DIAGNOSTICS"] != "0"
     #else
       let voiceDiagnostics = false
     #endif

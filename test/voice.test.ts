@@ -117,7 +117,7 @@ describe("voice input uses the sole durable conversation", () => {
       script("Canceled", 50)
     ))
 })
-it("bounds pending recognition and retains only two recent session controls", () =>
+it("queues recognition chunks without treating three pauses as overload and retains two recent session controls", () =>
   runVoice(
     (fixture) =>
       Effect.gen(function* () {
@@ -128,7 +128,7 @@ it("bounds pending recognition and retains only two recent session controls", ()
         yield* fixture.segment
         yield* fixture.segment
         const overloaded = yield* voice.snapshot(first.sessionId, 0)
-        expect(overloaded.events.some((event) => event.kind === "Error" && event.code === "Overloaded")).toBe(true)
+        expect(overloaded.events.some((event) => event.kind === "Error")).toBe(false)
         yield* voice.end(first.sessionId)
         const second = yield* voice.start(startVoiceRequest())
         yield* voice.end(second.sessionId)

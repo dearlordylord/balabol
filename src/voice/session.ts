@@ -1,9 +1,8 @@
 import { randomUUID, randomBytes } from "node:crypto"
 import type { Scope } from "effect"
-import { Effect, Fiber, Schema, Stream, Redacted } from "effect"
+import { Effect, Schema, Redacted } from "effect"
 import type { Message, Conversation } from "../conversation/index.ts"
 import {
-  RecognitionEvent,
   RecognitionFailed,
   type RecognitionFailureReason,
   type SpeechRecognition
@@ -15,23 +14,19 @@ import type { ReplyAudio } from "./output.ts"
 import type { VoiceAdmissions } from "./admissions.ts"
 import type { ActivityStream, ActivityWindow } from "./activity.ts"
 import { Segmenter } from "./segmentation.ts"
+import { Utterances } from "./utterances.ts"
 import { disabledVoiceDiagnostics, recordVoiceDiagnostic, diagnosticErrorCode } from "./diagnostics.ts"
 import type { VoiceDiagnostics, VoiceDiagnosticInput } from "./diagnostics.ts"
 const datagramPublishMillis = 250
 const capabilityBytes = 32
 const maximumEvents = 100
 const maximumEventBytes = 256000
-const bytesPerSample = 2
 const maximumPending = 2
 type EventInput = VoiceEvent extends infer E
   ? E extends VoiceEvent
     ? Omit<E, "sequence" | "sessionId">
     : never
   : never
-const supportsRecognition = (event: RecognitionEvent, languages: readonly string[]) =>
-  event.kind !== "Final" ||
-  (event.spans.every((span) => languages.includes(span.language)) &&
-    (event.detectedLanguage == null || languages.includes(event.detectedLanguage)))
 export class Session {
   readonly id = randomUUID()
   readonly controlToken = Redacted.make(randomBytes(capabilityBytes).toString("hex"))
@@ -47,8 +42,9 @@ export class Session {
   controlDeadlineAt = 0
   track: string | undefined
   generation = 0
-  pending = 0
   admissions = 0
+  speechRevision = 0
+  readonly admitting = new Set<string>()
   audioFramesReceived = 0
   sampleFramesReceived = 0
   readonly finals = new Map<string, PendingVoiceInput>()
@@ -59,7 +55,7 @@ export class Session {
   audio: ReplyAudio | undefined
   connection: MediaConnection | undefined
   release = Effect.void
-  recognition = new Set<Fiber.Fiber<void>>()
+  readonly utterances: Utterances
   constructor(
     readonly conversation: Conversation["Service"],
     readonly provider: SpeechRecognition["Service"],
@@ -72,6 +68,28 @@ export class Session {
     readonly diagnostics: VoiceDiagnostics["Service"] = disabledVoiceDiagnostics
   ) {
     this.muted = initialMuted
+    this.utterances = new Utterances(provider, allowedLanguages, scope, {
+      final: (id, text, spans, language) =>
+        this.admit(id, text, spans, language).pipe(
+          Effect.catch((error) =>
+            this.emit({ kind: "Error", utteranceId: id, code: error.code, message: error.message })
+          )
+        ),
+      interim: (utteranceId, text) => this.emit({ kind: "Interim", utteranceId, text }),
+      discarded: (utteranceId) => this.emit({ kind: "Discarded", utteranceId, reason: "Empty" }),
+      error: (utteranceId, error) =>
+        this.emit(
+          {
+            kind: "Error",
+            utteranceId,
+            code: error instanceof VoiceFailed ? error.code : error._tag,
+            message: error.message
+          },
+          error instanceof RecognitionFailed ? (error.reason ?? "Other") : undefined
+        ),
+      started: (samples) => this.trace("recognitionStarted", undefined, undefined, samples),
+      succeeded: () => this.trace("recognitionSucceeded")
+    })
   }
   get backendIncarnationId() {
     return this.admissionStore.backendIncarnationId
@@ -121,9 +139,21 @@ export class Session {
         sessionId: this.id,
         deliveryId: utteranceId
       }
-      yield* this.admissionStore.begin({ ...association, text, languageSpans, detectedLanguage })
-      const deliveryId = utteranceId
+      if (new Set([...this.admitting, ...this.unresolved.keys()]).size >= maximumPending)
+        return yield* failed("RecognitionFailed", "Speech admission capacity exceeded; repeat this utterance")
+      const revision = this.speechRevision
       this.admissions += 1
+      this.admitting.add(utteranceId)
+      yield* this.admissionStore.begin({ ...association, text, languageSpans, detectedLanguage }).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            this.admissions -= 1
+            this.admitting.delete(utteranceId)
+            this.audio?.releaseAdmission(utteranceId)
+          })
+        )
+      )
+      const deliveryId = utteranceId
       this.unresolved.set(utteranceId, { text, languageSpans, detectedLanguage })
       this.finals.set(utteranceId, {
         backendIncarnationId: this.backendIncarnationId,
@@ -140,7 +170,18 @@ export class Session {
         if (accepted !== undefined) this.finals.delete(accepted.utteranceId)
       }
       const send = this.conversation.send({ deliveryId, text, languageSpans, detectedLanguage }).pipe(
-        Effect.flatMap((receipt) => this.accept(utteranceId, receipt)),
+        Effect.flatMap((receipt) =>
+          Effect.suspend(() =>
+            revision !== this.speechRevision
+              ? this.conversation.reply(utteranceId).pipe(
+                  Effect.flatMap((reply) =>
+                    this.conversation.interruptResponse({ inputDeliveryId: utteranceId, responseId: reply.responseId })
+                  ),
+                  Effect.ignore
+                )
+              : Effect.void
+          ).pipe(Effect.andThen(this.accept(utteranceId, receipt)))
+        ),
         Effect.catch((error) => {
           if (this.finals.get(utteranceId)?.receipt != null) return Effect.void
           this.finals.set(utteranceId, {
@@ -161,6 +202,8 @@ export class Session {
             Effect.andThen(
               Effect.sync(() => {
                 this.admissions -= 1
+                this.admitting.delete(utteranceId)
+                this.audio?.releaseAdmission(utteranceId)
               })
             )
           )
@@ -202,61 +245,12 @@ export class Session {
     })
     return this.emit({ kind: "Accepted", utteranceId, receipt })
   }
-  recognize(bytes: Uint8Array) {
-    const utteranceId = randomUUID()
-    const generation = this.generation
-    let final = false
-    return this.provider
-      .recognize({
-        utteranceId,
-        allowedLanguages: this.allowedLanguages,
-        audio: {
-          encoding: "pcm-s16le",
-          sampleRateHz: 16000,
-          channels: 1,
-          sampleFrames: bytes.length / bytesPerSample,
-          bytes
-        }
-      })
-      .pipe(
-        Stream.runForEach((raw) =>
-          Schema.decodeUnknownEffect(RecognitionEvent)(raw).pipe(
-            Effect.mapError(() => failed("InvalidRecognition", "Invalid recognition event")),
-            Effect.flatMap((event) => {
-              if (this.generation !== generation || event.utteranceId !== utteranceId || final) return Effect.void
-              if (!supportsRecognition(event, this.allowedLanguages))
-                return Effect.fail(failed("InvalidRecognition", "Detected language is outside the configured set"))
-              if (event.kind === "Interim") return this.emit({ kind: "Interim", utteranceId, text: event.text })
-              final = true
-              this.trace("recognitionSucceeded")
-              return event.text.trim().length === 0
-                ? this.emit({ kind: "Discarded", utteranceId, reason: "Empty" })
-                : this.admit(utteranceId, event.text, event.spans, event.detectedLanguage ?? null)
-            })
-          )
-        ),
-        Effect.catch((error) =>
-          this.emit(
-            {
-              kind: "Error",
-              utteranceId,
-              code: error instanceof VoiceFailed ? error.code : error._tag,
-              message: error.message
-            },
-            error instanceof RecognitionFailed ? (error.reason ?? "Other") : undefined
-          )
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            this.pending -= 1
-          })
-        ),
-        Effect.asVoid
-      )
-  }
   selectTrack(track: string) {
     if (this.track === track) return
-    if (this.track !== undefined) this.generation += 1
+    if (this.track !== undefined) {
+      this.generation += 1
+      this.utterances.reset()
+    }
     this.segmenter.clear()
     this.activity.reset()
     this.track = track
@@ -295,35 +289,27 @@ export class Session {
       if (generation !== this.generation || this.muted || this.status !== "active") return
       for (const window of windows)
         for (const event of this.segmenter.push(window)) {
-          if (event.speechStarted) yield* this.interruptOnSpeech()
-          if (event.bytes !== undefined) yield* this.recognizeSegment(event.bytes)
+          if (event.speechStarted) yield* this.startUtterance()
+          if (event.bytes !== undefined) yield* this.utterances.push(event.bytes, event.ended === true)
         }
     })
+  }
+  startUtterance() {
+    if (!this.utterances.start()) return Effect.void
+    this.speechRevision += 1
+    for (const id of this.admitting) this.audio?.suppressDelivery(id)
+    return this.interruptOnSpeech()
   }
   fenceInput() {
     this.generation += 1
     this.segmenter.clear()
     this.activity.reset()
-  }
-  recognizeSegment(bytes: Uint8Array) {
-    return Effect.gen({ self: this }, function* () {
-      if (this.pending + this.admissions >= maximumPending || this.unresolved.size >= maximumPending)
-        return yield* failed("Overloaded", "Recognition capacity exceeded; repeat this utterance")
-      this.pending += 1
-      this.trace("recognitionStarted", undefined, undefined, bytes.length / bytesPerSample)
-      const fiber = yield* this.recognize(bytes).pipe(Effect.forkIn(this.scope))
-      this.recognition.add(fiber)
-      yield* Fiber.await(fiber).pipe(
-        Effect.andThen(Effect.sync(() => this.recognition.delete(fiber))),
-        Effect.forkIn(this.scope)
-      )
-    })
+    this.utterances.reset()
   }
   stop() {
     return Effect.gen({ self: this }, function* () {
       this.fenceInput()
-      for (const fiber of this.recognition) yield* Fiber.interrupt(fiber)
-      this.recognition.clear()
+      yield* this.utterances.close()
     })
   }
   reconcile() {

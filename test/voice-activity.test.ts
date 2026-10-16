@@ -181,7 +181,7 @@ it("preserves every classified source sample across a partial 512-sample ten-sec
   const segmenter = new Segmenter()
   const completed: Uint8Array[] = []
   let onsets = 0
-  // Two complete ten-second utterances plus the partially classified-window tail.
+  // Two complete ten-second recognition chunks plus the partially classified-window tail.
   for (let window = 0; window < 625; window++) {
     for (const event of segmenter.push({ samples: new Int16Array(512).fill(window), speech: true })) {
       if (event.speechStarted) onsets += 1
@@ -189,11 +189,17 @@ it("preserves every classified source sample across a partial 512-sample ten-sec
     }
   }
   expect(completed.map((bytes) => bytes.length)).toEqual([320000, 320000])
-  expect(onsets).toBe(2)
+  expect(onsets).toBe(1)
   const combined = Buffer.concat(completed)
   const expected = Buffer.alloc(640000)
   for (let sample = 0; sample < 320000; sample++) expected.writeInt16LE(Math.floor(sample / 512), sample * 2)
   expect(combined).toEqual(expected)
+  const endings = []
+  for (let window = 0; window < 32; window++)
+    endings.push(...segmenter.push({ samples: new Int16Array(512), speech: false }))
+  expect(
+    endings.map((event) => ({ started: event.speechStarted, ended: event.ended, bytes: event.bytes?.length }))
+  ).toEqual([{ started: false, ended: true, bytes: 32000 }])
 })
 
 it("fences classification finishing after mute and admits only fresh speech after resume", () => {

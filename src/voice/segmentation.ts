@@ -11,15 +11,17 @@ export class Segmenter {
   #onsetSamples = 0
   #samples = 0
   #quiet = 0
+  #active = false
   clear() {
     this.#onset = []
     this.#frames = []
     this.#onsetSamples = 0
     this.#samples = 0
     this.#quiet = 0
+    this.#active = false
   }
   #collect(data: Int16Array, speech: boolean) {
-    if (this.#samples > 0) {
+    if (this.#active) {
       this.#frames.push(data)
       this.#samples += data.length
       return false
@@ -32,13 +34,14 @@ export class Segmenter {
     this.#onset.push(data)
     this.#onsetSamples += data.length
     if (this.#onsetSamples < onsetSamples) return false
+    this.#active = true
     this.#frames = this.#onset
     this.#samples = this.#onsetSamples
     this.#onset = []
     this.#onsetSamples = 0
     return true
   }
-  #finish() {
+  #finish(ended: boolean) {
     const bytes = new Uint8Array(this.#samples * sampleBytes)
     const view = new DataView(bytes.buffer)
     let offset = 0
@@ -47,20 +50,25 @@ export class Segmenter {
         view.setInt16(offset, sample, true)
         offset += sampleBytes
       }
+    const quiet = this.#quiet
     this.clear()
+    if (!ended) {
+      this.#active = true
+      this.#quiet = quiet
+    }
     return bytes
   }
   #takeLength(window: ActivityWindow, offset: number): number {
     const available = window.samples.length - offset
-    if (this.#samples === 0) return available
+    if (!this.#active) return available
     return Math.min(
       available,
       maximumSamples - this.#samples,
       window.speech ? maximumSamples : silenceSamples - this.#quiet
     )
   }
-  push(window: ActivityWindow): readonly { speechStarted: boolean; bytes?: Uint8Array }[] {
-    const events: { speechStarted: boolean; bytes?: Uint8Array }[] = []
+  push(window: ActivityWindow): readonly { speechStarted: boolean; bytes?: Uint8Array; ended?: boolean }[] {
+    const events: { speechStarted: boolean; bytes?: Uint8Array; ended?: boolean }[] = []
     let offset = 0
     while (offset < window.samples.length) {
       const length = this.#takeLength(window, offset)
@@ -69,9 +77,10 @@ export class Segmenter {
       const speechStarted = this.#collect(data, window.speech)
       if (this.#samples === 0) continue
       this.#quiet = window.speech ? 0 : this.#quiet + data.length
-      if (this.#quiet >= silenceSamples || this.#samples >= maximumSamples)
-        events.push({ speechStarted, bytes: this.#finish() })
-      else if (speechStarted) events.push({ speechStarted })
+      if (this.#quiet >= silenceSamples || this.#samples >= maximumSamples) {
+        const ended = this.#quiet >= silenceSamples
+        events.push({ speechStarted, bytes: this.#finish(ended), ended })
+      } else if (speechStarted) events.push({ speechStarted })
     }
     return events
   }

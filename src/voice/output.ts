@@ -38,6 +38,7 @@ const diagnosticTarget = (target: ResponseTarget & { outputEpoch?: string }) => 
   ...(target.outputEpoch === undefined ? {} : { outputEpoch: target.outputEpoch })
 })
 export class ReplyAudio {
+  #suppressedAdmissions = new Set<string>()
   #ticket: DeliveryTicket | undefined
   #fenced = true
   #state: VoiceOutput | null = null
@@ -56,6 +57,15 @@ export class ReplyAudio {
     readonly settings: VoiceOutputSettings,
     readonly diagnostics: VoiceDiagnostics["Service"] = disabledVoiceDiagnostics
   ) {}
+  /** Fence an input whose durable admission overlaps newer speech, even before
+   * its reply ticket exists. Session retains this fence until that admission settles. */
+  suppressDelivery(inputDeliveryId: string) {
+    this.#suppressedAdmissions.add(inputDeliveryId)
+    if (this.#state?.inputDeliveryId === inputDeliveryId) this.#invalidated({ ...this.#state, reason: "Interrupted" })
+  }
+  releaseAdmission(inputDeliveryId: string) {
+    this.#suppressedAdmissions.delete(inputDeliveryId)
+  }
   get snapshot() {
     return this.#state
   }
@@ -130,7 +140,9 @@ export class ReplyAudio {
               manifest: null,
               error: null
             }
-            this.#notify()
+            if (this.#suppressedAdmissions.has(ticket.inputDeliveryId))
+              this.#invalidated({ ...ticket, reason: "Interrupted" })
+            else this.#notify()
           },
           invalidated: (target) => this.#invalidated(target)
         })
