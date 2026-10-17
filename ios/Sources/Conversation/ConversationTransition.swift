@@ -2,6 +2,10 @@ import Foundation
 
 /// All intents and async results enter this concrete conversation transition.
 /// Commands describe work; they do not execute it or acquire resources here.
+public enum ConversationGenerationCue: Equatable, Sendable {
+  case generationStarted, textReady
+}
+
 enum ConversationEvent {
   case start
   case platformInterrupt([UUID])
@@ -36,6 +40,7 @@ enum ConversationEvent {
 
 enum ConversationCommand: Equatable {
   case inputIntent(UUID)
+  case generationCue(UUID, UUID, ConversationGenerationCue)
   case findPlatformTarget(ConversationState.Request, UUID)
   case interruptPlatformTarget(ConversationState.Request, UUID, UUID)
   case cancelPlatformInterruptions
@@ -80,7 +85,9 @@ extension ConversationState {
       .platformInterruptionFailed:
       return platformInterruptionTransition(event)
     case .voiceAccepted(let receipt):
+      let isNew = !messages.contains(where: { $0.deliveryId == receipt.deliveryId })
       guard isActive, receipt.isValid, receipt.role == .user, merge([receipt]) else { return [] }
+      if isNew { armGenerationCue(receipt.deliveryId) }
       if let target = platformCancellations[receipt.deliveryId] {
         return [.findPlatformTarget(target.request, receipt.deliveryId)]
       }
@@ -201,11 +208,12 @@ extension ConversationState {
     case .retryReply:
       guard canRetryReply, case .providerFailed(let input, _, _, _) = reply else { return [] }
       platformCancellations[input] = nil
+      armGenerationCue(input, restarting: true)
       currentRequest = nil
       let request = request()
       replyRetryRequest = request
       reply = .observing(request, inputDeliveryId: input, latest: nil)
-      return [.cancelCurrent, .cancelReply, .retryReply(request, input)]
+      return [.cancelCurrent, .cancelReply, .inputIntent(input), .retryReply(request, input)]
     case .retryLoaded(let request, let result):
       guard isActive, case .observing(let expected, let input, _) = reply,
         expected == request
@@ -312,6 +320,7 @@ extension ConversationState {
           return []
         }
         delivery = .idle(nil)
+        armGenerationCue(receipt.deliveryId)
         return checkpoint(.editable(text: ""), purpose: .confirmation)
           + followAcceptedInput(pending.deliveryId)
       case .failure(let error):
@@ -336,7 +345,11 @@ extension ConversationState {
       }
       return commands
     case .replyReceived(let request, let snapshot):
-      return receiveReply(request, snapshot)
+      guard case .observing(let expected, _, _) = reply, expected == request else { return [] }
+      let commands = receiveReply(request, snapshot)
+      guard case .observing(let expected, _, let latest) = reply, expected == request,
+        latest == snapshot else { return commands }
+      return commands + generationCue(snapshot)
     case .interruptedReplyRecovered(let request, let result):
       guard isActive, let input = interruptionRecoveries.removeValue(forKey: request) else {
         return []
@@ -361,6 +374,7 @@ extension ConversationState {
       guard isActive, case .recovering(let expected, let input, let latest, _) = reply,
         expected == request
       else { return [] }
+      cueInput = nil
       switch result {
       case .failure(let error):
         if error == .unavailable { return recoverObservation(input, latest) }
@@ -545,6 +559,28 @@ extension ConversationState {
       }
       return replyCommands
     }
+  }
+
+  private mutating func armGenerationCue(_ input: UUID, restarting: Bool = false) {
+    guard restarting || cueInput != input else { return }
+    cueInput = input
+    cueResponse = nil
+    cueStage = 0
+  }
+
+  private mutating func generationCue(_ snapshot: ReplySnapshot) -> [ConversationCommand] {
+    guard snapshot.inputDeliveryId == cueInput, !snapshot.isTerminal,
+      cueResponse == nil || cueResponse == snapshot.responseId else { return [] }
+    cueResponse = snapshot.responseId
+    if snapshot.generationCompleted, cueStage < 2 {
+      cueStage = 2
+      return [.generationCue(snapshot.inputDeliveryId, snapshot.responseId, .textReady)]
+    }
+    if snapshot.generationStarted, cueStage == 0 {
+      cueStage = 1
+      return [.generationCue(snapshot.inputDeliveryId, snapshot.responseId, .generationStarted)]
+    }
+    return []
   }
 
   private mutating func receiveReply(_ request: Request, _ snapshot: ReplySnapshot)

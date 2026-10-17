@@ -10,6 +10,8 @@ public final class ConversationViewModel {
   @ObservationIgnored private let transport: any ConversationTransport
   @ObservationIgnored internal let diagnosticsEnabled: Bool
   @ObservationIgnored private let draftStore: any DraftStore
+  @ObservationIgnored private let generationCue: @MainActor (UUID, UUID, ConversationGenerationCue) -> Void
+  @ObservationIgnored private let cancelGenerationCue: @MainActor () -> Void
   @ObservationIgnored private let inputIntent: @MainActor (UUID) -> Void
   @ObservationIgnored private var draftTask: Task<Void, Never>?
   @ObservationIgnored private var deliveryTask: Task<Void, Never>?
@@ -34,12 +36,16 @@ public final class ConversationViewModel {
   public init(
     transport: any ConversationTransport, draftStore: any DraftStore,
     diagnosticsEnabled: Bool = false,
-    inputIntent: @escaping @MainActor (UUID) -> Void = { _ in }
+    inputIntent: @escaping @MainActor (UUID) -> Void = { _ in },
+    generationCue: @escaping @MainActor (UUID, UUID, ConversationGenerationCue) -> Void = { _, _, _ in },
+    cancelGenerationCue: @escaping @MainActor () -> Void = {}
   ) {
     self.diagnosticsEnabled = diagnosticsEnabled
     self.transport = transport
     self.draftStore = draftStore
     self.inputIntent = inputIntent
+    self.generationCue = generationCue
+    self.cancelGenerationCue = cancelGenerationCue
   }
 
   public var canRetryReply: Bool { state.canRetryReply }
@@ -200,6 +206,7 @@ public final class ConversationViewModel {
         self?.platformTasks[request] = nil
       }
     case .inputIntent(let id): inputIntent(id)
+    case .generationCue(let input, let response, let cue): generationCue(input, response, cue)
     case .current(let request):
       let transport = transport
       currentRequest = request
@@ -373,6 +380,7 @@ public final class ConversationViewModel {
       for task in interruptionReceiptTasks.values { task.cancel() }
       interruptionReceiptTasks.removeAll()
     case .cancelReply:
+      cancelGenerationCue()
       replyTask?.cancel()
       replyTask = nil
       replyRequest = nil

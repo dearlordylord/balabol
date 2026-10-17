@@ -35,24 +35,43 @@ it("rejects the response of an old voice origin after fresh text despite an unch
 
 it("does not revoke a newer active response when an older accepted text delivery is retried", async () => {
   const database = await temporaryDatabase()
-  const answer = Layer.succeed(AnswerGeneration, {
-    capabilities: { languages: ["en"], output: "text-deltas" },
-    generate: () => Stream.never
-  })
   try {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const conversation = yield* Conversation
-          const first = { deliveryId: crypto.randomUUID(), text: "first input" }
-          const receipt = yield* conversation.send(first)
-          const next = yield* conversation.send({ deliveryId: crypto.randomUUID(), text: "second input" })
-          const before = yield* conversation.reply(next.deliveryId)
-          expect(before.state).toBe("Waiting")
-          expect(yield* conversation.send(first)).toEqual(receipt)
-          expect(yield* conversation.reply(next.deliveryId)).toEqual(before)
+          const generating = yield* Deferred.make<void>()
+          const nextInput = { deliveryId: crypto.randomUUID(), text: "second input" }
+          let nextGenerations = 0
+          const answer = Layer.succeed(AnswerGeneration, {
+            capabilities: { languages: ["en"], output: "text-deltas" },
+            generate: (request) =>
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  if (request.inputDeliveryId === nextInput.deliveryId) {
+                    nextGenerations++
+                    yield* Deferred.succeed(generating, undefined)
+                  }
+                  return Stream.never
+                })
+              )
+          })
+          yield* Effect.gen(function* () {
+            const conversation = yield* Conversation
+            const first = { deliveryId: crypto.randomUUID(), text: "first input" }
+            const receipt = yield* conversation.send(first)
+            const next = yield* conversation.send(nextInput)
+            // Compare the same active generation, not context preparation against generation entry.
+            yield* Deferred.await(generating).pipe(Effect.timeout("2 seconds"))
+            const before = yield* conversation.reply(next.deliveryId)
+            expect(before.state).toBe("Waiting")
+            expect(before.generationStarted).toBe(true)
+            expect(nextGenerations).toBe(1)
+            expect(yield* conversation.send(first)).toEqual(receipt)
+            expect(yield* conversation.reply(next.deliveryId)).toEqual(before)
+            expect(nextGenerations).toBe(1)
+          }).pipe(Effect.provide(replyLayer(database.path, answer)))
         })
-      ).pipe(Effect.provide(replyLayer(database.path, answer)))
+      )
     )
   } finally {
     await database.close()

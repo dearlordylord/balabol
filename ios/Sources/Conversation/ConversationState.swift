@@ -74,6 +74,10 @@ public struct ConversationState: Equatable, Sendable {
     if case .observing(_, _, let latest) = reply { return latest != nil }
     return false
   }
+  // Only one fresh accepted input may produce progress sounds; restoration never arms it.
+  internal var cueInput: UUID?
+  internal var cueResponse: UUID?
+  internal var cueStage = 0
   internal var observationRecoveryAttempt = 0
   internal var replyRetryRequest: Request?
   public var isRetryingReply: Bool { replyRetryRequest != nil }

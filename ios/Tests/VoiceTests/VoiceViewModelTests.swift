@@ -4,6 +4,29 @@ import XCTest
 @testable import Voice
 
 @MainActor final class VoiceViewModelTests: XCTestCase {
+  func testGenerationCueUsesMediaPortOnlyForLiveEligibleOwner() async {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    let input = UUID()
+    let response = UUID()
+    model.generationCue(input: input, response: response, cue: .generationStarted)
+    XCTAssertTrue(media.progressCues.isEmpty)
+    model.start()
+    await settle { model.state.capture == .listening }
+    model.generationCue(input: input, response: response, cue: .generationStarted)
+    model.generationCue(input: input, response: response, cue: .textReady)
+    XCTAssertEqual(media.progressCues, [.generationStarted, .textReady])
+    model.cancelGenerationCue()
+    XCTAssertEqual(media.cueCancellations, 1)
+    model.inputIntent(UUID())
+    model.generationCue(input: input, response: response, cue: .generationStarted)
+    XCTAssertEqual(media.progressCues.count, 2)
+    await model.shutdown()
+    model.generationCue(input: input, response: response, cue: .textReady)
+    XCTAssertEqual(media.progressCues.count, 2)
+  }
+
   func testPermissionDeniedDoesNotOpenSessionAndEndCannotReviveLatePermission() async {
     let control = FixtureControl()
     let media = FixtureMedia(allowed: false)
@@ -1770,6 +1793,11 @@ import XCTest
 }
 
 @MainActor private final class FixtureMedia: VoiceMedia {
+  var progressCues: [VoiceProgressCue] = []
+  var cueCancellations = 0
+  func playCue(_ cue: VoiceProgressCue) { progressCues.append(cue) }
+  func cancelCue() { cueCancellations += 1 }
+
   var platform: (@MainActor @Sendable (VoicePlatformEvent) -> Void)?
   var platformRetired = false
   var captureFences = 0

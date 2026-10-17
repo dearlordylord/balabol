@@ -22,6 +22,19 @@ private func decideVoice(_ state: VoiceState, _ input: VoiceInput) -> VoiceTrans
   }
   guard !state.isRetired else { return unchangedVoice(state) }
   switch input.event {
+  case .generationCue(let input, let response, let cue):
+    guard [.listening, .muted].contains(state.capture), !state.output.closed,
+      !state.output.gated || state.output.allowedInput == input
+    else { return unchangedVoice(state) }
+    if let current = state.output.current, current.responseId == response {
+      guard current.inputDeliveryId == input, current.isActive, !state.output.receivedAudio
+      else { return unchangedVoice(state) }
+    } else if state.output.current != nil && state.output.allowedInput != input {
+      return unchangedVoice(state)
+    }
+    return VoiceTransition(state: state, commands: [.generationCue(cue)])
+  case .cancelGenerationCue:
+    return VoiceTransition(state: state, commands: [.cancelGenerationCue])
   case .completed: return unchangedVoice(state)
   case .restore:
     return state.checkpointLoaded || hasVoiceOperation(state, where: { $0 == .restoreCheckpoint }) ? unchangedVoice(state)

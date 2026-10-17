@@ -210,6 +210,10 @@ public protocol VoiceControl: Sendable {
   func interrupt(sessionId: UUID, target: VoiceOutputIdentity) async throws -> VoiceSnapshot
 }
 
+public enum VoiceProgressCue: Equatable, Sendable {
+  case generationStarted, textReady
+}
+
 @MainActor public protocol VoiceMedia: AnyObject {
   func observePlatform(_ receive: @escaping @MainActor @Sendable (VoicePlatformEvent) -> Void)
   func retirePlatformObservation()
@@ -222,6 +226,8 @@ public protocol VoiceControl: Sendable {
   func mute(_ muted: Bool) async throws
   func disconnect() async
   func prepareOutput(_ manifest: VoiceAudioManifest) async throws
+  func playCue(_ cue: VoiceProgressCue)
+  func cancelCue()
   func stopOutput() -> Task<Void, Never>
 }
 
@@ -232,6 +238,8 @@ extension VoiceControl {
 }
 
 extension VoiceMedia {
+  public func playCue(_ cue: VoiceProgressCue) {}
+  public func cancelCue() {}
   public func observePlatform(
     _ receive: @escaping @MainActor @Sendable (VoicePlatformEvent) -> Void
   ) {}

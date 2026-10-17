@@ -18,6 +18,7 @@
     private var wanted: VoiceAudioManifest?
     private var outputTrack: RemoteAudioTrack?
     private var playbackRenderer: VoicePlaybackRenderer?
+    private let generationCue = VoiceGenerationCueRenderer()
     private var outputReceived: (@Sendable (VoiceOutputIdentity) -> Void)?
     private var outputPublication: RemoteTrackPublication?
     private var microphone: LocalAudioTrack?
@@ -250,6 +251,9 @@
       captureStopTask = nil
       guard expected == generation, !Task.isCancelled else { throw CancellationError() }
       publisher = join.backendParticipantIdentity
+      if AudioManager.shared.renderPreProcessingDelegate == nil {
+        AudioManager.shared.renderPreProcessingDelegate = generationCue
+      }
       self.outputReceived = outputReceived
       speechStartedCallback = speechStarted
       captureFailureCallback = failure
@@ -417,6 +421,10 @@
       } catch { throw VoiceFailure.capture }
     }
     public func disconnect() async {
+      generationCue.cancel()
+      if AudioManager.shared.renderPreProcessingDelegate === generationCue {
+        AudioManager.shared.renderPreProcessingDelegate = nil
+      }
       await captureStopTask?.value
       let stopped = stopOutput()
       speechTask?.cancel()
@@ -510,7 +518,18 @@
       }
       throw VoiceFailure.connection
     }
+    public func playCue(_ cue: VoiceProgressCue) {
+      guard room != nil, AudioManager.shared.renderPreProcessingDelegate === generationCue else {
+        os.Logger(subsystem: "app.balabol.voice", category: "progress-cue")
+          .error("Progress cue unavailable: managed render processor is not installed")
+        return
+      }
+      generationCue.play(cue)
+    }
+    public func cancelCue() { generationCue.cancel() }
+
     public func stopOutput() -> Task<Void, Never> {
+      generationCue.cancel()
       #if DEBUG
         let manifest = wanted
       #endif

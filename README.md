@@ -58,6 +58,8 @@ Tap **Start voice**, allow microphone access, speak and pause, then check the ac
 
 `pnpm dev:voice --check` checks prerequisites without starting services or changing Serve configuration. Startup refuses occupied backend/media/Serve ports and missing HTTPS setup; it never stops another process or replaces existing Serve port 9999. Ctrl-C stops only this launch's backend, container and unchanged owned routes, and deletes its temporary credentials. The saved conversation is retained.
 
+During a voice session, a soft rising tone marks generation start; a short falling tone marks complete answer text before speech playback. Each sounds at most once for a fresh response. Fast responses may skip the second tone, and expired cues are skipped rather than delayed over speech. User speech, cancellation and incoming assistant audio stop the tone; the microphone remains available. Cue rendering uses LiveKit's existing echo-processing path. Loudspeaker audibility and echo behavior require device qualification.
+
 LiveKit ICE advertises the Mac's Tailscale IPv4 address on UDP 7882 with TCP 7881 fallback. Those Docker media ports bind host interfaces so the tailnet can reach them; LiveKit requires scoped join tokens. HTTPS signaling alone does not qualify media reachability, locked-screen behavior or physical iPhone audio. Those require the corresponding device checks.
 
 ## Use all real providers

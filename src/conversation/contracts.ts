@@ -46,6 +46,8 @@ const maximumReplyLength = 100_000
 const responseFields = {
   responseId: DeliveryId,
   responseLanguage: Schema.optionalKey(LanguageTag),
+  generationStarted: Schema.optionalKey(Schema.Boolean),
+  generationCompleted: Schema.optionalKey(Schema.Boolean),
   inputDeliveryId: DeliveryId,
   sequence: Position,
   text: Schema.String.check(Schema.isMaxLength(maximumReplyLength)),
@@ -101,6 +103,7 @@ export const Reply = Schema.Union([
   Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans ?? [])),
   Schema.makeFilter((value) => {
     if (value.responseId === value.inputDeliveryId) return false
+    if (value.generationCompleted === true && value.generationStarted !== true) return false
     if (value.state === "Waiting") return value.text.length === 0
     if (["Streaming", "Delivering"].includes(value.state)) return value.text.length > 0
     if (value.state === "Failed") return validFailedReply(value)

@@ -32,6 +32,8 @@ internal enum VoiceFeatureEvent: Sendable {
   case restore, loadLanguages, start, resume, mute, end, shutdown
   case speechIntent
   case inputIntent(UUID)
+  case generationCue(input: UUID, response: UUID, cue: VoiceProgressCue)
+  case cancelGenerationCue
   case completed(VoiceRequest, VoiceWorkResult)
   case platform(VoiceRequest, VoicePlatformEvent)
   case captureFailed(VoiceRequest)
@@ -93,6 +95,8 @@ internal enum VoiceEffectCommand: Sendable {
   case cancel([VoiceRequest])
   case accepted(ConversationMessage)
   case refreshConversation
+  case generationCue(VoiceProgressCue)
+  case cancelGenerationCue
   case interruptConversation([UUID], after: VoiceRequest)
   #if DEBUG
     case trace(VoiceTraceCause, target: VoiceOutputIdentity?, status: String?,

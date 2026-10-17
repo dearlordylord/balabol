@@ -41,6 +41,10 @@ import Observation
   public func start() { receive(.start) }
   public func resume() { receive(.resume) }
   public func end() { receive(.end) }
+  public func generationCue(input: UUID, response: UUID, cue: VoiceProgressCue) {
+    receive(.generationCue(input: input, response: response, cue: cue))
+  }
+  public func cancelGenerationCue() { receive(.cancelGenerationCue) }
   public func inputIntent(_ deliveryId: UUID) { receive(.inputIntent(deliveryId)) }
   public func speechStarted() { receive(.speechIntent) }
   public func toggleMute() { receive(.mute) }

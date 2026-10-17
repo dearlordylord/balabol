@@ -45,6 +45,8 @@ import Foundation
       for request in requests { entries[request]?.task.cancel() }
     case .accepted(let message): accepted(message)
     case .refreshConversation: refresh()
+    case .generationCue(let cue): media.playCue(cue)
+    case .cancelGenerationCue: media.cancelCue()
     case .interruptConversation(let inputs, let request):
       let stopped = entries[request]?.task ?? Task {}
       interrupt(inputs, stopped)

@@ -144,6 +144,8 @@ extension VoiceLifecycleITFMapping {
         case .cancel(let requests):
           return .variant("Cancel", .list(requests.map(preparation.project)))
         case .refreshConversation: return .variant("RefreshConversation", .unit)
+        case .generationCue, .cancelGenerationCue:
+          throw VoiceITFError.invalid("Progress cues are excluded from lifecycle trace commands")
         case .interruptConversation(let inputs, let after):
           guard inputs.isEmpty else {
             throw VoiceITFError.invalid("admissions outside lifecycle model")

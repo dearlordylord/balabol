@@ -199,7 +199,11 @@ export const contextReady = (
     state: {
       ...state,
       nextToken: operation + 1n,
-      current: { ...current, work: { kind: "Generating", operation, completed: false } },
+      current: {
+        ...current,
+        sequence: current.sequence + 1,
+        work: { kind: "Generating", operation, completed: false }
+      },
       workers: [...state.workers, { operation, attempt: current.attempt, kind: "Provider", status: "Running" }]
     },
     commands: [

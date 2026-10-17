@@ -51,6 +51,11 @@ private struct ClientLocalState {
 @MainActor private final class VoiceInputIntentRelay {
   weak var voice: VoiceViewModel?
   func send(_ id: UUID) { voice?.inputIntent(id) }
+  func cue(_ input: UUID, _ response: UUID, _ cue: ConversationGenerationCue) {
+    voice?.generationCue(input: input, response: response,
+      cue: cue == .generationStarted ? .generationStarted : .textReady)
+  }
+  func cancelCue() { voice?.cancelGenerationCue() }
 }
 
 @MainActor
@@ -244,7 +249,9 @@ private struct ConversationRoot: View {
       let conversation = ConversationViewModel(
         transport: transport, draftStore: draftStore,
         diagnosticsEnabled: localState.voiceDiagnostics,
-        inputIntent: { id in inputRelay.send(id) })
+        inputIntent: { id in inputRelay.send(id) },
+        generationCue: { input, response, cue in inputRelay.cue(input, response, cue) },
+        cancelGenerationCue: { inputRelay.cancelCue() })
       let control = try HTTPVoiceControl(baseURL: url, session: candidate)
       let checkpointDirectory = localState.draftURL(in: directory).deletingLastPathComponent()
       let checkpoint = try FileVoiceAdmissionCheckpoint(

@@ -44,7 +44,7 @@ final class CurrentTurnRetryTests: XCTestCase {
     _ = state.transition(.currentLoaded(current, .success(saved)))
     let retries = state.transition(.retryReply)
     guard case .observing(let retry, _, _) = state.reply else { return XCTFail("Expected retry") }
-    XCTAssertEqual(retries.count, 3)
+    XCTAssertEqual(retries, [.cancelCurrent, .cancelReply, .inputIntent(saved.input.deliveryId), .retryReply(retry, saved.input.deliveryId)])
     let identity = UUID()
     _ = state.transition(.send(identity))
     let before = state.reply

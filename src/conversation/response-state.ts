@@ -108,6 +108,8 @@ const projectReply = (response: ResponseAttempt): Reply => {
   const base = {
     ...responseTarget(response),
     responseLanguage: response.responseLanguage,
+    generationStarted: response.work.kind === "Generating" || response.work.kind === "AwaitingDelivery",
+    generationCompleted: response.work.kind === "AwaitingDelivery",
     sequence: response.sequence,
     text: response.text,
     languageSpans: response.languageSpans
