@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import { NodeHttpServer } from "@effect/platform-node"
-import { Clock, Deferred, Effect, Layer } from "effect"
+import { Clock, Deferred, Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { AnswerGeneration, fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import {
@@ -9,7 +9,13 @@ import {
   ReplyConfiguration,
   defaultReplySettings
 } from "../src/conversation/index.ts"
-import { configuredUniiLayer, durableMemoryLayer, Memory, sqliteStorageLayer } from "../src/memory/index.ts"
+import {
+  configuredUniiLayer,
+  durableMemoryLayer,
+  Memory,
+  PriorSnapshot,
+  sqliteStorageLayer
+} from "../src/memory/index.ts"
 import { SummaryGeneration } from "../src/summary-generation/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
@@ -26,6 +32,16 @@ import {
 import { voiceAdmissionsFixture } from "./voice-admission-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
+
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+const Before = Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+const encodeFacts = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ answerCalls: Count, summaryCalls: Count, snapshot: PriorSnapshot }))
+)
+const encodeRelease = Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ released: Schema.Literal(true) })))
+const encodeReady = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ origin: Schema.String, controlOrigin: Schema.String }))
+)
 
 // A composition root for the real services; only provider/resource delivery is controlled.
 const joinLifetimeMillis = 120000
@@ -128,26 +144,25 @@ try {
           const realMemory = yield* Memory
           const origin = yield* HttpServer.addressFormattedWith(Effect.succeed)
           const controls = createServer((request, response) => {
-            const respond = (value: unknown) => {
-              response.setHeader("content-type", "application/json")
-              response.end(JSON.stringify(value))
-            }
+            response.setHeader("content-type", "application/json")
             if (request.method === "POST" && request.url === "/release-summaries") {
               Effect.runPromise(Deferred.succeed(summaries, undefined))
-                .then(() => respond({ released: true }))
+                .then(() => response.end(encodeRelease({ released: true })))
                 .catch(() => {
                   response.statusCode = httpFailure
                   response.end()
                 })
             } else if (request.method === "GET" && request.url?.startsWith("/facts?before=")) {
-              const before = Number(new URL(request.url, "http://localhost").searchParams.get("before"))
-              if (!Number.isSafeInteger(before) || before < 0) {
+              const before = Schema.decodeUnknownResult(Before)(
+                new URL(request.url, "http://localhost").searchParams.get("before")
+              )
+              if (before._tag === "Failure") {
                 response.statusCode = httpBadRequest
                 response.end()
                 return
               }
-              Effect.runPromise(realMemory.snapshot(before))
-                .then((snapshot) => respond({ answerCalls, summaryCalls, snapshot }))
+              Effect.runPromise(realMemory.snapshot(before.success))
+                .then((snapshot) => response.end(encodeFacts({ answerCalls, summaryCalls, snapshot })))
                 .catch(() => {
                   response.statusCode = httpFailure
                   response.end()
@@ -163,7 +178,7 @@ try {
           )
           const address = controls.address()
           if (address === null || typeof address === "string") throw new Error("Missing control address")
-          process.stdout.write(JSON.stringify({ origin, controlOrigin: `http://127.0.0.1:${address.port}` }) + "\n")
+          process.stdout.write(encodeReady({ origin, controlOrigin: `http://127.0.0.1:${address.port}` }) + "\n")
           yield* Effect.callback<void>((resume) => {
             const stop = () => resume(Effect.void)
             process.once("SIGTERM", stop)
