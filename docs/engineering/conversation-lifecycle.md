@@ -234,6 +234,37 @@ This is a finite safety check, not a temporal or whole-client proof. Do not add 
 
 Passing a pinned trace corpus establishes conformance on those sequences. Random simulation samples additional sequences; it is not exhaustive verification. A checked finite model remains limited to its declared domains and environment assumptions, and does not prove all Swift executions. In particular, explicit preparation-context changes do not verify actual pause, retirement or reconnection transitions, and an abstract context combination is not evidence of a reachable application bug without a corresponding lifecycle path. Physical execution, UI visibility, speech quality and network availability retain the separate assurance limits above.
 
+## Composed Voice lifecycle checks
+
+`quint-specs/VoiceLifecycle.qnt` extends the output contract through the actual Voice owner. Its replay calls `transitionVoice` for every modeled event. It does not overwrite capture/generation context or synthesize calls to inner progress/completion helpers. The initial listening state is established by a real start → platform observation → checkpoint restore → permission → bootstrap → connection → language-result prefix, then compared with the model's independent initial value.
+
+Replay compares resource/control/domain command intents. DEBUG trace commands are telemetry and are excluded from this protocol projection; focused interpreter tests check sanitized failure diagnostics separately. Admissions and checkpoints are loaded and empty in the model, and page speech contents, recognition and language contents are excluded; existing ViewModel and backend Memory tests retain those responsibilities.
+
+Outstanding operations and retained handles are different facts. Completing platform observation removes its operation while retaining the callback handle. Likewise, dependency lists belong to emitted Run commands and the task interpreter, not an invented reducer-side dependency journal. Replay checks both the actual outstanding-operation projection and command dependencies.
+
+Canonical terminal evidence is eligible while listening/muted with the matching live origin. Pause changes generation and clears the active origin while retaining the local cut; old-origin evidence is rejected. End clears output; shutdown also retires the owner. Recovery establishes a new origin before new output can prepare. Old completions must settle or preserve their own cleanup obligations without acquiring permission for the replacement.
+
+Interpreter failures remain typed. `unexpectedOperation` identifies an unknown port failure without copying its payload; it is not automatically retried as a connection error. Expected failures retain their own category. A spontaneous `CancellationError` from a port is a failure unless its task was actually cancelled. The interpreter's throwing chain permits only `CancellationError`, preventing a future arbitrary throw from silently entering its cancellation branch. Interrupt and timer diagnostics retain sanitized failure categories. Interrupt completion still acknowledges control work rather than installing canonical output state.
+
+The formal lifecycle model excludes permission denial, language/mute failures, mismatched bootstrap proposals and nonterminal sealing replies rather than silently approximating them by another phase. Application/adapter checks remain separate: permission denial has a ViewModel example, mismatched proposals have a real-transition rejection/cleanup example, and interpreter tests cover typed/unknown/cancellation classification. This model makes no general claim for the other excluded combinations. Retryable connection failures and output/resource-release failures are modeled. The explicit initial checkpoint/admission assumptions do not establish correctness of Memory internals.
+
+Manual sampled exploration uses the same Quint 0.31.0 toolchain:
+
+```sh
+quint run quint-specs/VoiceLifecycle.qnt --main VoiceLifecycle --invariant safety --seed 62 --max-samples 100 --max-steps 20
+quint run quint-specs/VoiceLifecycle.qnt --main VoiceLifecycle --step recoveryWitnessStep --invariant safety --witnesses reachedRecovery reachedPrepare reachedReady --seed 62 --max-samples 100 --max-steps 20
+```
+
+`preparationWitnessStep`, `muteWitnessStep` and `releaseWitnessStep` provide other targeted schedulers using actual events. These demonstrate reachability, not fair-scheduler liveness. The broad sampler uses two symbolic input/session/incarnation values, the output model's four identities and sequences 0…3; pinned regressions additionally exercise a previous sequence of 7. Generations and operation IDs follow the actual transition allocation during each bounded trace. This composed exploration is sampled, not an exhaustive check of its unbounded request space.
+
+The manual composed acceptance path is:
+
+```sh
+node scripts/quint/check-lifecycle.mjs
+```
+
+It generates lifecycle traces with seed 62, replays them through Swift, exercises the existing ViewModel seams, rejects faulty terminal rules through the enclosing owner, restores exact production source and repeats normal replay. Like the output runner, run it alone; its controlled mutations are not part of fast tests or commit hooks. Small pinned lifecycle traces and port-level examples remain fast. Scheduler dependency checks and synchronous resource revocation tests do not establish that a physical speaker has stopped; that remains adapter/device qualification.
+
 ## Qualified compilation boundary
 
 Run `pnpm check:bend` with Node 24, Bend **2.0.36** and `timeout` or `gtimeout` already available. It installs nothing. The installed compiler guide and `bend version` own the syntax/compilation contract; requalify another compiler version rather than silently accepting it.

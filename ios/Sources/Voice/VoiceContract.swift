@@ -6,6 +6,8 @@ import Foundation
 
 public enum VoiceFailure: Error, Equatable, Sendable {
   case permissionDenied, capture, connection, invalidResponse, checkpointUnavailable
+  /// An unclassified adapter defect, without private error text or an inferred retry policy.
+  case unexpectedOperation
   case backend(code: String, message: String)
 }
 

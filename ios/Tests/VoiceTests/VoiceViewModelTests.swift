@@ -1794,6 +1794,8 @@ import XCTest
   var received: (@Sendable (VoiceOutputIdentity) -> Void)?
   var holdOutput = true
   var preparedOutputs = 0
+  var preparationsCompleted = 0
+  var stopsCompleted = 0
   var outputWaiting = false
   var stoppedOutput = 0
   var outputContinuation: CheckedContinuation<Void, Never>?
@@ -1814,6 +1816,7 @@ import XCTest
   var disconnected = false
   var connectFailure: VoiceFailure?
   var muteFailure: VoiceFailure?
+  var muteThrownError: (any Error)?
   var failure: (@Sendable () -> Void)?
   private var permission: CheckedContinuation<Bool, Never>?
   private var disconnectContinuation: CheckedContinuation<Void, Never>?
@@ -1857,10 +1860,12 @@ import XCTest
     muteInFlight = true
     defer { muteInFlight = false }
     if let muteFailure { throw muteFailure }
+    if let muteThrownError { throw muteThrownError }
     if holdMute {
       muteWaiting = true
       await withCheckedContinuation { muteContinuation = $0 }
     }
+    try Task.checkCancellation()
     self.muted = muted
     muteWaiting = false
   }
@@ -1878,12 +1883,14 @@ import XCTest
   }
   func prepareOutput(_ manifest: VoiceAudioManifest) async throws {
     preparedOutputs += 1
+    defer { preparationsCompleted += 1 }
     outputWaiting = true
     if holdOutput { await withCheckedContinuation { outputContinuation = $0 } }
   }
   func stopOutput() -> Task<Void, Never> {
     stoppedOutput += 1
     return Task {
+      defer { stopsCompleted += 1 }
       if holdStop {
         stopWaiting = true
         await withCheckedContinuation { stopContinuation = $0 }
@@ -2009,8 +2016,11 @@ private actor FixtureControl: VoiceControl {
     }
     return try await snapshot(sessionId: sessionId, after: 0)
   }
+  private var interruptFailure: VoiceFailure?
+  func failInterrupt(_ failure: VoiceFailure) { interruptFailure = failure }
   func interrupt(sessionId: UUID, target: VoiceOutputIdentity) async throws -> VoiceSnapshot {
     interruptCount += 1
+    if let interruptFailure { throw interruptFailure }
     return try await snapshot(sessionId: sessionId, after: 0)
   }
   private let incarnation = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
@@ -2475,5 +2485,244 @@ private actor PendingReplyActivityClassifier: VoiceActivityClassifier {
     if calls >= count { return }
     target = count
     await withCheckedContinuation { waiter = $0 }
+  }
+}
+
+
+private enum InterpreterPortDefect: Error { case syntheticPrivateDetail }
+
+extension VoiceViewModelTests {
+  func testInterpreterUnknownPortFailureDoesNotBecomeCancellationOrConnection() async {
+    let media = FixtureMedia(allowed: true)
+    media.muteThrownError = InterpreterPortDefect.syntheticPrivateDetail
+    let result = await interpreted(.localMute(true), media: media)
+    guard case .localMuted(.failure(let failure))? = result else {
+      return XCTFail("Unknown port error must remain a typed operation failure")
+    }
+    XCTAssertEqual(failure, .unexpectedOperation)
+  }
+
+  func testAutomaticReconnectReopensFreshOutputWithoutLosingConnectingInputFence() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    media.holdOutput = false
+    let clock = FixtureRetryClock()
+    let model = VoiceViewModel(control: control, media: media, retryClock: clock) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let oldSession = await control.identity()
+    let oldInput = UUID()
+    let oldResponse = UUID()
+    let oldEpoch = UUID()
+    let old = outputValue(
+      session: oldSession, input: oldInput, response: oldResponse, epoch: oldEpoch)
+    await control.append(
+      try event(session: oldSession, sequence: 7, kind: "Output", fields: ["output": old]))
+    await settle { media.preparedOutputs == 1 }
+    let oldFailure = media.failure
+    let oldAudio = media.received
+    oldFailure?()
+    await settle { model.state.capture == .hostUnavailable }
+    XCTAssertTrue(model.output.closed)
+    media.holdConnect = true
+    await clock.advance()
+    await settle { media.connectWaiting }
+    let newInput = UUID()
+    model.inputIntent(newInput)
+    XCTAssertEqual(model.output.allowedInput, newInput)
+    oldAudio?(VoiceOutputIdentity(
+      inputDeliveryId: oldInput, responseId: oldResponse, outputEpoch: oldEpoch))
+    oldFailure?()
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertTrue(model.output.closed, "Retired callbacks cannot reopen the held connection")
+    XCTAssertFalse(model.output.receivedAudio)
+    media.resolveConnect()
+    await settle { model.state.capture == .listening }
+    let newSession = await control.identity()
+    XCTAssertNotEqual(newSession, oldSession)
+    XCTAssertFalse(model.output.closed)
+    XCTAssertEqual(model.output.allowedInput, newInput)
+    XCTAssertTrue(model.output.gated)
+    let denied = outputValue(session: newSession, input: UUID(), response: UUID(), epoch: UUID())
+    await control.append(
+      try event(session: newSession, sequence: 1, kind: "Output", fields: ["output": denied]))
+    await settle { model.state.sequence >= 1 }
+    XCTAssertEqual(media.preparedOutputs, 1, "Reconnect must preserve the connecting input fence")
+    let freshResponse = UUID()
+    let fresh = outputValue(
+      session: newSession, input: newInput, response: freshResponse, epoch: UUID())
+    await control.append(
+      try event(session: newSession, sequence: 2, kind: "Output", fields: ["output": fresh]))
+    await settle { media.preparedOutputs == 2 }
+    XCTAssertEqual(model.output.current?.responseId, freshResponse)
+    XCTAssertFalse(model.output.locallyInterrupted)
+    XCTAssertEqual(model.output.sequence, 2, "Fresh origin sequences restart independently")
+    await model.shutdown()
+  }
+
+  func testUnexpectedPortFailureStopsAutomaticCaptureRecoveryAndRemainsVisible() async {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    media.muteThrownError = InterpreterPortDefect.syntheticPrivateDetail
+    model.toggleMute()
+    await settle { model.state.capture == .failed(.unexpectedOperation) }
+    XCTAssertFalse(model.state.wantsListening)
+    XCTAssertTrue(model.state.canStart)
+    let opens = await control.openedCount()
+    XCTAssertEqual(opens, 1)
+    await model.shutdown()
+  }
+
+  func testInterpreterExpectedAndSpontaneousCancellationRemainTypedFailures() async {
+    let expected = FixtureMedia(allowed: true)
+    expected.muteFailure = .invalidResponse
+    let expectedResult = await interpreted(.localMute(true), media: expected)
+    guard case .localMuted(.failure(.invalidResponse))? = expectedResult else {
+      return XCTFail("Expected failure must retain its domain value")
+    }
+    let spontaneous = FixtureMedia(allowed: true)
+    spontaneous.muteThrownError = CancellationError()
+    let spontaneousResult = await interpreted(.localMute(true), media: spontaneous)
+    guard case .localMuted(.failure(.capture))? = spontaneousResult else {
+      return XCTFail("A noncancelled port throwing CancellationError is a failed operation")
+    }
+  }
+
+  func testInterpreterActualCancellationAcknowledgesItsOwnHeldWork() async {
+    let media = FixtureMedia(allowed: true)
+    media.holdMute = true
+    let result = await interpreted(.localMute(true), media: media, cancelHeldMute: true)
+    guard case .cancelled? = result else {
+      return XCTFail("Intentional task cancellation must remain a cancellation acknowledgement")
+    }
+    XCTAssertFalse(media.muted)
+  }
+
+  func testInterpreterTimerFailuresNeverMasqueradeAsElapsedOrCancelled() async {
+    for kind in [InterpreterFailureClock.Kind.expected, .unexpected, .spontaneousCancellation] {
+      let result = await interpreted(
+        .sleep(milliseconds: 1, purpose: .captureRetry), media: FixtureMedia(allowed: true),
+        clock: InterpreterFailureClock(kind: kind))
+      guard case .timerFailed(let failure)? = result else {
+        return XCTFail("A failed noncancelled timer must not manufacture elapsed time")
+      }
+      switch kind {
+      case .expected: XCTAssertEqual(failure, .invalidResponse)
+      case .unexpected: XCTAssertEqual(failure, .unexpectedOperation)
+      case .spontaneousCancellation: XCTAssertEqual(failure, .connection)
+      }
+    }
+  }
+
+  func testReplacementPreparationWaitsForOldPreparationAndPhysicalStopInEitherOrder() async throws {
+    for releasePreparationFirst in [true, false] {
+      let control = FixtureControl()
+      let media = FixtureMedia(allowed: true)
+      let model = VoiceViewModel(control: control, media: media) { _ in }
+      model.start()
+      await settle { model.state.capture == .listening }
+      let session = await control.identity()
+      let old = outputValue(session: session, input: UUID(), response: UUID(), epoch: UUID())
+      await control.append(
+        try event(session: session, sequence: 1, kind: "Output", fields: ["output": old]))
+      await settle { media.outputContinuation != nil }
+      let newInput = UUID()
+      let newResponse = UUID()
+      media.holdStop = true
+      let stopsBeforeCut = media.stoppedOutput
+      model.inputIntent(newInput)
+      XCTAssertGreaterThan(media.stoppedOutput, stopsBeforeCut, "Revocation must be synchronous")
+      XCTAssertTrue(model.output.locallyInterrupted)
+      let replacement = outputValue(
+        session: session, input: newInput, response: newResponse, epoch: UUID())
+      await control.append(
+        try event(session: session, sequence: 2, kind: "Output", fields: ["output": replacement]))
+      await settle { media.stopWaiting && model.output.current?.responseId == newResponse }
+      XCTAssertEqual(media.preparedOutputs, 1)
+      media.holdOutput = false
+      let stoppedBeforeRelease = media.stopsCompleted
+      if releasePreparationFirst {
+        media.resolveOutput()
+        await settle { media.preparationsCompleted == 1 }
+      } else {
+        media.resolveStop()
+        await settle { media.stopsCompleted > stoppedBeforeRelease }
+      }
+      XCTAssertEqual(media.preparedOutputs, 1, "Neither dependency alone authorizes replacement")
+      if releasePreparationFirst { media.resolveStop() } else { media.resolveOutput() }
+      await settle { media.preparedOutputs == 2 && model.output.prepared != nil }
+      XCTAssertEqual(model.output.current?.responseId, newResponse)
+      XCTAssertFalse(model.output.locallyInterrupted)
+      let ready = await control.readyCalls()
+      XCTAssertLessThanOrEqual(ready, 1, "Old cancelled preparation cannot publish readiness")
+      await model.shutdown()
+    }
+  }
+
+  #if DEBUG
+    func testInterpreterInterruptFailureRetainsSanitizedDiagnosticReason() async throws {
+      let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      VoiceTransitionTrace.shared.configure(destination: file)
+      defer {
+        VoiceTransitionTrace.shared.configure(destination: nil)
+        VoiceTransitionTrace.shared.flush()
+        try? FileManager.default.removeItem(at: file)
+      }
+      let control = FixtureControl()
+      await control.failInterrupt(.backend(code: "Unavailable", message: "private payload"))
+      let target = VoiceOutputIdentity(inputDeliveryId: UUID(), responseId: UUID(), outputEpoch: UUID())
+      let origin = VoiceOrigin(sessionId: UUID(), backendIncarnationId: UUID())
+      let result = await interpreted(
+        .interrupt(origin, target), media: FixtureMedia(allowed: true), control: control)
+      guard case .interrupted(.failure(.backend("Unavailable", _)))? = result else {
+        return XCTFail("Interrupt acknowledgement failure remains separate from canonical output")
+      }
+      let record = try XCTUnwrap(VoiceTransitionTrace.shared.snapshot.events.last {
+        $0.cause == .interruptFailed && $0.outputEpoch == VoiceTransitionTrace.hash(target.outputEpoch)
+      })
+      XCTAssertEqual(record.failureKind, "Backend")
+      XCTAssertEqual(record.backendCode, "Unavailable")
+      XCTAssertEqual(VoiceFailure.unexpectedOperation.traceKind, "UnexpectedOperation")
+      VoiceTransitionTrace.shared.flush()
+      let persisted = try String(contentsOf: file, encoding: .utf8)
+      XCTAssertFalse(persisted.contains("private payload"))
+    }
+  #endif
+
+  private func interpreted(
+    _ work: VoiceWork, media: FixtureMedia,
+    clock: any VoiceRetryClock = SystemVoiceRetryClock(), cancelHeldMute: Bool = false,
+    control: FixtureControl = FixtureControl()
+  ) async -> VoiceWorkResult? {
+    var result: VoiceWorkResult?
+    let interpreter = VoiceTaskInterpreter(
+      control: control, media: media, checkpoint: VolatileVoiceAdmissionCheckpoint(),
+      clock: clock, receive: { event in
+        if case .completed(_, let completed) = event { result = completed }
+      }, accepted: { _ in XCTFail("No acceptance expected") }, refresh: {}, interrupt: { _, _ in })
+    interpreter.execute(.run(VoiceRequest(generation: 1, id: 1), work, after: []))
+    if cancelHeldMute {
+      await settle { media.muteWaiting }
+      interpreter.execute(.cancel([VoiceRequest(generation: 1, id: 1)]))
+      media.resolveMute()
+    }
+    await interpreter.drain()
+    return result
+  }
+}
+
+
+private struct InterpreterFailureClock: VoiceRetryClock {
+  enum Kind: Sendable { case expected, unexpected, spontaneousCancellation }
+  let kind: Kind
+  func sleep(milliseconds: Int) async throws {
+    switch kind {
+    case .expected: throw VoiceFailure.invalidResponse
+    case .unexpected: throw InterpreterPortDefect.syntheticPrivateDetail
+    case .spontaneousCancellation: throw CancellationError()
+    }
   }
 }

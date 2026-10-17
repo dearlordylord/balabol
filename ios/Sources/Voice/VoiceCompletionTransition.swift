@@ -100,7 +100,10 @@ private func voiceConnectCompleted(_ state: VoiceState, request: VoiceRequest, o
   case .failure(let error): return failVoiceTransport(state, error, proposedId: proposedId)
   case .success:
     let capture = state.captureModel.replacing(capture: state.hasPendingAdmission ? .checkingPreviousSpeech : (muted ? .muted : .listening), retryStep: 0, resumeProbe: false)
-    let listening = state.replacing(capture: capture)
+    // A successful current connection begins a fresh origin's observation sequence.
+    // Intent fences can arrive while connecting and must survive transport recovery.
+    let listening = state.replacing(capture: capture,
+      output: state.output.replacing(closed: false, sequence: -1))
     let snapshot = reserveVoice(listening, .snapshot(origin, after: state.sequence))
     let languages = continueVoice(snapshot, requestVoiceLanguages)
     let projected = VoiceTransition(state: languages.state, commands: languages.commands + [.refreshConversation])

@@ -28,6 +28,7 @@ import os
       case .connection: "Connection"
       case .invalidResponse: "InvalidResponse"
       case .checkpointUnavailable: "CheckpointUnavailable"
+      case .unexpectedOperation: "UnexpectedOperation"
       case .backend: "Backend"
       }
     }

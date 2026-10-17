@@ -64,6 +64,7 @@ enum VoiceITFCorpus {
     guard !files.isEmpty,
       files.allSatisfy({
         $0.lastPathComponent.hasPrefix("output-") || $0.lastPathComponent.hasPrefix("preparation-")
+          || $0.lastPathComponent.hasPrefix("lifecycle-")
       })
     else {
       throw VoiceITFError.invalid("empty corpus or unrecognized ITF filename")

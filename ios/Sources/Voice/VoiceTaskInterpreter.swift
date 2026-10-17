@@ -90,6 +90,7 @@ import Foundation
       if Task.isCancelled { result = .cancelled }
       else {
         do { result = try await perform(work, request: request) }
+        // The typed boundary permits only intentional task cancellation here.
         catch { result = .cancelled }
       }
       // Completion may synchronously reserve a dependent task, which captures this
@@ -120,7 +121,7 @@ import Foundation
     }
   }
 
-  private func perform(_ work: VoiceWork, request: VoiceRequest) async throws -> VoiceWorkResult {
+  private func perform(_ work: VoiceWork, request: VoiceRequest) async throws(CancellationError) -> VoiceWorkResult {
     switch work {
     case .permission: return .permission(await media.requestPermission())
     case .languages:
@@ -173,7 +174,12 @@ import Foundation
         try await clock.sleep(milliseconds: milliseconds)
         return Task.isCancelled ? .cancelled : .elapsed
       } catch {
-        return Task.isCancelled ? .cancelled : .timerFailed(error as? VoiceFailure ?? .connection)
+        if Task.isCancelled { return .cancelled }
+        let failure = error is CancellationError ? .connection : error as? VoiceFailure ?? .unexpectedOperation
+        #if DEBUG
+          VoiceTransitionTrace.shared.record(.failure, status: "TimerFailed", failure: failure)
+        #endif
+        return .timerFailed(failure)
       }
     case .observePlatform:
       media.observePlatform { [receive] event in receive(.platform(request, event)) }
@@ -184,7 +190,7 @@ import Foundation
     }
   }
 
-  private func connect(_ join: VoiceJoin, muted: Bool, request: VoiceRequest) async throws
+  private func connect(_ join: VoiceJoin, muted: Bool, request: VoiceRequest) async throws(CancellationError)
     -> VoiceWorkResult
   {
     let receive = receive
@@ -199,7 +205,7 @@ import Foundation
     })
   }
 
-  private func interruptOutput(_ origin: VoiceOrigin, _ target: VoiceOutputIdentity) async throws
+  private func interruptOutput(_ origin: VoiceOrigin, _ target: VoiceOutputIdentity) async throws(CancellationError)
     -> VoiceWorkResult
   {
     #if DEBUG
@@ -215,9 +221,9 @@ import Foundation
         VoiceTransitionTrace.shared.record(
           .interruptReturned, target: target,
           status: page.output?.identity == target ? page.output?.status.rawValue : "DifferentTarget")
-      case .failure:
+      case .failure(let failure):
         VoiceTransitionTrace.shared.record(
-          .interruptFailed, target: target, session: origin.sessionId)
+          .interruptFailed, target: target, failure: failure, session: origin.sessionId)
       }
     #endif
     return .interrupted(result)
@@ -225,12 +231,19 @@ import Foundation
 
   private func attempt<Value>(
     fallback: VoiceFailure = .connection, _ operation: () async throws -> Value
-  ) async throws -> Result<Value, VoiceFailure> {
+  ) async throws(CancellationError) -> Result<Value, VoiceFailure> {
     do { return .success(try await operation()) }
     catch is CancellationError {
       if Task.isCancelled { throw CancellationError() }
       return .failure(fallback)
     }
-    catch { return .failure(error as? VoiceFailure ?? fallback) }
+    catch {
+      if let failure = error as? VoiceFailure { return .failure(failure) }
+      #if DEBUG
+        VoiceTransitionTrace.shared.record(
+          .failure, status: "UnexpectedOperation", failure: .unexpectedOperation)
+      #endif
+      return .failure(.unexpectedOperation)
+    }
   }
 }

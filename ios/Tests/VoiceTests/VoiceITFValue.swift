@@ -181,8 +181,9 @@ struct VoiceITFFrame: Decodable {
 private func voiceITFVariable(_ name: String) throws -> String {
   let names: Set<String> = ["commands", "event", "previous", "state"]
   if names.contains(name) { return name }
-  let prefix = "VoiceOutputTest::VoiceOutputMachine::"
-  if name.hasPrefix(prefix) {
+  for prefix in [
+    "VoiceOutputTest::VoiceOutputMachine::", "VoiceLifecycleTest::VoiceLifecycleMachine::",
+  ] where name.hasPrefix(prefix) {
     let local = String(name.dropFirst(prefix.count))
     if names.contains(local) { return local }
   }
