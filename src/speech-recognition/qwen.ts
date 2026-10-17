@@ -7,22 +7,20 @@ import {
   RecognitionRequest,
   SpeechRecognition
 } from "./provider.ts"
-import { WhisperSettings, whisperNative } from "./whisper-native.ts"
-import type { WhisperNative } from "./whisper-native.ts"
-export { WhisperSettings, whisperModelBytes, whisperModelSha256, whisperNative } from "./whisper-native.ts"
-export type { WhisperNative } from "./whisper-native.ts"
-export { runWhisperProcess } from "./whisper-process.ts"
+import { QwenSettings, qwenNative } from "./qwen-native.ts"
+import type { QwenNative } from "./qwen-native.ts"
+export { QwenSettings, qwenNative } from "./qwen-native.ts"
+export type { QwenNative } from "./qwen-native.ts"
+export { runQwenProcess } from "./qwen-process.ts"
 const deadlineMillis = 30000
 const preparationMillis = 30000
 const maximumTextLength = 100000
-const maximumSegments = 10000
 const maximumJsonBytes = 1024 * 1024
 const supportedLanguages = ["ru", "fr", "en", "ja"]
-const Segment = Schema.Struct({ text: Schema.String.check(Schema.isMaxLength(maximumTextLength)) })
-// v1.9.5 examples/cli/cli.cpp output_json(): result.language plus ordered transcription[].text.
-const WhisperResult = Schema.Struct({
-  result: Schema.Struct({ language: Schema.NullOr(LanguageTag) }),
-  transcription: Schema.Array(Segment).check(Schema.isMaxLength(maximumSegments))
+// scripts/qwen-asr.py normalizes the pinned MLX STTOutput into this local boundary.
+const QwenResult = Schema.Struct({
+  text: Schema.String.check(Schema.isMaxLength(maximumTextLength)),
+  language: Schema.NullOr(LanguageTag)
 })
 const failed = (message: string, reason: typeof RecognitionFailureReason.Type) =>
   new RecognitionFailed({ message, reason })
@@ -64,21 +62,6 @@ const encodeWav = (audio: RecognitionRequest["audio"]) => {
   wav.set(audio.bytes, headerBytes)
   return wav
 }
-// Whisper's non-speech annotations are decoder text, not spoken content:
-// https://github.com/openai/whisper/blob/main/whisper/tokenizer.py#L228-L237
-// Keep this guard limited to observed complete caption segments. Ordinary words,
-// quoted/inline mentions, and other parenthetical speech remain untouched.
-const observedCaptions = ["[blank_audio]", "[blank audio]", "(keyboard tapping)"]
-// This caption indicates missing speech, unlike silence: dropping it would hide
-// a lost part of a multilingual utterance. Never persist the remaining text as complete.
-const untranscribedSpeech =
-  /^\s*(?:\(speaking in (?:a )?foreign language\)|\[speaking in (?:a )?foreign language\])(?:\s|$)/iu
-const captionOnly = (text: string): boolean => {
-  const candidate = text.trim().toLowerCase()
-  if (candidate.length === 0) return false
-  const remainder = observedCaptions.reduce((value, caption) => value.replaceAll(caption, ""), candidate)
-  return remainder.trim().length === 0
-}
 const parseFinal = (json: string, request: RecognitionRequest) =>
   Effect.gen(function* () {
     if (Buffer.byteLength(json, "utf8") > maximumJsonBytes)
@@ -87,17 +70,11 @@ const parseFinal = (json: string, request: RecognitionRequest) =>
       try: (): unknown => JSON.parse(json),
       catch: () => failed("Invalid recognition JSON", "Json")
     })
-    const result = yield* Schema.decodeUnknownEffect(WhisperResult)(raw).pipe(
+    const result = yield* Schema.decodeUnknownEffect(QwenResult)(raw).pipe(
       Effect.mapError(() => failed("Invalid recognition result", "Result"))
     )
-    if (result.transcription.some((segment) => untranscribedSpeech.test(segment.text)))
-      return yield* failed("Speech was replaced by a language caption; please repeat", "UntranscribedSpeech")
-    const text = result.transcription
-      .filter((segment) => !captionOnly(segment.text))
-      .map((segment) => segment.text)
-      .join("")
-      .trim()
-    const detectedLanguage = text.length === 0 ? null : result.result.language
+    const text = result.text.trim()
+    const detectedLanguage = text.length === 0 ? null : result.language
     if (detectedLanguage !== null && !request.allowedLanguages.includes(detectedLanguage))
       return yield* failed("Detected recognition language is outside the allowed set", "DetectedLanguage")
     return yield* Schema.decodeUnknownEffect(RecognitionEvent)({
@@ -110,11 +87,11 @@ const parseFinal = (json: string, request: RecognitionRequest) =>
   })
 // One process per completed utterance; model load/warm-up belongs to the same bounded request.
 // Cancellation closes the scope, reaps the process and deletes its private audio before releasing the permit.
-export const whisperRecognitionLayer = (settings: WhisperSettings, native: WhisperNative = whisperNative) =>
+export const qwenRecognitionLayer = (settings: QwenSettings, native: QwenNative = qwenNative) =>
   Layer.effect(
     SpeechRecognition,
     Effect.gen(function* () {
-      const config = yield* Schema.decodeUnknownEffect(WhisperSettings)(settings).pipe(
+      const config = yield* Schema.decodeUnknownEffect(QwenSettings)(settings).pipe(
         Effect.mapError(() => failed("Invalid local recognition configuration", "Request"))
       )
       yield* native.prepare(config).pipe(
@@ -143,8 +120,7 @@ export const whisperRecognitionLayer = (settings: WhisperSettings, native: Whisp
               )
               if (!request.allowedLanguages.every((language) => supportedLanguages.includes(language)))
                 return yield* failed("Unsupported recognition language", "Request")
-              if (request.audio.sampleFrames === 0)
-                return yield* parseFinal('{"result":{"language":null},"transcription":[]}', request)
+              if (request.audio.sampleFrames === 0) return yield* parseFinal('{"language":null,"text":""}', request)
               const json = yield* native.transcribe(config, encodeWav(request.audio))
               return yield* parseFinal(json, request)
             }).pipe(

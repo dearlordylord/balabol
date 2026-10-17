@@ -5,7 +5,7 @@ import {
   SpeechRecognition,
   RecognitionFailed,
   fakeRecognitionLayer,
-  whisperRecognitionLayer
+  qwenRecognitionLayer
 } from "../src/speech-recognition/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
@@ -178,27 +178,19 @@ for (const terminal of ["stream error", "malformed late packet"] as const)
     )
   })
 
-it("does not admit a foreign-speech caption or its partial continuation and keeps listening for a valid phrase", async () => {
+it("does not admit malformed native recognition and keeps listening for a valid phrase", async () => {
   const input = await Effect.runPromise(classifiedVoiceInput())
   let calls = 0
-  const recognition = whisperRecognitionLayer(
-    { provider: "whisper", executable: "fixture", modelPath: "fixture.bin" },
+  const recognition = qwenRecognitionLayer(
+    { provider: "qwen3-asr", helperPath: "fixture.py", executable: "fixture", modelPath: "fixture.bin" },
     {
       prepare: () => Effect.void,
       transcribe: () =>
         Effect.sync(() => {
           calls++
-          return JSON.stringify({
-            result: { language: "fr" },
-            transcription: [
-              {
-                text:
-                  calls === 1
-                    ? "(speaking in foreign language) Затем продолжение."
-                    : "Bonjour, je voudrais apprendre le français. Привет."
-              }
-            ]
-          })
+          return calls === 1
+            ? "not-json"
+            : JSON.stringify({ language: "fr", text: "Bonjour, je voudrais apprendre le français. Привет." })
         })
     }
   )

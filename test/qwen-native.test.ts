@@ -4,9 +4,9 @@ import { tmpdir } from "node:os"
 import { it } from "@effect/vitest"
 import { Effect, Fiber, Schema } from "effect"
 import { expect } from "vitest"
-import { runWhisperProcess, whisperNative, type WhisperSettings } from "../src/speech-recognition/index.ts"
+import { runQwenProcess, qwenNative, type QwenSettings } from "../src/speech-recognition/index.ts"
 const temporary = Effect.acquireRelease(
-  Effect.promise(() => mkdtemp(join(tmpdir(), "balabol-whisper-test-"))),
+  Effect.promise(() => mkdtemp(join(tmpdir(), "balabol-qwen-test-"))),
   (path) => Effect.promise(() => rm(path, { recursive: true, force: true }))
 )
 const script = (directory: string, source: string) =>
@@ -38,12 +38,12 @@ it.live("executes a native fixture using private files and deletes the utterance
       `
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
-const input = arg('-f'); const output = arg('-of') + '.json';
-writeFileSync(arg('-m'), JSON.stringify({ input, output, bytes: [...readFileSync(input)], inputMode: statSync(input).mode & 511, outputMode: statSync(output).mode & 511, directoryMode: statSync(input.slice(0, input.lastIndexOf('/'))).mode & 511, language: arg('-l'), suppressNonSpeech: process.argv.includes('--suppress-nst'), translate: process.argv.includes('--translate') || process.argv.includes('-tr') }));
-writeFileSync(output, '{"result":{"language":"en"},"transcription":[]}');`
+const input = arg('--input'); const output = arg('--output');
+writeFileSync(arg('--model'), JSON.stringify({ input, output, bytes: [...readFileSync(input)], inputMode: statSync(input).mode & 511, outputMode: statSync(output).mode & 511, directoryMode: statSync(input.slice(0, input.lastIndexOf('/'))).mode & 511 }));
+writeFileSync(output, '{"language":"en","text":""}');`
     )
-    const settings: WhisperSettings = { provider: "whisper", executable, modelPath: marker }
-    expect(yield* whisperNative.transcribe(settings, new Uint8Array([1, 2])).pipe(Effect.scoped)).toContain(
+    const settings: QwenSettings = { provider: "qwen3-asr", helperPath: "fixture.py", executable, modelPath: marker }
+    expect(yield* qwenNative.transcribe(settings, new Uint8Array([1, 2])).pipe(Effect.scoped)).toContain(
       '"language":"en"'
     )
     const raw: unknown = JSON.parse(yield* Effect.promise(() => readFile(marker, "utf8")))
@@ -54,21 +54,10 @@ writeFileSync(output, '{"result":{"language":"en"},"transcription":[]}');`
         bytes: Schema.Array(Schema.Number),
         inputMode: Schema.Number,
         outputMode: Schema.Number,
-        directoryMode: Schema.Number,
-        language: Schema.String,
-        suppressNonSpeech: Schema.Boolean,
-        translate: Schema.Boolean
+        directoryMode: Schema.Number
       })
     )(raw)
-    expect(observation).toMatchObject({
-      bytes: [1, 2],
-      inputMode: 0o600,
-      outputMode: 0o600,
-      directoryMode: 0o700,
-      language: "auto",
-      suppressNonSpeech: true,
-      translate: false
-    })
+    expect(observation).toMatchObject({ bytes: [1, 2], inputMode: 0o600, outputMode: 0o600, directoryMode: 0o700 })
     expect(yield* exists(observation.input)).toBe(false)
     expect(yield* exists(observation.output)).toBe(false)
   }).pipe(Effect.scoped)
@@ -83,14 +72,17 @@ it.live("cancellation kills and reaps a SIGTERM-ignoring OS worker before deleti
 import { renameSync, writeFileSync } from 'node:fs';
 process.on('SIGTERM', () => {});
 const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
-writeFileSync(arg('-m') + '.pid', String(process.pid));
-writeFileSync(arg('-m') + '.pending', arg('-f'));
-renameSync(arg('-m') + '.pending', arg('-m'));
+writeFileSync(arg('--model') + '.pid', String(process.pid));
+writeFileSync(arg('--model') + '.pending', arg('--input'));
+renameSync(arg('--model') + '.pending', arg('--model'));
 setInterval(() => {}, 1000);`
     )
     const task = yield* Effect.forkChild(
-      whisperNative
-        .transcribe({ provider: "whisper", executable, modelPath: marker }, new Uint8Array([1, 2]))
+      qwenNative
+        .transcribe(
+          { provider: "qwen3-asr", helperPath: "fixture.py", executable, modelPath: marker },
+          new Uint8Array([1, 2])
+        )
         .pipe(Effect.scoped)
     )
     yield* waitForFile(marker)
@@ -110,21 +102,24 @@ it.live("typed process failures include missing executables, nonzero exits and b
       [process.execPath, ["-e", "process.exit(4)"]],
       [process.execPath, ["-e", "process.stdout.write('x'.repeat(1100000))"]]
     ] satisfies [string, string[]][])
-      expect((yield* runWhisperProcess(executable, args).pipe(Effect.result))._tag).toBe("Failure")
+      expect((yield* runQwenProcess(executable, args).pipe(Effect.result))._tag).toBe("Failure")
   })
 )
-it.live("startup rejects wrong engine versions and unavailable pinned models", () =>
+it.live("startup validates the pinned helper readiness handshake", () =>
   Effect.gen(function* () {
     const directory = yield* temporary
-    let executable = yield* script(directory, "process.stdout.write('whisper.cpp version: wrong')")
-    expect(
-      (yield* whisperNative.prepare({ provider: "whisper", executable, modelPath: "missing" }).pipe(Effect.result))._tag
-    ).toBe("Failure")
-    executable = yield* script(directory, "process.stdout.write('whisper.cpp version: 1.9.5')")
-    for (const modelPath of [join(directory, "missing"), executable, directory])
-      expect(
-        (yield* whisperNative.prepare({ provider: "whisper", executable, modelPath }).pipe(Effect.result))._tag
-      ).toBe("Failure")
+    for (const value of [
+      "not-json",
+      "{}",
+      '{"version":"wrong","modelRevision":"wrong"}',
+      '{"version":"0.5.9","modelRevision":"a8379a2e2f9e313c9292cdf1af4055ab56d50d55"}'
+    ]) {
+      const executable = yield* script(directory, `process.stdout.write(${JSON.stringify(value)})`)
+      const result = yield* qwenNative
+        .prepare({ provider: "qwen3-asr", executable, helperPath: "fixture.py", modelPath: "fixture" })
+        .pipe(Effect.result)
+      expect(result._tag).toBe(value.includes('"0.5.9"') ? "Success" : "Failure")
+    }
   }).pipe(Effect.scoped)
 )
 
@@ -136,16 +131,16 @@ it.live("bounds result files, rejects invalid UTF-8 and recovers with a new proc
       `
 import { readFileSync, writeFileSync } from 'node:fs';
 const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
-const mode = readFileSync(arg('-f'))[0];
+const mode = readFileSync(arg('--input'))[0];
 if (mode === 0) process.exit(4);
 const content = mode === 1 ? Buffer.from([255]) : mode === 2 ? Buffer.alloc(1048577) : Buffer.from('valid');
-writeFileSync(arg('-of') + '.json', content);`
+writeFileSync(arg('--output'), content);`
     )
-    const settings: WhisperSettings = { provider: "whisper", executable, modelPath: "fixture" }
+    const settings: QwenSettings = { provider: "qwen3-asr", helperPath: "fixture.py", executable, modelPath: "fixture" }
     for (const mode of [0, 1, 2])
       expect(
-        (yield* whisperNative.transcribe(settings, new Uint8Array([mode])).pipe(Effect.scoped, Effect.result))._tag
+        (yield* qwenNative.transcribe(settings, new Uint8Array([mode])).pipe(Effect.scoped, Effect.result))._tag
       ).toBe("Failure")
-    expect(yield* whisperNative.transcribe(settings, new Uint8Array([3])).pipe(Effect.scoped)).toBe("valid")
+    expect(yield* qwenNative.transcribe(settings, new Uint8Array([3])).pipe(Effect.scoped)).toBe("valid")
   }).pipe(Effect.scoped)
 )

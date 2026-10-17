@@ -67,3 +67,29 @@ it("selects validated local synthesis and independent bounded playback policy wi
   ])
     expect(await Effect.runPromise(parseConfig(environment).pipe(Effect.isFailure))).toBe(true)
 })
+
+it("selects validated Qwen resources and speech classification without acquiring native models", async () => {
+  const config = await Effect.runPromise(
+    parseConfig({
+      BALABOL_RECOGNITION_PROVIDER: "qwen3-asr",
+      BALABOL_QWEN_PYTHON_PATH: "/fixture/python",
+      BALABOL_QWEN_HELPER_PATH: "/fixture/qwen.py",
+      BALABOL_QWEN_MODEL: "/fixture/model"
+    })
+  )
+  expect(config.recognition).toEqual({
+    provider: "qwen3-asr",
+    executable: "/fixture/python",
+    helperPath: "/fixture/qwen.py",
+    modelPath: "/fixture/model"
+  })
+  expect(config.activity?.provider).toBe("silero")
+  expect((await Effect.runPromise(parseConfig({}))).recognition?.provider).toBe("fake")
+  for (const environment of [
+    { BALABOL_RECOGNITION_PROVIDER: "whisper" },
+    { BALABOL_QWEN_PYTHON_PATH: "" },
+    { BALABOL_QWEN_HELPER_PATH: "" },
+    { BALABOL_QWEN_MODEL: "" }
+  ])
+    expect(await Effect.runPromise(parseConfig(environment).pipe(Effect.isFailure))).toBe(true)
+})

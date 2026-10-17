@@ -68,3 +68,7 @@ src/conversation/response-terminal-core/generated/
 
 # Reproducible local Quint checker output
 _apalache-out/
+
+# Local Python speech tooling
+__pycache__/
+*.pyc

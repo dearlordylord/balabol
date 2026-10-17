@@ -1,12 +1,12 @@
 # Balabol
 
 **Purpose:** Describe the repository and its current development state.
-**Status:** Durable conversation with opt-in subscription Sol/Luna, local whisper.cpp recognition and Apple speech synthesis; physical-device qualification remains separate.
+**Status:** Durable conversation with opt-in subscription Sol/Luna, local Qwen3-ASR recognition and Apple speech synthesis; physical-device qualification remains separate.
 **Authority:** Product requirements live in the published prototype issue; engineering guidance lives in AGENTS.md.
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
 
-An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; recognition can opt into pinned local whisper.cpp and synthesis into installed Apple voices. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
+An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; recognition can opt into pinned local Qwen3-ASR and synthesis into installed Apple voices. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
 
 - [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
 - [Synchronized local specification](docs/product/prototype-spec.md)
@@ -70,7 +70,7 @@ With local resources provisioned and the ChatGPT subscription connected, run:
 pnpm dev:voice --real
 ```
 
-This selects subscription Sol replies, subscription Luna summaries, local whisper.cpp recognition and installed Apple synthesis. Explicit provider environment overrides still apply. The launcher builds the native speech helper and backend before starting private services; it does not download weights or install voices. `pnpm dev:voice --real --check` remains read-only. Default `pnpm dev:voice` retains deterministic fixtures.
+This selects subscription Sol replies, subscription Luna summaries, local Qwen3-ASR recognition and installed Apple synthesis. Explicit provider environment overrides still apply. The launcher builds the native speech helper and backend before starting private services; it does not download weights or install voices. `pnpm dev:voice --real --check` remains read-only. Default `pnpm dev:voice` retains deterministic fixtures.
 
 Apple synthesis requires macOS and Xcode Command Line Tools. `pnpm build:speech` builds the Swift 6 helper outside the checkout at `~/.local/share/balabol/tools/apple-speech/apple-speech`. `BALABOL_APPLE_SPEECH_EXECUTABLE` and `BALABOL_FFMPEG_EXECUTABLE` override its executable and ffmpeg paths. `BALABOL_SYNTHESIS_PROVIDER=apple` selects synthesis independently. Startup enumerates actual installed voices and rejects missing configured languages. Apple voice locale is separate from detected input language and requested response language. Private rendering runs use local Apple language recognition at writing-system transitions to choose among configured installed voices, so a Russian quotation inside French speech is not silently omitted. The plan must conserve the complete supplied text. These rendering estimates never become model attribution or saved language spans; ambiguous same-script text retains the requested voice. Unresolvable non-Latin runs fail explicitly rather than reporting successful silence; ambiguous Latin names retain the requested voice. No voice outside the configured catalog is selected.
 
@@ -82,19 +82,21 @@ Voice owns the overall response/playback deadline: fixtures default to 30 second
 
 Run `pnpm prepare:vad` once before building the iPhone app or using real voice. It provisions the pinned Silero **v6.2.3** ONNX artifact outside the checkout at `~/.local/share/balabol/models/vad/silero-v6.2.3.onnx`. `pnpm prepare:vad --check` verifies it without downloads. Size is 2,327,524 bytes; SHA-256 is `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`. The source revision and complete artifact contract live in `src/voice/activity-model.json`, which is also bundled with the iOS model. The build verifies and copies this model into the app; weights are never committed.
 
-`--real` selects `BALABOL_ACTIVITY_PROVIDER=silero`. Direct whisper configuration also defaults to Silero. `BALABOL_VAD_MODEL` overrides the external model path while retaining exact checks. Missing/invalid resources fail explicitly; no energy-only fallback is used. The explicit `fake` provider is for deterministic development Layers. The pinned runtime is ONNX Runtime **1.24.2** on Node and iOS. Native inference runs outside the realtime audio callback with bounded buffering and stale-result fencing. Effect owns the backend's isolated inference process, including deadlines, termination and reaping; a failed frame is not retried, and a later request can acquire a replacement worker. Neither classifier receives conversation context or tools.
+`--real` selects `BALABOL_ACTIVITY_PROVIDER=silero`. Direct Qwen3-ASR configuration also defaults to Silero. `BALABOL_VAD_MODEL` overrides the external model path while retaining exact checks. Missing/invalid resources fail explicitly; no energy-only fallback is used. The explicit `fake` provider is for deterministic development Layers. The pinned runtime is ONNX Runtime **1.24.2** on Node and iOS. Native inference runs outside the realtime audio callback with bounded buffering and stale-result fencing. Effect owns the backend's isolated inference process, including deadlines, termination and reaping; a failed frame is not retried, and a later request can acquire a replacement worker. Neither classifier receives conversation context or tools.
 
 ## Enable local recognition
 
-The initial local recognition adapter uses whisper.cpp **1.9.5** and multilingual **small** weights. Setup never downloads or installs them. Provision them explicitly using the reviewed bounded runbook in [issue #27](https://github.com/dearlordylord/balabol/issues/27). The default executable is `/opt/homebrew/bin/whisper-cli`; the model is `~/.local/share/balabol/models/whisper/ggml-small.bin`. Startup requires exactly 487,601,967 bytes and SHA-256 `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`, from `ggerganov/whisper.cpp` at revision `5359861c739e955e79d9a303bcbc70fb988958b1`.
+Provision the pinned runtime and model explicitly with `pnpm prepare:qwen` (requires `uv` and Python 3.12; downloads approximately 2.46 GB of weights outside Git). `pnpm prepare:qwen --check` verifies package version and every artifact hash without downloading. Ordinary voice startup never installs dependencies or downloads weights.
+
+The local recognition adapter uses **Qwen3-ASR 1.7B** through **mlx-audio 0.5.9** on Apple Silicon. Model files and the isolated Python environment live outside Git. The default runtime is `~/.local/share/balabol/tools/qwen-asr/.venv/bin/python`; the default model directory is `~/.local/share/balabol/models/qwen3-asr-1.7b`. `--real` selects this adapter; the ordinary launcher still selects deterministic fixtures.
 
 ```sh
-BALABOL_RECOGNITION_PROVIDER=whisper pnpm dev:voice
+BALABOL_RECOGNITION_PROVIDER=qwen3-asr pnpm dev:voice
 ```
 
-`BALABOL_WHISPER_EXECUTABLE` and `BALABOL_WHISPER_MODEL` override the local paths, retaining the exact version and weight checks. Unset the provider or use `fake` for deterministic fixtures. Missing or mismatched resources fail startup; there is no fake fallback. Recognition remains independent of the answer, summary and synthesis selections.
+`BALABOL_QWEN_PYTHON_PATH`, `BALABOL_QWEN_HELPER_PATH` and `BALABOL_QWEN_MODEL` override the local runtime, helper and model paths. Startup validates the installed engine and pinned model revision before accepting audio. Missing or mismatched resources fail explicitly; there is no fake fallback. Recognition remains independent of the answer, summary and synthesis selections. Whisper and its caption-specific text filtering are removed rather than retained as fallback behavior.
 
-Each supplied mono PCM16LE 16 kHz recognition chunk (at most 15 seconds) gets one serialized native process. The 30-second deadline includes queueing, model initialization and inference; cancellation terminates and reaps that process and removes private temporary audio. The next chunk starts a fresh process after failure; a failed chunk is never retried automatically. This has a per-chunk model-load cost and does not retain a warm resident model. Whisper process diagnostics and recognition text are not written to the technical journals.
+Each supplied mono PCM16LE 16 kHz recognition chunk (at most 15 seconds) gets one serialized native process. The 30-second deadline includes queueing, model initialization and inference; cancellation terminates and reaps that process and removes private temporary audio. The next chunk starts a fresh process after failure; a failed chunk is never retried automatically. This has a per-chunk model-load cost and does not retain a warm resident model. Native process diagnostics and recognition text are not written to the technical journals. Supported languages do not establish mixed-language accuracy: local synthetic qualification and physical microphone acceptance remain separate evidence.
 
 Debug iPhone builds and `pnpm dev:voice --real` retain bounded local technical journals for interruption, recognition and playback attribution. The iPhone journal also records foreground/background and protected-data lock transitions. These journals contain hashed correlation IDs, timing, state and error codes, without microphone recordings, transcript text or credentials. Backend metadata lives outside the checkout at `~/.local/share/balabol/diagnostics/backend.json`; the iPhone journal lives in its app cache. `BALABOL_VOICE_DIAGNOSTICS=0` opts out; release iPhone builds keep diagnostics disabled.
 

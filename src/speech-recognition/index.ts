@@ -1,2 +1,2 @@
 export * from "./provider.ts"
-export * from "./whisper.ts"
+export * from "./qwen.ts"

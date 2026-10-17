@@ -2,28 +2,22 @@ import { Effect, Layer, Stream } from "effect"
 import { expect, it } from "vitest"
 import { AnswerGeneration } from "../src/answer-generation/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
-import { whisperRecognitionLayer } from "../src/speech-recognition/index.ts"
+import { qwenRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice } from "../src/voice/index.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { withVoiceOutput, classifiedVoiceInput } from "./voice-output-fixture.ts"
 
-it("discards non-speech caption finals without memory or answers while preserving separately segmented speech", async () => {
+it("discards empty recognition finals without memory or answers while preserving subsequent speech", async () => {
   const input = await Effect.runPromise(classifiedVoiceInput())
   let transcriptions = 0
   let answerCalls = 0
-  const results = [["[BLANK AUDIO]"], ["(keyboard tapping)"], ["Bonjour ", "(keyboard tapping)", "Hello"]]
-  const recognition = whisperRecognitionLayer(
-    { provider: "whisper", executable: "fixture", modelPath: "fixture.bin" },
+  const results = ["", "  ", "Bonjour Hello"]
+  const recognition = qwenRecognitionLayer(
+    { provider: "qwen3-asr", helperPath: "fixture.py", executable: "fixture", modelPath: "fixture.bin" },
     {
       prepare: () => Effect.void,
-      transcribe: () =>
-        Effect.sync(() =>
-          JSON.stringify({
-            result: { language: "fr" },
-            transcription: (results[transcriptions++] ?? []).map((text) => ({ text }))
-          })
-        )
+      transcribe: () => Effect.sync(() => JSON.stringify({ language: "fr", text: results[transcriptions++] ?? "" }))
     }
   )
   const answer = Layer.succeed(AnswerGeneration, {

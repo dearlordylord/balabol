@@ -5,12 +5,17 @@ import { expect } from "vitest"
 import {
   SpeechRecognition,
   RecognitionFailed,
-  whisperRecognitionLayer,
+  qwenRecognitionLayer,
   type RecognitionRequest,
-  type WhisperNative,
-  type WhisperSettings
+  type QwenNative,
+  type QwenSettings
 } from "../src/speech-recognition/index.ts"
-const settings: WhisperSettings = { provider: "whisper", executable: "fixture", modelPath: "fixture.bin" }
+const settings: QwenSettings = {
+  provider: "qwen3-asr",
+  helperPath: "fixture.py",
+  executable: "fixture",
+  modelPath: "fixture.bin"
+}
 const request: RecognitionRequest = {
   utteranceId: "11111111-1111-4111-8111-111111111111",
   audio: {
@@ -22,9 +27,8 @@ const request: RecognitionRequest = {
   },
   allowedLanguages: ["ru", "fr", "en"]
 }
-const payload = (language: string | null, text: string) =>
-  JSON.stringify({ result: { language }, transcription: [{ text }] })
-const fixture = (transcribe: WhisperNative["transcribe"]): WhisperNative => ({ prepare: () => Effect.void, transcribe })
+const payload = (language: string | null, text: string) => JSON.stringify({ language, text })
+const fixture = (transcribe: QwenNative["transcribe"]): QwenNative => ({ prepare: () => Effect.void, transcribe })
 const collect = (provider: SpeechRecognition["Service"], input = request) =>
   Stream.runCollect(provider.recognize(input))
 it.effect("encodes bounded PCM as mono 16kHz WAV and preserves mixed text with honest whole-result language", () =>
@@ -36,7 +40,7 @@ it.effect("encodes bounded PCM as mono 16kHz WAV and preserves mixed text with h
     })
     const output = yield* Effect.gen(function* () {
       return yield* collect(yield* SpeechRecognition)
-    }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)))
+    }).pipe(Effect.provide(qwenRecognitionLayer(settings, native)))
     expect(output).toEqual([
       {
         kind: "Final",
@@ -89,7 +93,7 @@ it.effect("fails malformed results, unknown languages and worker errors then all
         expect(events[0]).toMatchObject({ kind: "Final", detectedLanguage: language, spans: [] })
       }
       expect((yield* collect(provider).pipe(Effect.result))._tag).toBe("Failure")
-    }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)))
+    }).pipe(Effect.provide(qwenRecognitionLayer(settings, native)))
   })
 )
 it.effect("rejects invalid audio and unsupported configured languages; empty input needs no worker", () =>
@@ -107,7 +111,7 @@ it.effect("rejects invalid audio and unsupported configured languages; empty inp
       expect(
         yield* collect(provider, { ...request, audio: { ...request.audio, sampleFrames: 0, bytes: new Uint8Array() } })
       ).toMatchObject([{ text: "", detectedLanguage: null }])
-    }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)))
+    }).pipe(Effect.provide(qwenRecognitionLayer(settings, native)))
   })
 )
 it.effect("deadline and cancellation release the serialized worker and suppress late results", () =>
@@ -138,7 +142,7 @@ it.effect("deadline and cancellation release the serialized worker and suppress 
       expect(released).toBe(true)
       yield* Deferred.succeed(late, payload("en", "Late"))
       expect(yield* collect(provider)).toMatchObject([{ text: "Recovered" }])
-    }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)))
+    }).pipe(Effect.provide(qwenRecognitionLayer(settings, native)))
   })
 )
 it.effect("startup failure is typed and never substitutes fake recognition", () =>
@@ -149,83 +153,21 @@ it.effect("startup failure is typed and never substitutes fake recognition", () 
     }
     const result = yield* Effect.gen(function* () {
       return yield* SpeechRecognition
-    }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)), Effect.result)
+    }).pipe(Effect.provide(qwenRecognitionLayer(settings, native)), Effect.result)
     expect(result._tag).toBe("Failure")
-  })
-)
-
-it.effect("discards only observed standalone non-speech caption segments and retains actual speech", () =>
-  Effect.gen(function* () {
-    const cases = [
-      { segments: [" [BLANK_AUDIO] "], expected: "" },
-      { segments: ["[BLANK AUDIO]"], expected: "" },
-      { segments: [" (keyboard tapping) "], expected: "" },
-      { segments: ["[BLANK_AUDIO] (keyboard tapping)"], expected: "" },
-      { segments: ["Bonjour ", "(keyboard tapping)", " Hello Привет"], expected: "Bonjour  Hello Привет" },
-      { segments: ["keyboard tapping"], expected: "keyboard tapping" },
-      {
-        segments: ["Bonjour, je voudrais apprendre le français. Привет. Hello."],
-        expected: "Bonjour, je voudrais apprendre le français. Привет. Hello."
-      },
-      {
-        segments: ["I said speaking in foreign language literally."],
-        expected: "I said speaking in foreign language literally."
-      },
-      {
-        segments: ["The label is (speaking in foreign language)."],
-        expected: "The label is (speaking in foreign language)."
-      },
-      { segments: ["Please say [BLANK_AUDIO] literally."], expected: "Please say [BLANK_AUDIO] literally." },
-      {
-        segments: ["This is (keyboard tapping) as a quoted label."],
-        expected: "This is (keyboard tapping) as a quoted label."
-      },
-      {
-        segments: ["(this is a genuine parenthetical sentence)"],
-        expected: "(this is a genuine parenthetical sentence)"
-      }
-    ]
-    for (const item of cases) {
-      const native = fixture(() =>
-        Effect.succeed(
-          JSON.stringify({ result: { language: "en" }, transcription: item.segments.map((text) => ({ text })) })
-        )
-      )
-      const events = yield* Effect.gen(function* () {
-        return yield* collect(yield* SpeechRecognition)
-      }).pipe(Effect.provide(whisperRecognitionLayer(settings, native)))
-      expect(events).toEqual([
-        {
-          kind: "Final",
-          utteranceId: request.utteranceId,
-          text: item.expected,
-          spans: [],
-          detectedLanguage: item.expected.length === 0 ? null : "en"
-        }
-      ])
-    }
   })
 )
 
 it.effect("preserves typed failure stage without inspecting or exposing provider messages", () =>
   Effect.gen(function* () {
-    const cases: { native: WhisperNative; input: RecognitionRequest; reason: string }[] = [
+    const cases: { native: QwenNative; input: RecognitionRequest; reason: string }[] = [
       { native: fixture(() => Effect.succeed("{")), input: request, reason: "Json" },
-      { native: fixture(() => Effect.succeed('{"result":{},"transcription":[]}')), input: request, reason: "Result" },
+      { native: fixture(() => Effect.succeed('{"text":""}')), input: request, reason: "Result" },
       { native: fixture(() => Effect.succeed(payload("de", "Guten Tag"))), input: request, reason: "DetectedLanguage" },
       {
         native: fixture(() => Effect.succeed(payload("en", "unused"))),
         input: { ...request, allowedLanguages: ["xx"] },
         reason: "Request"
-      },
-      {
-        native: fixture(() =>
-          Effect.succeed(
-            JSON.stringify({ result: { language: "en" }, transcription: [{ text: "x".repeat(100000) }, { text: "y" }] })
-          )
-        ),
-        input: request,
-        reason: "Final"
       },
       {
         native: fixture(() =>
@@ -248,32 +190,43 @@ it.effect("preserves typed failure stage without inspecting or exposing provider
     for (const item of cases) {
       const error = yield* Effect.gen(function* () {
         return yield* collect(yield* SpeechRecognition, item.input).pipe(Effect.flip)
-      }).pipe(Effect.provide(whisperRecognitionLayer(settings, item.native)))
+      }).pipe(Effect.provide(qwenRecognitionLayer(settings, item.native)))
       expect(error._tag).toBe("RecognitionFailed")
       expect(error.reason ?? "Other").toBe(item.reason)
     }
   })
 )
 
-it.effect("rejects foreign-speech captions instead of saving fabricated or incomplete speech", () =>
+it.effect("preserves model text without provider-specific caption rewriting and bounds native JSON", () =>
   Effect.gen(function* () {
     for (const text of [
+      "Bonjour, je voudrais apprendre le français. Теперь по-русски. Hello.",
       "(speaking in foreign language)",
-      "(speaking in foreign language) Затем продолжение.",
-      "[speaking in a foreign language]"
+      "[BLANK_AUDIO]",
+      "こんにちは"
     ]) {
-      const error = yield* Effect.gen(function* () {
-        return yield* collect(yield* SpeechRecognition).pipe(Effect.flip)
+      const events = yield* Effect.gen(function* () {
+        return yield* collect(yield* SpeechRecognition, { ...request, allowedLanguages: ["ru", "fr", "en", "ja"] })
       }).pipe(
         Effect.provide(
-          whisperRecognitionLayer(
+          qwenRecognitionLayer(
             settings,
-            fixture(() => Effect.succeed(payload("ru", text)))
+            fixture(() => Effect.succeed(payload("ja", text)))
           )
         )
       )
-      expect(error._tag).toBe("RecognitionFailed")
-      expect(error.reason).toBe("UntranscribedSpeech")
+      expect(events).toMatchObject([{ text, spans: [], detectedLanguage: "ja" }])
     }
+    const failure = yield* Effect.gen(function* () {
+      return yield* collect(yield* SpeechRecognition).pipe(Effect.flip)
+    }).pipe(
+      Effect.provide(
+        qwenRecognitionLayer(
+          settings,
+          fixture(() => Effect.succeed(" ".repeat(1048577)))
+        )
+      )
+    )
+    expect(failure.reason).toBe("Json")
   })
 )

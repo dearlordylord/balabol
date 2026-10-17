@@ -1,21 +1,18 @@
-import { createHash } from "node:crypto"
-import { createReadStream } from "node:fs"
-import { chmod, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, open, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, Schema } from "effect"
 import type { Scope } from "effect"
 import { RecognitionFailed } from "./provider.ts"
-import { runWhisperProcess } from "./whisper-process.ts"
+import { runQwenProcess } from "./qwen-process.ts"
 
-export const WhisperSettings = Schema.Struct({
-  provider: Schema.Literals(["fake", "whisper"]),
+export const QwenSettings = Schema.Struct({
+  provider: Schema.Literals(["fake", "qwen3-asr"]),
   executable: Schema.NonEmptyString,
+  helperPath: Schema.NonEmptyString,
   modelPath: Schema.NonEmptyString
 })
-export type WhisperSettings = typeof WhisperSettings.Type
-export const whisperModelBytes = 487601967
-export const whisperModelSha256 = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+export type QwenSettings = typeof QwenSettings.Type
 const maximumResultBytes = 1024 * 1024
 const privateDirectoryMode = 0o700
 const privateFileMode = 0o600
@@ -23,28 +20,17 @@ const failed = (message: string) => new RecognitionFailed({ message, reason: "Fi
 const io = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({ try: operation, catch: () => failed("Local recognition file operation failed") })
 // Ports describe Effect-owned resources; byte/JSON boundaries are parsed by the adapter.
-export interface WhisperNative {
-  readonly prepare: (settings: WhisperSettings) => Effect.Effect<void, RecognitionFailed>
+export interface QwenNative {
+  readonly prepare: (settings: QwenSettings) => Effect.Effect<void, RecognitionFailed>
   readonly transcribe: (
-    settings: WhisperSettings,
+    settings: QwenSettings,
     wav: Uint8Array
   ) => Effect.Effect<string, RecognitionFailed, Scope.Scope>
 }
-const verifyModel = (path: string) =>
-  Effect.tryPromise({
-    try: async (signal) => {
-      const metadata = await stat(path)
-      if (!metadata.isFile() || metadata.size !== whisperModelBytes) return false
-      const hash = createHash("sha256")
-      for await (const chunk of createReadStream(path, { signal })) hash.update(chunk)
-      return hash.digest("hex") === whisperModelSha256
-    },
-    catch: () => failed("Pinned local recognition model is unavailable")
-  }).pipe(
-    Effect.flatMap((valid) =>
-      valid ? Effect.void : Effect.fail(failed("Local recognition model does not match the pinned small weights"))
-    )
-  )
+const Handshake = Schema.Struct({
+  version: Schema.Literal("0.5.9"),
+  modelRevision: Schema.Literal("a8379a2e2f9e313c9292cdf1af4055ab56d50d55")
+})
 const readResult = (path: string) =>
   Effect.gen(function* () {
     const file = yield* Effect.acquireRelease(
@@ -59,16 +45,28 @@ const readResult = (path: string) =>
       catch: () => failed("Invalid UTF-8 recognition result")
     })
   })
-export const whisperNative: WhisperNative = {
+export const qwenNative: QwenNative = {
   prepare: (settings) =>
     Effect.gen(function* () {
-      const version = yield* runWhisperProcess(settings.executable, ["--version"])
-      if (version.trim() !== "whisper.cpp version: 1.9.5")
-        return yield* new RecognitionFailed({
-          message: "Local recognition requires whisper.cpp 1.9.5",
-          reason: "Process"
-        })
-      yield* verifyModel(settings.modelPath)
+      const output = yield* runQwenProcess(settings.executable, [
+        settings.helperPath,
+        "--check",
+        "--model",
+        settings.modelPath
+      ])
+      const raw = yield* Effect.try({
+        try: (): unknown => JSON.parse(output),
+        catch: () => new RecognitionFailed({ message: "Invalid local recognition readiness JSON", reason: "Json" })
+      })
+      yield* Schema.decodeUnknownEffect(Handshake)(raw).pipe(
+        Effect.mapError(
+          () =>
+            new RecognitionFailed({
+              message: "Local recognition requires the pinned Qwen model and MLX Audio 0.5.9",
+              reason: "Result"
+            })
+        )
+      )
     }),
   transcribe: (settings, wav) =>
     Effect.gen(function* () {
@@ -81,17 +79,14 @@ export const whisperNative: WhisperNative = {
       const output = join(directory, "result")
       yield* io(() => writeFile(input, wav, { mode: privateFileMode }))
       yield* io(() => writeFile(`${output}.json`, "", { mode: privateFileMode }))
-      yield* runWhisperProcess(settings.executable, [
-        "-m",
+      yield* runQwenProcess(settings.executable, [
+        settings.helperPath,
+        "--model",
         settings.modelPath,
-        "-f",
+        "--input",
         input,
-        "-l",
-        "auto",
-        "--suppress-nst",
-        "-oj",
-        "-of",
-        output
+        "--output",
+        `${output}.json`
       ])
       return yield* readResult(`${output}.json`)
     })

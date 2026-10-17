@@ -43,7 +43,7 @@ const stop = (handle: ReturnType<typeof start>) =>
       yield* Effect.promise(() => handle.exited).pipe(Effect.timeout(killAcknowledgementMillis), Effect.orDie)
     }
   })
-export const runWhisperProcess = (executable: string, args: readonly string[]) =>
+export const runQwenProcess = (executable: string, args: readonly string[]) =>
   Effect.gen(function* () {
     const handle = yield* Effect.acquireRelease(Effect.try({ try: () => start(executable, args), catch: failed }), stop)
     const code = yield* Effect.promise(() => handle.closed)

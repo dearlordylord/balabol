@@ -19,7 +19,7 @@ export const providerEnvironment = (args, environment) => {
     ...environment,
     BALABOL_ANSWER_PROVIDER: environment.BALABOL_ANSWER_PROVIDER ?? "subscription",
     BALABOL_SUMMARY_PROVIDER: environment.BALABOL_SUMMARY_PROVIDER ?? "subscription",
-    BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "whisper",
+    BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "qwen3-asr",
     BALABOL_SYNTHESIS_PROVIDER: environment.BALABOL_SYNTHESIS_PROVIDER ?? "apple",
     BALABOL_ACTIVITY_PROVIDER: environment.BALABOL_ACTIVITY_PROVIDER ?? "silero",
     BALABOL_VOICE_DIAGNOSTICS: environment.BALABOL_VOICE_DIAGNOSTICS ?? "1",
@@ -32,22 +32,31 @@ export const providerEnvironment = (args, environment) => {
 };
 
 export const providerDescription = (environment) =>
-  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}, speech activity=${environment.BALABOL_ACTIVITY_PROVIDER ?? (environment.BALABOL_RECOGNITION_PROVIDER === "whisper" ? "silero" : "fake")}`;
+  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}, speech activity=${environment.BALABOL_ACTIVITY_PROVIDER ?? (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr" ? "silero" : "fake")}`;
 
 // Existence/permissions only: provider acquisition owns engine and weight validation.
 export const localRequirements = (environment, includeHelper = true) => {
   const requirements = [];
-  if (environment.BALABOL_RECOGNITION_PROVIDER === "whisper") {
+  if (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr") {
     requirements.push(
       {
-        label: "whisper executable",
-        path: environment.BALABOL_WHISPER_EXECUTABLE ?? "/opt/homebrew/bin/whisper-cli",
+        label: "Qwen Python runtime",
+        path:
+          environment.BALABOL_QWEN_PYTHON_PATH ??
+          join(homedir(), ".local/share/balabol/tools/qwen-asr/.venv/bin/python"),
         mode: constants.X_OK,
       },
       {
-        label: "whisper weights",
-        path:
-          environment.BALABOL_WHISPER_MODEL ?? join(homedir(), ".local/share/balabol/models/whisper/ggml-small.bin"),
+        label: "Qwen helper",
+        path: environment.BALABOL_QWEN_HELPER_PATH ?? join(root, "scripts/qwen-asr.py"),
+        mode: constants.R_OK,
+      },
+      {
+        label: "Qwen model configuration",
+        path: join(
+          environment.BALABOL_QWEN_MODEL ?? join(homedir(), ".local/share/balabol/models/qwen3-asr-1.7b"),
+          "config.json",
+        ),
         mode: constants.R_OK,
       },
     );
@@ -69,7 +78,7 @@ export const localRequirements = (environment, includeHelper = true) => {
   }
   if (
     (environment.BALABOL_ACTIVITY_PROVIDER ??
-      (environment.BALABOL_RECOGNITION_PROVIDER === "whisper" ? "silero" : "fake")) === "silero"
+      (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr" ? "silero" : "fake")) === "silero"
   )
     requirements.push({
       label: "Silero VAD weights (run pnpm prepare:vad)",
@@ -162,7 +171,7 @@ export const ready = async (url, alive) => {
 export const main = async (args) => {
   if (args.includes("--help")) {
     console.log(
-      "pnpm dev:voice [--real] [--check]\nDefaults to fake providers. --real selects subscription Sol/Luna, local whisper and Apple speech; explicit BALABOL_* overrides win. Private Tailscale media/control routes only. --check checks prerequisites without compiling, starting services or inference.",
+      "pnpm dev:voice [--real] [--check]\nDefaults to fake providers. --real selects subscription Sol/Luna, local Qwen3-ASR and Apple speech; explicit BALABOL_* overrides win. Private Tailscale media/control routes only. --check checks prerequisites without compiling, starting services or inference.",
     );
     return;
   }

@@ -30,7 +30,7 @@ import {
   configurableFakeSummaryLayer,
   subscriptionSummaryLayer
 } from "../summary-generation/index.ts"
-import { fakeRecognitionLayer, whisperRecognitionLayer, WhisperSettings } from "../speech-recognition/index.ts"
+import { fakeRecognitionLayer, qwenRecognitionLayer, QwenSettings } from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer, appleSynthesisLayer, AppleSynthesisSettings } from "../speech-synthesis/index.ts"
 import {
   LiveKitSettings,
@@ -117,7 +117,7 @@ export const ServerConfig = Schema.Struct({
   voice: Schema.optionalKey(LiveKitSettings),
   voiceDiagnostics: Schema.optionalKey(Schema.Boolean),
   voiceLanguages: Schema.optionalKey(LanguageTags),
-  recognition: Schema.optionalKey(WhisperSettings),
+  recognition: Schema.optionalKey(QwenSettings),
   activity: Schema.optionalKey(SpeechActivitySettings),
   synthesis: Schema.optionalKey(AppleSynthesisSettings),
   voiceOutput: Schema.optionalKey(VoiceOutputSettings),
@@ -196,7 +196,7 @@ const activitySelection = (environment: NodeJS.ProcessEnv) => ({
   activity: {
     provider:
       environment.BALABOL_ACTIVITY_PROVIDER ??
-      (environment.BALABOL_RECOGNITION_PROVIDER === "whisper" ? "silero" : "fake"),
+      (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr" ? "silero" : "fake"),
     modelPath:
       environment.BALABOL_VAD_MODEL ??
       join(homedir(), ".local", "share", "balabol", "models", "vad", speechActivityModel.filename)
@@ -205,10 +205,12 @@ const activitySelection = (environment: NodeJS.ProcessEnv) => ({
 const speechSelection = (environment: NodeJS.ProcessEnv) => ({
   recognition: {
     provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
-    executable: environment.BALABOL_WHISPER_EXECUTABLE ?? "/opt/homebrew/bin/whisper-cli",
+    executable:
+      environment.BALABOL_QWEN_PYTHON_PATH ??
+      join(homedir(), ".local", "share", "balabol", "tools", "qwen-asr", ".venv", "bin", "python"),
+    helperPath: environment.BALABOL_QWEN_HELPER_PATH ?? join(process.cwd(), "scripts", "qwen-asr.py"),
     modelPath:
-      environment.BALABOL_WHISPER_MODEL ??
-      join(homedir(), ".local", "share", "balabol", "models", "whisper", "ggml-small.bin")
+      environment.BALABOL_QWEN_MODEL ?? join(homedir(), ".local", "share", "balabol", "models", "qwen3-asr-1.7b")
   },
   synthesis: {
     provider: environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake",
@@ -244,7 +246,7 @@ const selectedSynthesis = (config: ServerConfig) =>
     ? appleSynthesisLayer(config.synthesis, config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages)
     : fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })
 const selectedSpeechActivity = (config: ServerConfig) => {
-  const provider = config.activity?.provider ?? (config.recognition?.provider === "whisper" ? "silero" : "fake")
+  const provider = config.activity?.provider ?? (config.recognition?.provider === "qwen3-asr" ? "silero" : "fake")
   return provider === "silero"
     ? sileroSpeechActivityLayer({
         modelPath:
@@ -295,7 +297,7 @@ export const serverLayer = (config: ServerConfig) => {
       })
     ),
     Layer.provide(
-      config.recognition?.provider === "whisper" ? whisperRecognitionLayer(config.recognition) : fakeRecognitionLayer()
+      config.recognition?.provider === "qwen3-asr" ? qwenRecognitionLayer(config.recognition) : fakeRecognitionLayer()
     ),
     Layer.provide(selectedSynthesis(config)),
     Layer.provide(selectedSpeechActivity(config)),

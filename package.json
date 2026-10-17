@@ -23,7 +23,7 @@
     "test:fast": "node scripts/quality/cli.mjs behavior",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "test:coverage": "node scripts/quality/cli.mjs behavior",
-    "test:harness": "node --test scripts/quality/cli.test.mjs scripts/dev-voice.test.mjs scripts/prepare-vad.test.mjs scripts/bend/*.test.mjs",
+    "test:harness": "node --test scripts/quality/cli.test.mjs scripts/dev-voice.test.mjs scripts/prepare-vad.test.mjs scripts/bend/*.test.mjs && python3 scripts/qwen-asr.test.py",
     "check:bend": "node scripts/bend/check.mjs",
     "lint": "node scripts/quality/cli.mjs lint && node scripts/quality/cli.mjs duplication",
     "circular": "node scripts/quality/cli.mjs architecture && node scripts/quality/cli.mjs cycles",
@@ -34,7 +34,8 @@
     "dev:voice": "node scripts/dev-voice.mjs",
     "subscription": "pnpm build && node dist/bootstrap/subscription-main.js",
     "build:speech": "node scripts/build-apple-speech.mjs",
-    "prepare:vad": "node scripts/prepare-vad.mjs"
+    "prepare:vad": "node scripts/prepare-vad.mjs",
+    "prepare:qwen": "python3 scripts/prepare-qwen.py"
   },
   "lint-staged": {
     "*.{md,json,yaml,yml}": "prettier --write",
