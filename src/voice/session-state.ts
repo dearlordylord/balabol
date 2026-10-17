@@ -1,3 +1,5 @@
+import type { RecognitionState } from "./recognition-state.ts"
+import { initialRecognition, readyFinal } from "./recognition-transition.ts"
 import type { Message } from "../conversation/index.ts"
 import type { LanguageSpan } from "../language/index.ts"
 import type { PendingVoiceInput, VoiceEvent, VoiceOutput, VoiceSnapshot } from "./contracts.ts"
@@ -11,12 +13,6 @@ export interface SpeechPayload {
   readonly text: string
   readonly languageSpans: readonly LanguageSpan[]
   readonly detectedLanguage: string | null
-}
-export interface ProvisionalFinal {
-  readonly input: SpeechPayload
-  readonly generation: number
-  readonly fenceId: string
-  readonly sourceSequence: number
 }
 export type SpeechFenceState =
   | { readonly fenceId: string; readonly generation: number; readonly sequence: number; readonly status: "Pending" }
@@ -45,7 +41,8 @@ export interface SessionState {
   readonly classification: { readonly operation: number; readonly generation: number } | undefined
   readonly retiredTracks: readonly string[]
   readonly speechFences: readonly SpeechFenceState[]
-  readonly provisionalFinals: readonly ProvisionalFinal[]
+  readonly recognition: RecognitionState
+  readonly recognitionLanguages: readonly string[]
   readonly track: string | undefined
   readonly joinDeadlineAt: number
   readonly controlDeadlineAt: number
@@ -63,7 +60,13 @@ export interface SessionState {
 export const sessionJoinMillis = 10000
 export const sessionControlMillis = 30000
 export const sessionMaximumPending = 2
-export const initialSession = (id: string, incarnation: string, muted: boolean, now: number): SessionState => ({
+export const initialSession = (
+  id: string,
+  incarnation: string,
+  muted: boolean,
+  now: number,
+  recognitionLanguages: readonly string[]
+): SessionState => ({
   id,
   incarnation,
   phase: "starting",
@@ -73,7 +76,8 @@ export const initialSession = (id: string, incarnation: string, muted: boolean, 
   classification: undefined,
   retiredTracks: [],
   speechFences: [],
-  provisionalFinals: [],
+  recognition: initialRecognition(0),
+  recognitionLanguages,
   track: undefined,
   joinDeadlineAt: now + sessionJoinMillis,
   controlDeadlineAt: now + sessionControlMillis,
@@ -88,9 +92,11 @@ export const initialSession = (id: string, incarnation: string, muted: boolean, 
   releasePending: [],
   output: null
 })
-export const pendingCount = (state: SessionState) =>
-  new Set([...state.admitting, ...state.unresolved.map((x) => x.id), ...state.provisionalFinals.map((x) => x.input.id)])
+export const pendingCount = (state: SessionState) => {
+  const ready = readyFinal(state.recognition)
+  return new Set([...state.admitting, ...state.unresolved.map((x) => x.id), ...(ready === null ? [] : [ready.turnId])])
     .size
+}
 export const sessionSnapshot = (state: SessionState, after: number): VoiceSnapshot => ({
   backendIncarnationId: state.incarnation,
   sessionId: state.id,

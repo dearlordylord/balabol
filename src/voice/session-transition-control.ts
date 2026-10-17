@@ -11,7 +11,6 @@ const mute = (state: SessionState, event: Extract<SessionEvent, { kind: "Mute" }
       muted: event.muted,
       generation: state.generation + 1,
       classification: undefined,
-      provisionalFinals: [],
       controlDeadlineAt: event.now + sessionControlMillis
     },
     { kind: "Muted", muted: event.muted }

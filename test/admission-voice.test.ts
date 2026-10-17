@@ -1,10 +1,19 @@
+import { classifiedVoiceInput } from "./voice-output-fixture.ts"
 import { Deferred, Effect, Layer } from "effect"
 import { expect, it } from "vitest"
 import { Conversation } from "../src/conversation/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
-import { Voice, VoiceAdmissions, VoiceTransport } from "../src/voice/index.ts"
+import {
+  Voice,
+  VoiceAdmissions,
+  VoiceTransport,
+  VoiceLanguageConfiguration,
+  VoiceOutputConfiguration,
+  defaultVoiceLanguageConfiguration,
+  defaultVoiceOutputSettings
+} from "../src/voice/index.ts"
 import { replyLayer } from "./reply-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
@@ -17,6 +26,7 @@ for (const boundary of ["association", "publication"] as const) {
     const fixture = Layer.effect(
       Voice,
       Effect.gen(function* () {
+        const input = yield* classifiedVoiceInput()
         const entered = yield* Deferred.make<void>()
         const release = yield* Deferred.make<void>()
         const checkpoint = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
@@ -33,10 +43,13 @@ for (const boundary of ["association", "publication"] as const) {
                 .pipe(Effect.tap(() => (input.sequence > 1 ? Deferred.succeed(fenced, undefined) : Effect.void)))
           })
         )
-        const voice = Voice.layer.pipe(
+        const voice = Voice.configuredLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
               controlled,
+              input.layer,
+              Layer.succeed(VoiceLanguageConfiguration, defaultVoiceLanguageConfiguration),
+              Layer.succeed(VoiceOutputConfiguration, defaultVoiceOutputSettings),
               fakeSynthesisLayer(),
               fakeRecognitionLayer({
                 languages: ["ru", "fr", "en"],
@@ -74,9 +87,9 @@ for (const boundary of ["association", "publication"] as const) {
           const sessions = yield* Voice
           const durable = yield* Conversation
           const join = yield* sessions.start(startVoiceRequest())
-          yield* transport.segment
+          yield* input.segment(transport)
           yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"))
-          for (let index = 0; index < 3; index++) yield* transport.send(transport.audio(1200))
+          for (let index = 0; index < 3; index++) yield* input.send(transport, transport.audio(1200))
           yield* Deferred.await(fenced).pipe(Effect.timeout("2 seconds"))
           yield* sessions.end(join.sessionId)
           yield* Deferred.succeed(release, undefined)

@@ -10,7 +10,7 @@ import { VoiceFrame, failed } from "./contracts.ts"
 import type { VoiceFailed, MediaConnection } from "./contracts.ts"
 import type { ActivityStream } from "./activity.ts"
 import { ReplyAudio } from "./output.ts"
-import { makeSessionRecognition } from "./session-recognition.ts"
+import { makeRecognitionExecutor } from "./recognition-executor.ts"
 import { makeSessionAdmissions } from "./session-admissions.ts"
 import { recordSessionEventDiagnostic } from "./session-diagnostics.ts"
 import { recordVoiceDiagnostic } from "./diagnostics.ts"
@@ -20,7 +20,7 @@ type DirectCommand = Extract<
   { kind: "ResetCapture" | "RetireOutput" | "ReleaseAdmission" | "FenceSpeech" }
 >
 type WorkCommand = Exclude<SessionCommand, DirectCommand>
-type MetadataCommand = Extract<WorkCommand, { kind: "CancelAcquisition" | "TraceEvent" }>
+type MetadataCommand = Extract<WorkCommand, { kind: "CancelAcquisition" | "TraceEvent" | "TraceRecognition" }>
 const retentionChanged = (before: SessionState, after: SessionState) =>
   before.phase !== after.phase ||
   pendingCount(before) !== pendingCount(after) ||
@@ -48,7 +48,13 @@ export const makeSessionRuntime = (
 ) =>
   Effect.gen(function* () {
     const ownerScope = yield* Scope.make()
-    let state = initialSession(identity.sessionId, deps.admissions.backendIncarnationId, muted, startedAt)
+    let state = initialSession(
+      identity.sessionId,
+      deps.admissions.backendIncarnationId,
+      muted,
+      startedAt,
+      deps.languages.allowedLanguages
+    )
     let retired = false
     let revision = 0
     let connection: MediaConnection | undefined
@@ -73,12 +79,12 @@ export const makeSessionRuntime = (
         yield* Queue.offer(mailbox, { event, ack })
         return yield* Deferred.await(ack).pipe(Effect.ensuring(Effect.sync(() => pending.delete(ack))))
       })
-    const trace = (cause: VoiceDiagnosticInput["cause"], samples?: number) =>
+    const trace = (cause: VoiceDiagnosticInput["cause"], samples?: number, generation = state.generation) =>
       recordVoiceDiagnostic(deps.diagnostics, {
         cause,
         applied: true,
         sessionId: state.id,
-        generation: state.generation,
+        generation,
         ...(samples === undefined ? {} : { sampleFrames: samples })
       })
     const admission = makeSessionAdmissions(
@@ -90,24 +96,16 @@ export const makeSessionRuntime = (
       () => state,
       () => connection
     )
-    const speech = (generation: number, fenceId: string) =>
-      post({ kind: "Speech", generation, fenceId }).pipe(
-        Effect.flatMap((next) => {
-          const fence = next.speechFences.find((item) => item.fenceId === fenceId)
-          return fence === undefined
-            ? Effect.fail(failed("InvalidInput", "Speech onset is no longer current"))
-            : Effect.succeed({ generation, fenceId, sourceSequence: fence.sequence })
-        })
-      )
-    const recognition = makeSessionRecognition(
+    const recognition = makeRecognitionExecutor(
       deps.provider,
       deps.languages.allowedLanguages,
       captureScope,
-      activity,
-      post,
-      () => state,
-      speech,
-      trace
+      (input) => post({ kind: "Recognition", input }).pipe(Effect.asVoid, Effect.ignore),
+      (job) =>
+        state.recognition.jobs.some(
+          (current) =>
+            current.operation === job.operation && current.generation === job.generation && current.status === "Running"
+        )
     )
     const report = () => {
       const fact: SessionRetention = {
@@ -140,10 +138,14 @@ export const makeSessionRuntime = (
           return Effect.sync(cancelAcquisition)
         case "TraceEvent":
           return Effect.sync(() => recordSessionEventDiagnostic(deps.diagnostics, state, command))
+        case "TraceRecognition":
+          return Effect.sync(() => trace(command.cause, command.sampleFrames, command.generation))
       }
     }
     const executeWork = (command: WorkCommand): Effect.Effect<void> => {
       switch (command.kind) {
+        case "RecognitionWork":
+          return recognition.execute(command.command)
         case "Publish":
           return fork(
             connection?.publish(command.event).pipe(Effect.timeout(datagramPublishMillis), Effect.ignore) ?? Effect.void
@@ -204,7 +206,7 @@ export const makeSessionRuntime = (
     const execute = (command: SessionCommand): Effect.Effect<void> => {
       switch (command.kind) {
         case "ResetCapture":
-          return Effect.sync(() => recognition.reset())
+          return Effect.sync(() => activity.reset())
         case "RetireOutput":
           return Effect.sync(() => {
             audio?.retire()

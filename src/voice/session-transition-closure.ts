@@ -10,7 +10,6 @@ const end = (state: SessionState, code?: string): SessionTransition => {
     phase: "closing" as const,
     generation: state.generation + 1,
     classification: undefined,
-    provisionalFinals: [],
     track: undefined,
     releasePending: ["capture", "connection", "output", "source"]
   }

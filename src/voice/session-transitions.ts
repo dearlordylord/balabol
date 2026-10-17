@@ -1,3 +1,4 @@
+import { composeRecognition, settleRecognition, transitionRecognitionInput } from "./session-transition-recognition.ts"
 import { Match } from "effect"
 import type { SessionState } from "./session-state.ts"
 import type { SessionEvent } from "./session-events.ts"
@@ -24,11 +25,10 @@ const dispatch = Match.type<SessionEvent & { readonly state: SessionState }>().p
     CaptureFailed: (input) => transitionCapture(input.state, input),
     Frame: (input) => transitionCapture(input.state, input),
     Classified: (input) => transitionCapture(input.state, input),
-    Recognition: (input) => transitionCapture(input.state, input),
+    Recognition: (input) => transitionRecognitionInput(input.state, input.input),
     Speech: (input) => transitionSpeechFence(input.state, input),
     FenceApplied: (input) => transitionSpeechFence(input.state, input),
     FenceRejected: (input) => transitionSpeechFence(input.state, input),
-    Final: (input) => transitionAdmission(input.state, input),
     Prepared: (input) => transitionAdmission(input.state, input),
     AdmissionFailed: (input) => transitionAdmission(input.state, input),
     Accepted: (input) => transitionAdmission(input.state, input),
@@ -36,5 +36,11 @@ const dispatch = Match.type<SessionEvent & { readonly state: SessionState }>().p
     Output: (input) => emit({ ...input.state, output: input.output }, { kind: "Output", output: input.output })
   })
 )
-export const transitionSession = (state: SessionState, event: SessionEvent): SessionTransition =>
-  dispatch({ ...event, state })
+export const transitionSession = (state: SessionState, event: SessionEvent): SessionTransition => {
+  const result = dispatch({ ...event, state })
+  const fenced =
+    state.generation === result.state.generation
+      ? result
+      : composeRecognition(result, { kind: "Reset", generation: result.state.generation })
+  return settleRecognition(fenced)
+}

@@ -1,4 +1,3 @@
-import { applyFinalFence } from "./session-transition-final.ts"
 import type { SessionEvent, SessionCommand } from "./session-events.ts"
 import type { SessionState, SpeechFenceState } from "./session-state.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
@@ -38,14 +37,10 @@ const matchesPending = (
   fence?.status === "Pending" && fence.generation === event.generation && fence.sequence === event.sequence
 const rejection = (state: SessionState, event: Exclude<FenceEvent, { kind: "Speech" }>): SessionTransition => {
   if (event.kind !== "FenceRejected") return unchanged(state)
-  const dropped = {
-    ...state,
-    provisionalFinals: state.provisionalFinals.filter((item) => item.fenceId !== event.fenceId)
-  }
-  if (event.generation !== state.generation || state.phase !== "active") return unchanged(dropped)
-  if (event.sequence !== state.speechRevision) return unchanged(dropped)
+  if (event.generation !== state.generation || state.phase !== "active") return unchanged(state)
+  if (event.sequence !== state.speechRevision) return unchanged(state)
   return emit(
-    { ...dropped, generation: state.generation + 1, classification: undefined, provisionalFinals: [] },
+    { ...state, generation: state.generation + 1, classification: undefined },
     { kind: "Error", utteranceId: null, code: "InvalidInput", message: event.message }
   )
 }
@@ -57,7 +52,7 @@ const settle = (state: SessionState, event: Exclude<FenceEvent, { kind: "Speech"
       ? { ...fence, status: "Applied", revision: event.revision }
       : { ...fence, status: "Rejected", message: event.message }
   const next = { ...state, speechFences: retainFence(state, settled) }
-  const result = event.kind === "FenceApplied" ? applyFinalFence(next, event.fenceId) : rejection(next, event)
+  const result = event.kind === "FenceApplied" ? unchanged(next) : rejection(next, event)
   const reset: readonly SessionCommand[] =
     result.state.generation !== state.generation ? [{ kind: "ResetCapture" }] : []
   return { state: result.state, commands: [...reset, ...result.commands] }

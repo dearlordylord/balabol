@@ -2,7 +2,7 @@ import type { SessionState } from "./session-state.ts"
 import type { SessionEvent } from "./session-events.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
-type CaptureEvent = Extract<SessionEvent, { kind: "CaptureFailed" | "Frame" | "Recognition" | "Classified" }>
+type CaptureEvent = Extract<SessionEvent, { kind: "CaptureFailed" | "Frame" | "Classified" }>
 const selectTrack = (state: SessionState, track: string) => {
   if (state.track === undefined || state.track === track)
     return { generation: state.generation, retiredTracks: state.retiredTracks }
@@ -21,7 +21,6 @@ const frame = (state: SessionState, event: Extract<SessionEvent, { kind: "Frame"
       retiredTracks: selected.retiredTracks,
       generation,
       classification: { operation: event.operation, generation },
-      provisionalFinals: changed ? [] : state.provisionalFinals,
       audioFramesReceived: state.audioFramesReceived + 1,
       sampleFramesReceived: state.sampleFramesReceived + event.samples
     },
@@ -37,7 +36,7 @@ const captureFailed = (
   if (!captureEnabled(state, event.generation)) return unchanged(state)
   if (event.operation !== null && state.classification?.operation !== event.operation) return unchanged(state)
   const result = emit(
-    { ...state, generation: state.generation + 1, classification: undefined, provisionalFinals: [] },
+    { ...state, generation: state.generation + 1, classification: undefined },
     { kind: "Error", utteranceId: null, code: event.code, message: event.message }
   )
   return { state: result.state, commands: [{ kind: "ResetCapture" }, ...result.commands] }
@@ -51,10 +50,6 @@ export const transitionCapture = (state: SessionState, event: CaptureEvent): Ses
     case "Classified":
       return state.classification?.operation === event.operation
         ? unchanged({ ...state, classification: undefined })
-        : unchanged(state)
-    case "Recognition":
-      return captureEnabled(state, event.generation)
-        ? emit(state, event.event, event.recognitionReason)
         : unchanged(state)
   }
 }

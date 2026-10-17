@@ -1,15 +1,11 @@
 import { sameDetectedLanguage } from "./contracts.ts"
 import type { SessionState } from "./session-state.ts"
 import { finalInput, replaceFinal } from "./session-state.ts"
-import { recognizeFinal } from "./session-transition-final.ts"
 import type { SessionEvent } from "./session-events.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
 const lastEventOffset = -1
-type AdmissionEvent = Extract<
-  SessionEvent,
-  { kind: "Final" | "Prepared" | "Accepted" | "AdmissionFailed" | "AdmissionFinished" }
->
+type AdmissionEvent = Extract<SessionEvent, { kind: "Prepared" | "Accepted" | "AdmissionFailed" | "AdmissionFinished" }>
 const accepted = (state: SessionState, event: Extract<SessionEvent, { kind: "Accepted" }>): SessionTransition => {
   const input = state.unresolved.find((item) => item.id === event.id)
   const receipt = event.receipt
@@ -77,8 +73,6 @@ const admissionFailed = (
 }
 export const transitionAdmission = (state: SessionState, event: AdmissionEvent): SessionTransition => {
   switch (event.kind) {
-    case "Final":
-      return recognizeFinal(state, event)
     case "Prepared":
       return prepared(state, event.input)
     case "Accepted":

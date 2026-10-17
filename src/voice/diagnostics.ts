@@ -20,6 +20,7 @@ export const VoiceDiagnosticCause = Schema.Literals([
   "captureError",
   "recognitionStarted",
   "recognitionSucceeded",
+  "recognitionDefect",
   "recognitionDiscarded",
   "sessionError"
 ])

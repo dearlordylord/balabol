@@ -1,6 +1,7 @@
+import type { RecognitionInput, RecognitionCommand } from "./recognition-events.ts"
 import type { RecognitionFailureReason } from "../speech-recognition/index.ts"
 import type { Message } from "../conversation/index.ts"
-import type { SessionEventInput, SpeechPayload } from "./session-state.ts"
+import type { SpeechPayload } from "./session-state.ts"
 import type { VoiceEvent, VoiceOutput } from "./contracts.ts"
 export type SessionEvent =
   | { readonly kind: "Activated" }
@@ -41,19 +42,7 @@ export type SessionEvent =
     }
   | { readonly kind: "Classified"; readonly operation: number }
   | { readonly kind: "Speech"; readonly generation: number; readonly fenceId: string }
-  | {
-      readonly kind: "Recognition"
-      readonly generation: number
-      readonly recognitionReason?: typeof RecognitionFailureReason.Type
-      readonly event: SessionEventInput
-    }
-  | {
-      readonly kind: "Final"
-      readonly generation: number
-      readonly fenceId: string
-      readonly sourceSequence: number
-      readonly input: SpeechPayload
-    }
+  | { readonly kind: "Recognition"; readonly input: RecognitionInput }
   | { readonly kind: "Prepared"; readonly input: SpeechPayload }
   | {
       readonly kind: "AdmissionFailed"
@@ -66,6 +55,16 @@ export type SessionEvent =
   | { readonly kind: "AdmissionFinished"; readonly id: string }
   | { readonly kind: "Output"; readonly output: VoiceOutput }
 export type SessionCommand =
+  | {
+      readonly kind: "RecognitionWork"
+      readonly command: Extract<RecognitionCommand, { kind: "Recognize" | "Cancel" | "ReleaseFragment" }>
+    }
+  | {
+      readonly kind: "TraceRecognition"
+      readonly cause: "recognitionStarted" | "recognitionSucceeded" | "recognitionDefect"
+      readonly generation?: number
+      readonly sampleFrames?: number
+    }
   | {
       readonly kind: "TraceEvent"
       readonly event: VoiceEvent

@@ -107,9 +107,9 @@ it("keeps newer speech eligible when an older held fence is rejected out of orde
           const voice = yield* Voice
           const durable = yield* Conversation
           const joined = yield* voice.start(startVoiceRequest())
-          const sendClassified = (sample: number) =>
+          const sendClassified = (sample: number, track = "microphone") =>
             Effect.gen(function* () {
-              yield* transport.send(transport.audio(sample))
+              yield* transport.send(transport.audio(sample), track)
               expect(yield* Queue.take(classified).pipe(Effect.timeout("2 seconds"))).toBe(sample)
             })
           for (let frame = 0; frame < 3; frame++) yield* sendClassified(1200)
@@ -120,12 +120,13 @@ it("keeps newer speech eligible when an older held fence is rejected out of orde
           expect(
             (yield* voice.snapshot(joined.sessionId, 0)).events.filter((event) => event.kind === "Accepted")
           ).toEqual([])
-          for (let frame = 0; frame < 3; frame++) yield* sendClassified(2400)
+          // A replacement microphone starts a distinct capture and a new speech fence.
+          for (let frame = 0; frame < 3; frame++) yield* sendClassified(2400, "replacement")
           yield* Deferred.await(secondApplied).pipe(Effect.timeout("2 seconds"))
           yield* Deferred.succeed(releaseFirst, undefined)
           expect(yield* Deferred.await(firstRejected).pipe(Effect.timeout("2 seconds"))).toBe("InvalidInput")
-          yield* sendClassified(2400)
-          for (let frame = 0; frame < 50; frame++) yield* sendClassified(0)
+          yield* sendClassified(2400, "replacement")
+          for (let frame = 0; frame < 50; frame++) yield* sendClassified(0, "replacement")
           let page = yield* durable.page({ limit: 100 })
           for (let poll = 0; !page.messages.some((message) => message.role === "user") && poll < 300; poll++) {
             yield* Effect.sleep(5)
