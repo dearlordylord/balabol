@@ -56,6 +56,48 @@ final class VoiceITFDecoderTests: XCTestCase {
       try mapping.request(.record(["generation": .integer(1), "id": .integer(0)])))
   }
 
+  func testManifestProjectionRejectsInvalidOrUnexpectedPhysicalRouting() throws {
+    let mapping = VoiceOutputITFMapping()
+    let ids = mapping.identities
+    let validAudio = VoiceAudioManifest.SourceAudio(
+      encoding: "pcm-s16le", sampleRateHz: 24000, channels: 1)
+    let invalidAudio = VoiceAudioManifest.SourceAudio(
+      encoding: "pcm-s16le", sampleRateHz: 16000, channels: 1)
+    let fixtures: [(String, Int, VoiceAudioManifest.SourceAudio)] = [
+      ("TR_fixture", 1, invalidAudio), ("", 1, validAudio),
+      ("TR_other", 1, validAudio), ("TR_fixture", 2, validAudio),
+    ]
+    for (track, publisher, audio) in fixtures {
+      let manifest = try VoiceAudioManifest(
+        sessionId: ids.uuid(.session, 1), responseId: ids.uuid(.response, 1),
+        inputDeliveryId: ids.uuid(.input, 1), outputEpoch: ids.uuid(.epoch, 1),
+        publisherIdentity: ids.uuid(.publisher, publisher), trackSid: track, sourceAudio: audio)
+      XCTAssertThrowsError(
+        try mapping.project(manifest),
+        "track=\(track) publisher=\(publisher) rate=\(audio.sampleRateHz)")
+      XCTAssertThrowsError(try mapping.project([.prepare(manifest)], state: VoiceOutputState()))
+    }
+  }
+
+  func testSelectedOutputProjectionRejectsUnexpectedManifestRouting() throws {
+    let mapping = VoiceOutputITFMapping()
+    let abstract = ITFValue.record([
+      "identity": .record(["input": .integer(1), "response": .integer(1), "epoch": .integer(1)]),
+      "status": .variant("Playing", .unit), "manifest": .boolean(true), "session": .integer(1),
+    ])
+    let original = try mapping.output(abstract)
+    var wire = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+    var manifest = try XCTUnwrap(wire["manifest"] as? [String: Any])
+    manifest["trackSid"] = "TR_other"
+    wire["manifest"] = manifest
+    wire["error"] = NSNull()
+    let wrong = try JSONDecoder().decode(
+      VoiceOutput.self, from: JSONSerialization.data(withJSONObject: wire))
+    XCTAssertThrowsError(try mapping.project(wrong))
+    XCTAssertThrowsError(try mapping.project(VoiceOutputState(current: wrong)))
+  }
+
   func testSymbolicIdentitiesAreStableDistinctAndBounded() throws {
     let mapper = VoiceITFIdentities()
     XCTAssertEqual(try mapper.uuid(.input, 1), try mapper.uuid(.input, 1))

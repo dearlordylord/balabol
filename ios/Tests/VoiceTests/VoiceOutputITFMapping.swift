@@ -47,7 +47,8 @@ struct VoiceOutputITFMapping {
       VoiceOutput.self, from: JSONSerialization.data(withJSONObject: wire))
   }
   func project(_ value: VoiceOutput) throws -> ITFValue {
-    try .record([
+    if let manifest = value.manifest { try validateFixtureManifest(manifest) }
+    return try .record([
       "identity": project(value.identity), "status": .variant(value.status.rawValue, .unit),
       "manifest": .boolean(value.manifest != nil),
       "session": .integer(
@@ -103,11 +104,20 @@ struct VoiceOutputITFMapping {
       })
   }
   func project(_ manifest: VoiceAudioManifest) throws -> ITFValue {
-    try .record([
+    try validateFixtureManifest(manifest)
+    return try .record([
       "identity": project(manifest.identity), "status": .variant("AwaitingReady", .unit),
       "manifest": .boolean(true),
       "session": .integer(identities.symbol(.session, manifest.sessionId)),
     ])
+  }
+  /// Fixed physical routing is an explicit fixture assumption, not an omitted
+  /// command field. Reject a changed adapter contract instead of erasing it.
+  private func validateFixtureManifest(_ manifest: VoiceAudioManifest) throws {
+    guard manifest.isValid,
+      manifest.publisherIdentity == (try identities.uuid(.publisher, 1)),
+      manifest.trackSid == "TR_fixture"
+    else { throw VoiceITFError.invalid("manifest outside fixed fixture routing/format") }
   }
   private func input(_ value: UUID?) throws -> ITFValue {
     try .optional(value) { try .integer(identities.symbol(.input, $0)) }
