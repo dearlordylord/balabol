@@ -1,5 +1,5 @@
 import { Effect, Schema, type Stream } from "effect"
-import { DeliveryId } from "../memory/index.ts"
+import { DeliveryFailure, DeliveryId } from "../memory/index.ts"
 import { InvalidInput } from "./contracts.ts"
 const maximumDeadlineMillis = 300000
 const Timing = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(maximumDeadlineMillis))
@@ -15,7 +15,7 @@ export type DeliveryTicket = typeof DeliveryTicket.Type
 export const DeliverySettlement = Schema.Struct({
   ...DeliveryTicket.fields,
   outcome: Schema.Literals(["Completed", "Failed"]),
-  error: Schema.optionalKey(Schema.Struct({ code: Schema.String, message: Schema.String }))
+  error: Schema.optionalKey(DeliveryFailure)
 })
 export type DeliverySettlement = typeof DeliverySettlement.Type
 export const ResponseInvalidation = Schema.Struct({
@@ -39,7 +39,8 @@ export const ReplyDeliveryUpdate = Schema.Union([
     registrationId: DeliveryId,
     sequence: Schema.Int,
     ticket: DeliveryTicket,
-    reason: ResponseInvalidation.fields.reason
+    reason: ResponseInvalidation.fields.reason,
+    failure: Schema.optionalKey(DeliveryFailure)
   }),
   Schema.Struct({
     kind: Schema.Literal("Delivered"),

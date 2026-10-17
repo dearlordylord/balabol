@@ -1,3 +1,4 @@
+import type { DeliveryFailure } from "../delivery-failure/index.ts"
 import type { DeliveryTicket, ResponseTarget } from "../conversation/index.ts"
 import type { AudioManifest, VoiceOutput } from "./contracts.ts"
 import type { Phrase, PhraseState } from "./phrases.ts"
@@ -8,6 +9,7 @@ export interface OutputKey {
 export interface OutputError {
   readonly code: string
   readonly message: string
+  readonly reason?: NonNullable<DeliveryFailure["reason"]>
 }
 export interface OutputSelection {
   readonly key: OutputKey

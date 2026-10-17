@@ -12,6 +12,7 @@ public struct PendingDelivery: Codable, Equatable, Sendable {
 public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   public enum Role: String, Codable, Sendable { case user, assistant }
   public enum Outcome: String, Codable, Sendable { case completed, interrupted }
+  public let failure: ReplyFailure?
   public let outcome: Outcome?
   public let role: Role
   public let responseId: UUID?
@@ -26,7 +27,7 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   public var id: UUID { deliveryId }
   public var isValid: Bool {
     guard
-      recordId >= 0 && position >= 0 && (!text.isEmpty || outcome == .interrupted)
+      (failure?.isValid ?? true) && recordId >= 0 && position >= 0 && (!text.isEmpty || outcome == .interrupted)
         && text.utf16.count <= 100_000 && LanguageSpan.areValid(languageSpans, for: text)
         && (detectedLanguage.map(LanguageSpan.isValidLanguageTag) ?? true)
         && (responseLanguage.map(LanguageSpan.isValidLanguageTag) ?? true)
@@ -34,9 +35,9 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
       return false
     }
     switch role {
-    case .user: return responseId == nil && inputDeliveryId == nil && outcome == nil
+    case .user: return failure == nil && responseId == nil && inputDeliveryId == nil && outcome == nil
     case .assistant:
-      return outcome != nil && responseId == deliveryId && inputDeliveryId != nil
+      return (failure == nil || outcome == .interrupted) && outcome != nil && responseId == deliveryId && inputDeliveryId != nil
         && inputDeliveryId != deliveryId
     }
   }
@@ -44,8 +45,9 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
     deliveryId: UUID, recordId: Int, position: Int, text: String, role: Role = .user,
     responseId: UUID? = nil, inputDeliveryId: UUID? = nil, outcome: Outcome? = nil,
     languageSpans: [LanguageSpan] = [], detectedLanguage: String? = nil,
-    responseLanguage: String? = nil
+    responseLanguage: String? = nil, failure: ReplyFailure? = nil
   ) {
+    self.failure = failure
     self.role = role
     self.outcome = role == .assistant ? outcome ?? .completed : outcome
     self.responseId = responseId
@@ -60,10 +62,11 @@ public struct ConversationMessage: Codable, Equatable, Sendable, Identifiable {
   }
   private enum CodingKeys: String, CodingKey {
     case deliveryId, recordId, position, text, role, responseId, inputDeliveryId, outcome,
-      languageSpans, detectedLanguage, responseLanguage
+      languageSpans, detectedLanguage, responseLanguage, failure
   }
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    failure = try container.decodeIfPresent(ReplyFailure.self, forKey: .failure)
     role = try container.decodeIfPresent(Role.self, forKey: .role) ?? .user
     outcome =
       container.contains(.outcome)

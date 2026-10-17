@@ -1,6 +1,6 @@
 import type { DeliveryTicket, ReplyDeliveryUpdate } from "../conversation/index.ts"
 import { initialPhrases } from "./phrases.ts"
-import type { OutputState, OutputSelection, OutputContext } from "./output-state.ts"
+import type { OutputState, OutputSelection, OutputContext, OutputError } from "./output-state.ts"
 import { outputProjection } from "./output-state.ts"
 import type { OutputEvent, OutputTransition } from "./output-events.ts"
 import type { VoiceDiagnosticInput } from "./diagnostics.ts"
@@ -35,23 +35,30 @@ const selectedTicket = (state: OutputState, ticket: DeliveryTicket, outputEpoch:
   const cancelled = cancelOutputWork(state, null)
   return { ...cancelled, state: { ...cancelled.state, selected: selection(ticket, outputEpoch) } }
 }
-const invalidationMessage = (
+const invalidationFailure = (
   state: OutputState,
-  reason: Extract<ReplyDeliveryUpdate, { kind: "Invalidated" }>["reason"]
-): string =>
-  reason === "Deadline"
-    ? "Reply audio delivery exceeded its deadline"
-    : (state.selected?.error?.message ?? "Reply generation or audio delivery failed")
+  update: Extract<ReplyDeliveryUpdate, { kind: "Invalidated" }>
+): OutputError => {
+  if (state.selected?.error != null) return state.selected.error
+  if (update.failure !== undefined) return update.failure
+  return {
+    code: "AudioUnavailable",
+    message:
+      update.reason === "Deadline"
+        ? "Reply audio delivery exceeded its deadline"
+        : "Reply generation or audio delivery failed",
+    ...(update.reason === "Deadline" ? { reason: "DeliveryDeadline" } : {})
+  }
+}
 const invalidation = (
   state: OutputState,
   update: Extract<ReplyDeliveryUpdate, { kind: "Invalidated" }>
 ): OutputTransition => {
   const failed = update.reason === "Failed" || update.reason === "Deadline"
-  const message = invalidationMessage(state, update.reason)
   const result = terminateOutput(
     state,
     failed ? "Failed" : "Interrupted",
-    failed ? { code: "AudioUnavailable", message } : null
+    failed ? invalidationFailure(state, update) : null
   )
   const causes: Record<Extract<ReplyDeliveryUpdate, { kind: "Invalidated" }>["reason"], VoiceDiagnosticInput["cause"]> =
     { Interrupted: "conversationInvalidation", Deadline: "deadline", Failed: "failed", Detached: "detach" }

@@ -16,13 +16,13 @@
       "name": "conversation",
       "root": "src/conversation",
       "entry": "index.ts",
-      "dependencies": ["memory", "answer-generation", "language"]
+      "dependencies": ["memory", "answer-generation", "language", "operation-audit"]
     },
     {
       "name": "memory",
       "root": "src/memory",
       "entry": "index.ts",
-      "dependencies": ["summary-generation", "language"]
+      "dependencies": ["summary-generation", "language", "delivery-failure"]
     },
     {
       "name": "answer-generation",
@@ -46,13 +46,20 @@
       "name": "speech-synthesis",
       "root": "src/speech-synthesis",
       "entry": "index.ts",
-      "dependencies": ["language"]
+      "dependencies": ["language", "delivery-failure"]
     },
     {
       "name": "voice",
       "root": "src/voice",
       "entry": "index.ts",
-      "dependencies": ["conversation", "speech-recognition", "speech-synthesis", "language"]
+      "dependencies": [
+        "conversation",
+        "speech-recognition",
+        "speech-synthesis",
+        "language",
+        "delivery-failure",
+        "operation-audit"
+      ]
     },
     {
       "name": "subscription",
@@ -74,8 +81,21 @@
         "voice",
         "language",
         "subscription",
-        "personal-knowledge"
+        "personal-knowledge",
+        "operation-audit"
       ]
+    },
+    {
+      "name": "delivery-failure",
+      "root": "src/delivery-failure",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
+      "name": "operation-audit",
+      "root": "src/operation-audit",
+      "entry": "index.ts",
+      "dependencies": ["delivery-failure"]
     }
   ]
 }

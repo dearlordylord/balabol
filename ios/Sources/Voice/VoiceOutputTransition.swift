@@ -47,14 +47,18 @@ internal func transitionVoiceOutput(_ state: VoiceOutputState, _ event: VoiceOut
 private func observeOutput(_ state: VoiceOutputState, sequence: Int, value: VoiceOutput) -> VoiceOutputStep {
   guard !state.closed, sequence > state.sequence else { return VoiceOutputStep(state: state, commands: []) }
   let advanced = state.replacing(sequence: sequence)
-  if state.gated && value.inputDeliveryId != state.allowedInput { return rejectOutput(advanced, value) }
+  // Suppression denies playback, not terminal evidence for the selected output.
+  let selectedTerminal = state.current?.identity == value.identity && !value.isActive
+  if state.gated && value.inputDeliveryId != state.allowedInput && !selectedTerminal {
+    return rejectOutput(advanced, value)
+  }
   if let current = state.current, current.identity == value.identity {
     if [.delivered, .interrupted, .failed].contains(current.status)
       || (current.status == .playing && [.preparing, .awaitingReady].contains(value.status)) {
       return VoiceOutputStep(state: advanced, commands: [])
     }
   }
-  let selected = advanced.replacing(current: .some(value), locallyInterrupted: value.status == .interrupted,
+  let selected = advanced.replacing(current: .some(value), locallyInterrupted: value.status == .interrupted || (state.locallyInterrupted && value.status == .delivered),
     unavailable: value.status == .failed, receivedAudio: state.current?.identity == value.identity ? nil : false)
   if value.status == .delivered { return VoiceOutputStep(state: selected.replacing(prepared: .some(nil)), commands: []) }
   if [.interrupted, .failed].contains(value.status) {

@@ -76,5 +76,9 @@ export const deliveryDeadlineExpired = (
   state.current?.attempt === event.attempt &&
   state.current.authorization === "Active" &&
   ticketMatches(state.current.ticket, event.ticket)
-    ? selectTerminal(state, state.current, "Interrupted", "Deadline")
+    ? selectTerminal(state, state.current, "Interrupted", "Deadline", {
+        code: "AudioUnavailable",
+        reason: "DeliveryDeadline",
+        message: "Reply delivery exceeded its deadline"
+      })
     : unchangedResponse(state)

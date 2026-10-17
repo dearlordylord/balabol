@@ -8,6 +8,7 @@ import Observation
 public final class ConversationViewModel {
   public private(set) var state = ConversationState()
   @ObservationIgnored private let transport: any ConversationTransport
+  @ObservationIgnored internal let diagnosticsEnabled: Bool
   @ObservationIgnored private let draftStore: any DraftStore
   @ObservationIgnored private let inputIntent: @MainActor (UUID) -> Void
   @ObservationIgnored private var draftTask: Task<Void, Never>?
@@ -29,8 +30,10 @@ public final class ConversationViewModel {
 
   public init(
     transport: any ConversationTransport, draftStore: any DraftStore,
+    diagnosticsEnabled: Bool = false,
     inputIntent: @escaping @MainActor (UUID) -> Void = { _ in }
   ) {
+    self.diagnosticsEnabled = diagnosticsEnabled
     self.transport = transport
     self.draftStore = draftStore
     self.inputIntent = inputIntent
@@ -133,6 +136,11 @@ public final class ConversationViewModel {
 
   private func receive(_ event: ConversationEvent) {
     let commands = state.transition(event)
+    if diagnosticsEnabled, let failure = state.replyObservationFailure,
+      case .observationFailed(let input, _, _) = state.reply
+    {
+      ReplyObservationDiagnostics.record(input: input, stage: "projection", failure: failure)
+    }
     for command in commands { execute(command) }
   }
 
@@ -316,6 +324,24 @@ public final class ConversationViewModel {
         self.replyTask = nil
         self.replyRequest = nil
         self.receive(.replyEnded(request, failure))
+      }
+    case .recoverObservation(let request, let input, let attempt):
+      let transport = transport
+      let diagnosticsEnabled = diagnosticsEnabled
+      replyRequest = request
+      replyTask = Task { [weak self] in
+        do { try await Task.sleep(for: .seconds(attempt)) } catch { return }
+        let result: Result<ReplySnapshot, ConversationFailure>
+        do { result = .success(try await transport.replySnapshot(for: input)) } catch let error
+          as ConversationFailure
+        { result = .failure(error) } catch { result = .failure(.unavailable) }
+        guard let self, self.replyRequest == request else { return }
+        self.replyTask = nil
+        self.replyRequest = nil
+        if diagnosticsEnabled {
+          ReplyObservationDiagnostics.record(input: input, stage: "recovery", result: result)
+        }
+        self.receive(.observationRecovered(request, result))
       }
     case .recoverInterruptedReply(let request, let input):
       let transport = transport

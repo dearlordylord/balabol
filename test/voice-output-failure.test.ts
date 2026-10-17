@@ -63,7 +63,7 @@ const scenarios: ReadonlyArray<{ name: string; events: (request: SynthesisReques
   }
 ]
 for (const scenario of scenarios)
-  it(`interrupts and preserves collected text after ${scenario.name}`, () =>
+  it(`reports the failure and preserves collected text after ${scenario.name}`, () =>
     withVoiceOutput(
       () =>
         Effect.gen(function* () {
@@ -82,7 +82,8 @@ for (const scenario of scenarios)
           const failed = yield* waitForOutput(voice, join.sessionId, "Failed")
           expect(failed.output?.error?.code).toBe("AudioUnavailable")
           const reply = yield* waitForReply(conversation, outputInput.deliveryId)
-          expect(reply.state).toBe("Interrupted")
+          expect(reply.state).toBe("Failed")
+          expect(reply.error).toEqual(failed.output?.error)
           expect(reply.text).toBe("This is a fixture reply.")
           expect(reply.receipt?.outcome).toBe("interrupted")
         }),
@@ -158,7 +159,8 @@ effectIt.effect("the Conversation delivery deadline fences late synthesis and ow
       expect(snapshot.output?.status).toBe("Failed")
       expect(snapshot.output?.error?.code).toBe("AudioUnavailable")
       const turn = yield* conversation.currentTurn()
-      expect(turn?.reply.state).toBe("Interrupted")
+      expect(turn?.reply.state).toBe("Failed")
+      expect(turn?.reply.error?.reason).toBe("DeliveryDeadline")
       expect(turn?.reply.text).toBe("This is a fixture reply.")
       expect(turn?.reply.receipt?.outcome).toBe("interrupted")
       // Retire unrelated recurring lease polling before checking the late provider boundary.

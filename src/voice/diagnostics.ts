@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, rename, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { Clock, Context, Effect, Layer, Schema, Option } from "effect"
+import { FailureReason } from "../delivery-failure/index.ts"
 import { RecognitionFailureReason } from "../speech-recognition/index.ts"
 const maximumRecognitionSamples = 240000
 const maximumEvents = 256
@@ -43,6 +44,7 @@ export const diagnosticErrorCode = (code: string): typeof VoiceDiagnosticErrorCo
   Option.getOrElse(Schema.decodeUnknownOption(VoiceDiagnosticErrorCode)(code), () => "Other")
 export const VoiceDiagnosticInput = Schema.Struct({
   cause: VoiceDiagnosticCause,
+  failureReason: Schema.optionalKey(FailureReason),
   errorCode: Schema.optionalKey(VoiceDiagnosticErrorCode),
   recognitionReason: Schema.optionalKey(RecognitionFailureReason),
   sampleFrames: Schema.optionalKey(
@@ -63,6 +65,7 @@ const correlation = (value: string) =>
   createHash("sha256").update(value.toLowerCase()).digest("hex").slice(0, correlationLength)
 export const VoiceDiagnosticRecord = Schema.Struct({
   cause: VoiceDiagnosticCause,
+  failureReason: Schema.optionalKey(FailureReason),
   session: Schema.String,
   errorCode: VoiceDiagnosticInput.fields.errorCode,
   recognitionReason: VoiceDiagnosticInput.fields.recognitionReason,
@@ -83,6 +86,7 @@ const recognitionMetadata = (parsed: VoiceDiagnosticInput) => ({
 })
 const projectRecord = (parsed: VoiceDiagnosticInput) => ({
   cause: parsed.cause,
+  ...(parsed.failureReason === undefined ? {} : { failureReason: parsed.failureReason }),
   session: correlation(parsed.sessionId),
   applied: parsed.applied,
   ...(parsed.errorCode === undefined ? {} : { errorCode: parsed.errorCode }),

@@ -1,5 +1,6 @@
+import { withAuditSpan, finishAudit } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
-import { type Cause, Clock, Deferred, Effect, Fiber, Queue, Stream, Match, type Scope } from "effect"
+import { type Cause, Exit, Clock, Deferred, Effect, Fiber, Queue, Stream, Match, type Scope } from "effect"
 import type { Receipt, Memory } from "../memory/index.ts"
 import type { AnswerGeneration } from "../answer-generation/index.ts"
 import {
@@ -98,6 +99,10 @@ function* responseResources(
         return launch(
           command.operation,
           prepareResponseContext(command, memory, settings, post).pipe(
+            withAuditSpan(
+              "conversation.context",
+              state.current?.attempt === command.attempt ? state.current.responseId : undefined
+            ),
             Effect.catch(failWork(command.attempt, command.operation))
           )
         )
@@ -111,7 +116,10 @@ function* responseResources(
             settings,
             post,
             () => state.current?.attempt === command.attempt && state.current.authorization === "Active"
-          ).pipe(Effect.catch(failWork(command.attempt, command.operation)))
+          ).pipe(
+            withAuditSpan("conversation.answer", command.responseId),
+            Effect.catch(failWork(command.attempt, command.operation))
+          )
         )
       },
       CancelWork: (command) => {
@@ -186,7 +194,15 @@ function* responseResources(
       const decision = transitionResponse(state, event, answer.capabilities.languages, settings.attachmentMillis)
       state = decision.state
       if (event.kind === "WorkFinished") fibers = fibers.filter((item) => item.operation !== event.operation)
-      return Effect.forEach(decision.commands, interpret, { discard: true })
+      const current = state.current
+      const closed = current !== undefined && (current.work.kind === "Terminal" || current.work.kind === "Failed")
+      const exit =
+        current === undefined || replyProjection(current).error === null
+          ? Exit.succeed(undefined)
+          : Exit.fail(replyProjection(current).error)
+      return Effect.forEach(decision.commands, interpret, { discard: true }).pipe(
+        Effect.andThen(closed ? finishAudit(current.responseId, exit) : Effect.void)
+      )
     })
   const request = (event: (requestId: string) => ResponseEvent) =>
     Effect.gen(function* () {

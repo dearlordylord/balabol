@@ -75,7 +75,7 @@ export const makeRecognitionExecutor = (
     })
   const run = (job: RecognitionJob, execution: Execution) =>
     Effect.gen(function* () {
-      const exit = yield* recognize(job).pipe(Effect.interruptible, Effect.exit)
+      const exit = yield* recognize(job).pipe(Effect.withSpan("voice.recognition"), Effect.interruptible, Effect.exit)
       yield* post({
         kind: "Settled",
         operation: job.operation,

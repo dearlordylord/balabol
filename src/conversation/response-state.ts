@@ -1,3 +1,4 @@
+import { restoredReply } from "./reply-projection.ts"
 import type { Receipt, DeliveryPayload } from "../memory/index.ts"
 import type { LanguageSpan } from "../language/index.ts"
 import { Schema } from "effect"
@@ -113,18 +114,15 @@ const projectReply = (response: ResponseAttempt): Reply => {
   }
   switch (response.work.kind) {
     case "Terminal":
-      return {
-        ...base,
-        state: response.work.receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
-        error: null,
-        receipt: response.work.receipt
-      }
+      return { ...restoredReply(response.work.receipt, response.input.deliveryId), ...base }
     case "Failed":
       return { ...base, state: "Failed", error: response.work.error, receipt: null }
-    case "Settling":
-      return response.work.failure === undefined
+    case "Settling": {
+      const error = response.work.failure
+      return error === undefined
         ? { ...base, state: response.work.projection, error: null, receipt: null }
-        : { ...base, state: "Failed", error: response.work.failure, receipt: null }
+        : { ...base, state: "Failed", error, receipt: null }
+    }
     case "AwaitingDelivery":
       return { ...base, state: "Delivering", error: null, receipt: null }
     default:

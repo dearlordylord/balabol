@@ -99,7 +99,11 @@ const deadline = (state: OutputState, event: Extract<OutputEvent, { kind: "Ready
   const retired = removeOutputOperation(state, event.operation)
   return entry.status === "Cancelling" || liveOutput(retired, event.key)?.phase !== "AwaitingReady"
     ? outputResult(retired)
-    : failOutput(retired, { code: "AudioUnavailable", message: "Reply audio readiness exceeded its deadline" })
+    : failOutput(retired, {
+        code: "AudioUnavailable",
+        reason: "ReadinessDeadline",
+        message: "Reply audio readiness exceeded its deadline"
+      })
 }
 const publicationFailed = (
   state: OutputState,

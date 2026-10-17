@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { Clock, Deferred, Effect, Fiber, Schema, Stream } from "effect"
 import { SynthesisCapabilities } from "../speech-synthesis/index.ts"
@@ -125,7 +126,11 @@ const open = (resources: OutputResources, command: Extract<Command, { kind: "Ope
           })
           .pipe(Effect.mapError(outputError))
       })
-      const exit = yield* acquisition.pipe(Effect.interruptible, Effect.exit)
+      const exit = yield* acquisition.pipe(
+        withAuditSpan("voice.publication", command.key.ticket.responseId),
+        Effect.interruptible,
+        Effect.exit
+      )
       if (exit._tag === "Success") {
         entry.handle = exit.value
         if (
@@ -205,7 +210,8 @@ const observed = (resources: OutputResources, command: Extract<Command, { kind: 
           }) as const
       )
     ),
-    (error) => ({ kind: "WorkFailed", operation: command.operation, key: command.key, error })
+    (error) => ({ kind: "WorkFailed", operation: command.operation, key: command.key, error }),
+    command.key.ticket.responseId
   )
 export const executeReadyTimer = (
   resources: OutputResources,
@@ -218,7 +224,8 @@ export const executeReadyTimer = (
       Effect.flatMap((now) => Effect.sleep(Math.max(0, command.deadlineAt - now))),
       Effect.as({ kind: "ReadyDeadline", operation: command.operation, key: command.key } as const)
     ),
-    (error) => ({ kind: "WorkFailed", operation: command.operation, key: command.key, error })
+    (error) => ({ kind: "WorkFailed", operation: command.operation, key: command.key, error }),
+    command.key.ticket.responseId
   )
 export const executePublication = (resources: OutputResources, command: Command): Effect.Effect<void> => {
   switch (command.kind) {
@@ -255,7 +262,8 @@ export const executePublication = (resources: OutputResources, command: Command)
                   Effect.as({ kind: "Drained", operation: command.operation, key: command.key } as const)
                 )
         }),
-        (error) => ({ kind: "WorkFailed", operation: command.operation, key: command.key, error })
+        (error) => ({ kind: "WorkFailed", operation: command.operation, key: command.key, error }),
+        command.key.ticket.responseId
       )
   }
 }

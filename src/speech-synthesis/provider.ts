@@ -1,3 +1,4 @@
+import { FailureReason } from "../delivery-failure/index.ts"
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { LanguageTag, LanguageTags } from "../language/index.ts"
 
@@ -50,7 +51,8 @@ export const SynthesisCapabilities = Schema.Struct({
 })
 export type SynthesisCapabilities = typeof SynthesisCapabilities.Type
 export class SpeechSynthesisFailed extends Schema.TaggedError<SpeechSynthesisFailed>()("SpeechSynthesisFailed", {
-  message: Schema.String
+  message: Schema.String,
+  reason: Schema.optionalKey(FailureReason)
 }) {}
 // Grounding: research/local-speech.md, MLX Qwen generate(text, stream=True).
 // Complete phrase input yields audio chunks; this interface does not append text to an active request.

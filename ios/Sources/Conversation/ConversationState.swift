@@ -64,6 +64,7 @@ public struct ConversationState: Equatable, Sendable {
   public enum Reply: Equatable, Sendable {
     case idle
     case observing(Request, inputDeliveryId: UUID, latest: ReplySnapshot?)
+    case recovering(Request, inputDeliveryId: UUID, latest: ReplySnapshot?, attempt: Int)
     case completed(ConversationMessage)
     case providerFailed(
       inputDeliveryId: UUID, text: String, ReplyFailure, languageSpans: [LanguageSpan] = [])
@@ -73,6 +74,7 @@ public struct ConversationState: Equatable, Sendable {
     if case .observing(_, _, let latest) = reply { return latest != nil }
     return false
   }
+  internal var observationRecoveryAttempt = 0
   internal var replyRetryRequest: Request?
   public var isRetryingReply: Bool { replyRetryRequest != nil }
   internal var currentRequest: Request?
@@ -82,11 +84,13 @@ public struct ConversationState: Equatable, Sendable {
       case .providerFailed(let input, _, _, _) = reply
     else { return false }
     return messages.last(where: { $0.role == .user })?.deliveryId == input
+      && !messages.contains(where: { $0.role == .assistant && $0.inputDeliveryId == input })
   }
   public internal(set) var reply: Reply = .idle
   public var replyLanguageSpans: [LanguageSpan] {
     switch reply {
-    case .observing(_, _, let latest), .observationFailed(_, let latest, _):
+    case .observing(_, _, let latest), .recovering(_, _, let latest, _),
+      .observationFailed(_, let latest, _):
       latest?.languageSpans ?? []
     case .providerFailed(_, _, _, let spans): spans
     case .completed(let receipt): receipt.languageSpans
@@ -95,7 +99,9 @@ public struct ConversationState: Equatable, Sendable {
   }
   public var replyText: String {
     switch reply {
-    case .observing(_, _, let latest), .observationFailed(_, let latest, _): latest?.text ?? ""
+    case .observing(_, _, let latest), .recovering(_, _, let latest, _),
+      .observationFailed(_, let latest, _):
+      latest?.text ?? ""
     case .providerFailed(_, let text, _, _): text
     default: ""
     }
@@ -113,6 +119,10 @@ public struct ConversationState: Equatable, Sendable {
   public var replyProviderFailure: ReplyFailure? {
     if case .providerFailed(_, _, let error, _) = reply { return error }
     return nil
+  }
+  public var isRecoveringReply: Bool {
+    if case .recovering = reply { return true }
+    return false
   }
   public var replyObservationFailure: ConversationFailure? {
     if case .observationFailed(_, _, let error) = reply { return error }

@@ -72,7 +72,7 @@ final class Writer: NSObject, AVSpeechSynthesizerDelegate {
             complete()
             return
         }
-        guard !eos else { fail() }
+        guard !eos else { fail("InvalidAudio") }
         do {
             if file == nil {
                 rate = pcm.format.sampleRate
@@ -82,9 +82,9 @@ final class Writer: NSObject, AVSpeechSynthesizerDelegate {
                                        interleaved: pcm.format.isInterleaved)
             }
             frames += Int64(pcm.frameLength)
-            guard rate > 0, Double(frames) / rate <= 60 else { fail() }
+            guard rate > 0, Double(frames) / rate <= 60 else { fail("InvalidAudio") }
             try file?.write(from: pcm)
-        } catch { fail() }
+        } catch { fail("SynthesisWriteFailed") }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                       didFinish utterance: AVSpeechUtterance) {
@@ -95,7 +95,7 @@ final class Writer: NSObject, AVSpeechSynthesizerDelegate {
     }
     func complete() {
         guard eos, finished, !stopped else { return }
-        guard frames > 0 else { fail() }
+        guard frames > 0 else { fail("InvalidAudio") }
         stopped = true
         file = nil
         emit(Receipt(voiceId: voice.identifier, actualLocale: voice.language,
@@ -103,7 +103,13 @@ final class Writer: NSObject, AVSpeechSynthesizerDelegate {
         exit(0)
     }
 }
-func fail() -> Never { exit(1) }
+struct FailureReceipt: Encodable { let reason: String }
+func fail(_ reason: String = "NativeProcessFailed") -> Never {
+    if let data = try? JSONEncoder().encode(FailureReceipt(reason: reason)) {
+        FileHandle.standardOutput.write(data)
+    }
+    exit(1)
+}
 func emit<T: Encodable>(_ value: T) {
     guard let data = try? JSONEncoder().encode(value) else { fail() }
     FileHandle.standardOutput.write(data)
@@ -119,20 +125,27 @@ struct Main {
         let data = FileHandle.standardInput.readData(ofLength: planning ? 32769 : 16385)
         if planning {
             guard data.count <= 32768,
-                  let request = try? JSONDecoder().decode(RenderPlanRequest.self, from: data) else { fail() }
+                  let request = try? JSONDecoder().decode(RenderPlanRequest.self, from: data) else { fail("InvalidSynthesisRequest") }
             do {
                 let planner = try AppleRenderPlanner(request: request, installedLocale: {
                     AVSpeechSynthesisVoice(identifier: $0)?.language
                 })
                 emit(try planner.plan(request.text))
-            } catch { fail() }
+            } catch let error as RenderPlanningError {
+                switch error {
+                case .invalidRequest: fail("InvalidSynthesisRequest")
+                case .missingInstalledVoice: fail("MissingVoice")
+                case .uncertainLanguage: fail("UncertainLanguage")
+                case .unsupportedLanguage: fail("UnsupportedLanguage")
+                }
+            } catch { fail("SynthesisPlanFailed") }
             return
         }
         guard data.count <= 16384,
               let request = try? JSONDecoder().decode(Request.self, from: data),
               !request.text.isEmpty, request.text.utf16.count <= 800,
               request.outputPath.hasPrefix("/"),
-              let voice = AVSpeechSynthesisVoice(identifier: request.voiceId) else { fail() }
+              let voice = AVSpeechSynthesisVoice(identifier: request.voiceId) else { fail("InvalidSynthesisRequest") }
         let writer = Writer(request: request, voice: voice)
         writer.start()
         withExtendedLifetime(writer) { RunLoop.main.run() }

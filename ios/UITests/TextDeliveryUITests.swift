@@ -3,6 +3,38 @@ import XCTest
 
 @MainActor
 final class TextDeliveryUITests: XCTestCase {
+  func testLiveReplyDoesNotLeaveTranscriptBlankWithVariableHeightHistory() async throws {
+    let server = "http://127.0.0.1:8792"
+    do { _ = try await URLSession.shared.data(from: URL(string: server + "/test/reset")!) } catch {
+      throw XCTSkip("Run conversation-live-ui-fixture.mjs for this isolated UI check.")
+    }
+    let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
+    app.launchEnvironment["BALABOL_UI_TEST_CONTROL_URL"] = server
+    app.launch()
+    XCTAssertTrue(app.staticTexts["message-94"].waitForExistence(timeout: 10))
+    _ = try await URLSession.shared.data(from: URL(string: server + "/test/start")!)
+    app.buttons["Refresh conversation"].tap()
+    let projection = app.staticTexts["reply-progress"]
+    XCTAssertTrue(projection.waitForExistence(timeout: 5))
+    app.buttons["start-voice"].tap()
+    for _ in 0..<12 {
+      _ = try await URLSession.shared.data(from: URL(string: server + "/test/step")!)
+      let visible =
+        projection.exists
+        && projection.frame.intersects(app.scrollViews["conversation-transcript"].frame)
+      let completed = app.staticTexts["assistant-message-96"]
+      XCTAssertTrue(
+        visible || (completed.exists && completed.isHittable),
+        "A streaming or saved reply must remain visible; the transcript must not become blank.")
+      try await Task.sleep(for: .milliseconds(200))
+    }
+    _ = try await URLSession.shared.data(from: URL(string: server + "/test/finish")!)
+    XCTAssertTrue(app.staticTexts["assistant-message-96"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["assistant-message-96"].isHittable)
+  }
+
   func testLatestHistoryAndOlderPrependPreserveReadingPosition() async throws {
     let server = "http://127.0.0.1:8791"
     var probe = URLRequest(url: URL(string: server + "/conversation/messages?direction=older")!)

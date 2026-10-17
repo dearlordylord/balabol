@@ -12,8 +12,14 @@ public struct ReplyFailure: Codable, Equatable, Sendable {
     case audioUnavailable = "AudioUnavailable"
   }
   public let code: Code
+  public let reason: String?
   public let message: String
-  public init(code: Code, message: String) {
+  public var isValid: Bool {
+    !message.isEmpty && message.utf16.count <= 1000
+      && (reason.map { !$0.isEmpty && $0.utf16.count <= 100 } ?? true)
+  }
+  public init(code: Code, message: String, reason: String? = nil) {
+    self.reason = reason
     self.code = code
     self.message = message
   }
@@ -50,11 +56,16 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     switch state {
     case .waiting: return text.isEmpty && error == nil && receipt == nil
     case .streaming, .delivering: return !text.isEmpty && error == nil && receipt == nil
-    case .failed: return error.map { !$0.code.rawValue.isEmpty } == true && receipt == nil
+    case .failed:
+      guard let error, error.isValid else { return false }
+      guard let receipt else { return true }
+      return receipt.isValid && receipt.failure == error && receipt.outcome == .interrupted
+        && receipt.deliveryId == responseId && receipt.inputDeliveryId == inputDeliveryId
+        && receipt.text == text && receipt.languageSpans == languageSpans
     case .completed, .interrupted:
       return error == nil
         && receipt.map {
-          $0.isValid && $0.role == .assistant && $0.deliveryId == responseId
+          $0.failure == nil && $0.isValid && $0.role == .assistant && $0.deliveryId == responseId
             && $0.responseId == responseId && $0.inputDeliveryId == inputDeliveryId
             && $0.text == text && $0.languageSpans == languageSpans
             && $0.outcome == (state == .interrupted ? .interrupted : .completed)

@@ -1,3 +1,4 @@
+import { FailureReason } from "../delivery-failure/index.ts"
 import { Context, Schema, SchemaGetter } from "effect"
 import type { SynthesisAudio } from "../speech-synthesis/index.ts"
 import type { Effect } from "effect"
@@ -37,6 +38,7 @@ export const AudioManifest = Schema.Struct({
 export type AudioManifest = typeof AudioManifest.Type
 const outputFields = { responseId: Id, inputDeliveryId: Id, outputEpoch: Id }
 const AudioError = Schema.Struct({
+  reason: Schema.optionalKey(FailureReason),
   code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumErrorCode)),
   message: Schema.String.check(Schema.isMaxLength(maximumErrorMessage))
 })

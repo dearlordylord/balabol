@@ -60,13 +60,14 @@ export const makeOutputExecutor = (deps: OutputExecutorDependencies) => {
         .settleReplyDelivery({
           ...command.key.ticket,
           outcome: command.outcome,
-          ...(command.error === null ? {} : { error: command.error })
+          ...(command.error === null ? {} : { error: { ...command.error, code: "AudioUnavailable" } })
         })
         .pipe(
           Effect.mapError(outputError),
           Effect.as({ kind: "DeliverySettled", operation: command.operation, key: command.key } as const)
         ),
-      (error) => ({ kind: "DeliveryRejected", operation: command.operation, key: command.key, error })
+      (error) => ({ kind: "DeliveryRejected", operation: command.operation, key: command.key, error }),
+      command.key.ticket.responseId
     )
   const execute = (command: ResourceCommand): Effect.Effect<void> => {
     switch (command.kind) {

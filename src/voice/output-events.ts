@@ -115,6 +115,8 @@ export type OutputCommand =
   | {
       readonly kind: "Trace"
       readonly cause: VoiceDiagnosticInput["cause"]
+      readonly errorCode?: VoiceDiagnosticInput["errorCode"]
+      readonly failureReason?: VoiceDiagnosticInput["failureReason"]
       readonly applied: boolean
       readonly target?: ResponseTarget & { readonly outputEpoch?: string }
       readonly generation?: number

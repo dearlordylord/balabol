@@ -1,7 +1,9 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Cause, Deferred, Effect, Exit, Option } from "effect"
 import type { Fiber, Scope } from "effect"
 import type { Conversation, ReplyDeliverySubscription } from "../conversation/index.ts"
 import type { SpeechSynthesis, SynthesisAudio } from "../speech-synthesis/index.ts"
+import type { DeliveryFailure } from "../delivery-failure/index.ts"
 import type { AudioPublication, MediaConnection, VoiceFailed } from "./contracts.ts"
 import type { OutputEvent, OutputOutcome } from "./output-events.ts"
 import type { OutputDecision, OutputState, OutputError, OutputKey } from "./output-state.ts"
@@ -37,9 +39,13 @@ export interface OutputSubscription {
   readonly started: Deferred.Deferred<void>
   fiber?: Fiber.Fiber<void>
 }
-export const outputError = (error: { readonly message: string }): OutputError => ({
+export const outputError = (error: {
+  readonly message: string
+  readonly reason?: NonNullable<DeliveryFailure["reason"]>
+}): OutputError => ({
   code: "AudioUnavailable",
-  message: error.message
+  message: error.message,
+  ...(error.reason === undefined ? {} : { reason: error.reason })
 })
 export const makeOutputResources = (deps: OutputExecutorDependencies) => {
   const work = new Map<string, WorkEntry>()
@@ -54,7 +60,14 @@ export const makeOutputResources = (deps: OutputExecutorDependencies) => {
       changed = Deferred.makeUnsafe<void>()
       return Deferred.succeed(previous, undefined).pipe(Effect.asVoid)
     })
-  const post = (event: OutputEvent) => deps.post(event).pipe(Effect.asVoid, Effect.ignore)
+  const post = (event: OutputEvent) =>
+    deps
+      .post(event)
+      .pipe(
+        withAuditSpan("voice.eventDelivery", "key" in event ? event.key.ticket.responseId : undefined),
+        Effect.asVoid,
+        Effect.ignore
+      )
   const outcome = (exit: Exit.Exit<unknown, OutputError>): OutputOutcome => {
     if (Exit.isSuccess(exit)) return { kind: "Success" }
     if (exit.cause.reasons.some(Cause.isDieReason)) {
@@ -85,17 +98,25 @@ export const makeOutputResources = (deps: OutputExecutorDependencies) => {
       )
       if (entry.cancelled) entry.fiber.interruptUnsafe()
     }).pipe(Effect.uninterruptible)
+  const spanNames = {
+    Drain: "voice.drain",
+    Settlement: "voice.settlement",
+    Unregister: "voice.unregister",
+    ReadReply: "voice.reply",
+    ReadyTimer: "voice.readyWait"
+  }
   const run = (
-    label: string,
+    label: keyof typeof spanNames,
     operation: number,
     task: Effect.Effect<OutputEvent, OutputError>,
-    failure: (error: OutputError) => OutputEvent
+    failure: (error: OutputError) => OutputEvent,
+    responseId?: string
   ) =>
     start(
       label,
       operation,
       Effect.gen(function* () {
-        const exit = yield* task.pipe(Effect.interruptible, Effect.exit)
+        const exit = yield* task.pipe(withAuditSpan(spanNames[label], responseId), Effect.interruptible, Effect.exit)
         const result = outcome(exit)
         if (Exit.isSuccess(exit)) return yield* post(exit.value)
         // Cancel dispatch is synchronous in the owner before later completion facts are processed.

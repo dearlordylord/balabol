@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Deferred, Effect, Queue, Scope, Exit, Schema } from "effect"
 import type { Fiber } from "effect"
 import type { InputSource } from "../conversation/index.ts"
@@ -168,7 +169,19 @@ export const makeSessionRuntime = (
         case "TraceRecognition":
           return Effect.sync(() => trace(command.cause, command.sampleFrames, command.generation))
         case "TraceOutput":
-          return Effect.sync(() => recordVoiceDiagnostic(deps.diagnostics, command.input))
+          return Effect.sync(() => recordVoiceDiagnostic(deps.diagnostics, command.input)).pipe(
+            Effect.andThen(
+              command.input.cause === "failed"
+                ? Effect.fail({ reason: command.input.failureReason }).pipe(
+                    withAuditSpan(
+                      command.input.failureReason === "ReadinessDeadline" ? "voice.ready" : "voice.failure",
+                      command.input.responseId
+                    ),
+                    Effect.ignore
+                  )
+                : Effect.void
+            )
+          )
       }
     }
     const executeWork = (command: WorkCommand): Effect.Effect<void> => {

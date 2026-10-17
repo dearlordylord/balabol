@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Effect, Schema, Stream } from "effect"
 import { Receipt, samePayload, StorageUnavailable, type Memory } from "../memory/index.ts"
 import type { AnswerGeneration } from "../answer-generation/index.ts"
@@ -88,6 +89,7 @@ export const persistResponseTerminal = (
   return preceding.pipe(
     Effect.andThen(appendReply(memory, command.payload)),
     Effect.flatMap((raw) => verifyReceipt(raw, command.payload)),
+    withAuditSpan("conversation.persist", command.payload.deliveryId),
     Effect.flatMap((receipt) => post({ ...command, kind: "TerminalStored", receipt })),
     Effect.catch((error) => post({ ...command, kind: "TerminalFailed", error })),
     Effect.uninterruptible

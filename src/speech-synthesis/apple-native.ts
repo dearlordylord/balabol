@@ -56,7 +56,18 @@ const readPcm = (path: string) =>
 export const appleNative: AppleNative = {
   voices: (settings) => runAppleProcess(settings.helperExecutable, ["--voices"]),
   plan: (settings, text, voice, allowedVoices) =>
-    runAppleProcess(settings.helperExecutable, ["--plan"], JSON.stringify({ text, voiceId: voice.id, allowedVoices })),
+    runAppleProcess(
+      settings.helperExecutable,
+      ["--plan"],
+      JSON.stringify({ text, voiceId: voice.id, allowedVoices })
+    ).pipe(
+      Effect.mapError((error) =>
+        error.reason === undefined || error.reason === "NativeProcessFailed"
+          ? new SpeechSynthesisFailed({ message: "Apple pronunciation planning failed", reason: "SynthesisPlanFailed" })
+          : error
+      ),
+      Effect.withSpan("speech.plan")
+    ),
   render: (settings, text, voice) =>
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(
@@ -72,6 +83,13 @@ export const appleNative: AppleNative = {
         settings.helperExecutable,
         [],
         JSON.stringify({ text, voiceId: voice.id, outputPath: caf })
+      ).pipe(
+        Effect.mapError((error) =>
+          error.reason === undefined || error.reason === "NativeProcessFailed"
+            ? new SpeechSynthesisFailed({ message: "Apple speech rendering failed", reason: "SynthesisRenderFailed" })
+            : error
+        ),
+        Effect.withSpan("speech.render")
       )
       yield* runAppleProcess(settings.ffmpegExecutable, [
         "-nostdin",
@@ -87,7 +105,12 @@ export const appleNative: AppleNative = {
         "-f",
         "s16le",
         pcm
-      ])
+      ]).pipe(
+        Effect.mapError(
+          () => new SpeechSynthesisFailed({ message: "Apple audio conversion failed", reason: "AudioConversionFailed" })
+        ),
+        Effect.withSpan("speech.convert")
+      )
       return { receipt, pcm: yield* readPcm(pcm) }
     })
 }

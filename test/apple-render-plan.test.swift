@@ -65,6 +65,12 @@ func rejects(_ operation: () throws -> Void, _ message: String) throws {
     try expect(
       sameScript.runs.count == 1 && sameScript.runs[0].voiceId == french.id,
       "Same-script Latin must retain requested voice")
+    let misclassifiedRussian = try plan(
+      "Привет, мир", defaultVoice: russian,
+      estimate: { _ in RenderLanguageEstimate(language: "bg", confidence: 0.99) })
+    try expect(
+      misclassifiedRussian.runs.allSatisfy({ $0.voiceId == russian.id }),
+      "Confident same-script misclassification must not override the requested voice")
     let shortRussian = try plan("код", defaultVoice: russian, estimate: { _ in nil })
     try expect(
       shortRussian.runs[0].voiceId == russian.id,

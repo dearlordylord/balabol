@@ -1,6 +1,8 @@
 import { Effect, Schema, SchemaGetter } from "effect"
+import { DeliveryFailure, sameDeliveryFailure } from "../delivery-failure/index.ts"
 
 import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
+export { DeliveryFailure, FailureReason, sameDeliveryFailure } from "../delivery-failure/index.ts"
 
 export const StoredLanguageSpans = LanguageSpans.pipe(Schema.withDecodingDefaultKey(Effect.succeed([])))
 
@@ -14,6 +16,8 @@ export const DeliveryId = Schema.String.check(Schema.isUUID()).pipe(
 export const Position = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const maximumTextLength = 100_000
 export const MessageText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumTextLength))
+const validFailureIdentity = (value: { failure?: DeliveryFailure; role?: string; outcome?: string | null }) =>
+  value.failure === undefined || (value.role === "assistant" && value.outcome === "interrupted")
 export const validMessageIdentity = (value: {
   deliveryId: string
   role?: "user" | "assistant"
@@ -21,7 +25,9 @@ export const validMessageIdentity = (value: {
   responseId?: string | null
   outcome?: "completed" | "interrupted" | null
   text?: string
+  failure?: DeliveryFailure
 }) => {
+  if (!validFailureIdentity(value)) return false
   if (value.text === "" && value.outcome !== "interrupted") return false
   if (value.role !== "assistant") return userIdentity(value)
   return (
@@ -44,6 +50,7 @@ export const DeliveryPayload = Schema.Struct({
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
   responseId: Schema.optionalKey(DeliveryId),
+  failure: Schema.optionalKey(DeliveryFailure),
   outcome: Schema.optionalKey(Schema.Literals(["completed", "interrupted"]))
 }).check(
   Schema.makeFilter(validMessageIdentity),
@@ -61,6 +68,7 @@ export const Receipt = Schema.Struct({
   role: Schema.optionalKey(Schema.Literals(["user", "assistant"])),
   inputDeliveryId: Schema.optionalKey(DeliveryId),
   responseId: Schema.optionalKey(DeliveryId),
+  failure: Schema.optionalKey(DeliveryFailure),
   outcome: Schema.optionalKey(Schema.Literals(["completed", "interrupted"]))
 }).check(
   Schema.makeFilter(validMessageIdentity),
@@ -109,6 +117,7 @@ const payloadDefaults = (value: DeliveryPayload) => ({
   outcome: value.role === "assistant" ? (value.outcome ?? "completed") : undefined
 })
 export const samePayload = (left: DeliveryPayload, right: DeliveryPayload): boolean => {
+  if (!sameDeliveryFailure(left.failure, right.failure)) return false
   const first = payloadDefaults(left)
   const second = payloadDefaults(right)
   if (JSON.stringify(first.languageSpans ?? []) !== JSON.stringify(second.languageSpans ?? [])) return false

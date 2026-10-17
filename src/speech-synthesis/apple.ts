@@ -87,9 +87,14 @@ const renderPhrase = (
   allowed: readonly AppleVoice[]
 ) =>
   Effect.gen(function* () {
-    const runs = yield* native
-      .plan(config, request.text, voice, allowed)
-      .pipe(Effect.flatMap((serialized) => parsePlan(serialized, request.text, allowed)))
+    const runs = yield* native.plan(config, request.text, voice, allowed).pipe(
+      Effect.flatMap((serialized) => parsePlan(serialized, request.text, allowed)),
+      Effect.mapError((error) =>
+        error.reason === undefined || error.reason === "NativeProcessFailed"
+          ? new SpeechSynthesisFailed({ message: "Apple pronunciation planning failed", reason: "SynthesisPlanFailed" })
+          : error
+      )
+    )
     const parts: Uint8Array[] = []
     let total = 0
     for (const run of runs) {
@@ -183,7 +188,14 @@ export const appleSynthesisLayer = (
                 Effect.scoped,
                 serial.withPermits(1),
                 Effect.timeout(deadlineMillis),
-                Effect.mapError(() => failed("Apple synthesis failed or exceeded its deadline"))
+                Effect.mapError((error) =>
+                  error instanceof SpeechSynthesisFailed
+                    ? error
+                    : new SpeechSynthesisFailed({
+                        message: "Apple synthesis exceeded its deadline",
+                        reason: "SynthesisDeadline"
+                      })
+                )
               )
               return events(pcm, request)
             })

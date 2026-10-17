@@ -101,7 +101,9 @@ actor ControlledReplyTransport: ConversationTransport {
     await withCheckedContinuation { waiting = $0 }
   }
   func emit(_ snapshot: ReplySnapshot) { continuation?.yield(snapshot) }
-  func failObservation() { continuation?.finish(throwing: ConversationFailure.unavailable) }
+  func failObservation(_ failure: ConversationFailure = .unavailable) {
+    continuation?.finish(throwing: failure)
+  }
 }
 
 @MainActor
@@ -260,7 +262,9 @@ final class ReplyLifetimeTests: XCTestCase {
 
 @MainActor
 final class ReplyReconnectTests: XCTestCase {
-  func testFreshObserverAcceptsAuthoritativeRestartFailureWithResetSequence() async throws {
+  func testManualRecoveryAfterInvalidStreamAcceptsAuthoritativeRestartFailureWithResetSequence()
+    async throws
+  {
     let transport = ControlledReplyTransport()
     let model = ConversationViewModel(transport: transport, draftStore: MemoryDraftStore())
     await model.start()
@@ -276,7 +280,7 @@ final class ReplyReconnectTests: XCTestCase {
       if model.replyText == "Prior partial" { break }
       await Task.yield()
     }
-    await transport.failObservation()
+    await transport.failObservation(.invalidResponse)
     for _ in 0..<1000 {
       if model.replyObservationFailure != nil { break }
       await Task.yield()

@@ -44,7 +44,11 @@ export const revokeDelivery = (
     registrationId: ticket.registrationId,
     sequence: (state.registration?.update.sequence ?? 0) + 1,
     ticket,
-    reason
+    reason,
+    ...(response.work.kind === "Settling" && response.work.payload.failure !== undefined
+      ? { failure: response.work.payload.failure }
+      : {}),
+    ...(response.work.kind === "Failed" ? { failure: response.work.error } : {})
   }
   return {
     state: updateDelivery(state, update),
@@ -101,7 +105,8 @@ export const selectTerminal = (
   state: ResponseState,
   response: ResponseAttempt,
   outcome: "Completed" | "Interrupted",
-  reason: ResponseInvalidation["reason"] = "Interrupted"
+  reason: ResponseInvalidation["reason"] = "Interrupted",
+  failure?: ReplyFailure
 ): ResponseDecision => {
   if (response.work.kind === "Settling" || response.work.kind === "Terminal") return updateResponse(state, response)
   const operation = state.nextToken
@@ -113,6 +118,7 @@ export const selectTerminal = (
     outcome: outcome === "Completed" ? "completed" : "interrupted",
     text: response.text,
     responseLanguage: response.responseLanguage,
+    ...(failure === undefined ? {} : { failure }),
     languageSpans: structuredClone(response.languageSpans)
   }
   const decision = terminalCore.transition(terminalCore.initialize(response.attempt), {

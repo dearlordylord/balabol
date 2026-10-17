@@ -1,11 +1,21 @@
+import CryptoKit
 import Foundation
 
 /// Explicitly configured endpoint; no global runtime, credentials or implicit
 /// network acquisition. URLSession is injected and owned by the composition root.
 public struct HTTPConversationTransport: ConversationTransport {
+  public static let observationIdleTimeout: TimeInterval = 300
+  public static func sessionConfiguration() -> URLSessionConfiguration {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 20
+    // Resource timeout includes streaming playback, not just the next byte.
+    configuration.timeoutIntervalForResource = observationIdleTimeout + 60
+    return configuration
+  }
+  private let diagnosticsEnabled: Bool
   private let baseURL: URL
   private let session: URLSession
-  public init(baseURL: URL, session: URLSession) throws {
+  public init(baseURL: URL, session: URLSession, diagnosticsEnabled: Bool = false) throws {
     guard ["http", "https"].contains(baseURL.scheme), baseURL.host != nil,
       baseURL.user == nil, baseURL.password == nil,
       baseURL.query == nil, baseURL.fragment == nil,
@@ -13,6 +23,7 @@ public struct HTTPConversationTransport: ConversationTransport {
     else {
       throw ConversationFailure.invalidInput
     }
+    self.diagnosticsEnabled = diagnosticsEnabled
     self.baseURL = baseURL
     self.session = session
   }
@@ -73,11 +84,13 @@ public struct HTTPConversationTransport: ConversationTransport {
     var request = URLRequest(url: url)
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     // Reply observation has its own idle lifetime, not the short POST timeout.
-    request.timeoutInterval = 300
+    request.timeoutInterval = Self.observationIdleTimeout
     let stream = AsyncThrowingStream<ReplySnapshot, any Error>.makeStream(
       bufferingPolicy: .bufferingOldest(16))
     let session = session
+    let diagnosticsEnabled = diagnosticsEnabled
     let reader = Task {
+      var stage = "headers"
       do {
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
@@ -97,6 +110,7 @@ public struct HTTPConversationTransport: ConversationTransport {
           http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix(
             "text/event-stream") == true
         else { throw ConversationFailure.invalidResponse }
+        stage = "read"
         var line = Data()
         var frame = Data()
         var hasData = false
@@ -110,10 +124,12 @@ public struct HTTPConversationTransport: ConversationTransport {
           if line.last == 13 { line.removeLast() }
           if line.isEmpty {
             if hasData {
+              stage = "decode"
               let snapshot: ReplySnapshot
               do { snapshot = try JSONDecoder().decode(ReplySnapshot.self, from: frame) } catch {
                 throw ConversationFailure.invalidResponse
               }
+              stage = "buffer"
               switch stream.continuation.yield(snapshot) {
               case .enqueued: break
               case .terminated: return
@@ -125,6 +141,7 @@ public struct HTTPConversationTransport: ConversationTransport {
                 return
               }
             }
+            stage = "read"
             frame.removeAll(keepingCapacity: true)
             hasData = false
           } else if line.starts(with: Array("data:".utf8)) {
@@ -140,8 +157,20 @@ public struct HTTPConversationTransport: ConversationTransport {
           line.removeAll(keepingCapacity: true)
         }
         throw ConversationFailure.unavailable
-      } catch let error as ConversationFailure { stream.continuation.finish(throwing: error) } catch
-      { stream.continuation.finish(throwing: ConversationFailure.unavailable) }
+      } catch let error as ConversationFailure {
+        if diagnosticsEnabled {
+          ReplyObservationDiagnostics.record(
+            input: inputDeliveryId, stage: "stream", failure: error)
+        }
+        stream.continuation.finish(throwing: error)
+      } catch {
+        if diagnosticsEnabled, !Task.isCancelled {
+          ReplyObservationDiagnostics.record(
+            input: inputDeliveryId, stage: "network",
+            networkCode: (error as? URLError)?.code.rawValue)
+        }
+        stream.continuation.finish(throwing: ConversationFailure.unavailable)
+      }
     }
     stream.continuation.onTermination = { _ in reader.cancel() }
     return ReplyObservation(
@@ -213,5 +242,67 @@ public struct HTTPConversationTransport: ConversationTransport {
   private struct ServerFailure: Decodable {
     let code: String
     let message: String
+  }
+}
+
+/// Bounded technical evidence only: no transcript, URL, server message or raw error.
+internal actor ReplyObservationDiagnostics {
+  private struct Entry: Codable {
+    let at: Date
+    let input: String
+    let stage: String
+    let kind: String
+    let networkCode: Int?
+  }
+  private static let shared = ReplyObservationDiagnostics()
+  private var entries: [Entry] = []
+  nonisolated static func record(
+    input: UUID, stage: String,
+    failure: ConversationFailure? = nil, networkCode: Int? = nil
+  ) {
+    let kind: String
+    switch failure {
+    case .invalidResponse: kind = "InvalidResponse"
+    case .rejected: kind = "Rejected"
+    case .some: kind = "Unavailable"
+    case nil: kind = networkCode == nil ? "Observed" : "Network"
+    }
+    let hashed = SHA256.hash(data: Data(input.uuidString.lowercased().utf8))
+      .map { String(format: "%02x", $0) }.joined().prefix(12).description
+    let entry = Entry(
+      at: Date(), input: hashed, stage: stage, kind: kind,
+      networkCode: networkCode)
+    Task { await shared.append(entry) }
+  }
+  nonisolated static func record(
+    input: UUID, stage: String,
+    result: Result<ReplySnapshot, ConversationFailure>
+  ) {
+    switch result {
+    case .failure(let failure): record(input: input, stage: stage, failure: failure)
+    case .success: record(input: input, stage: stage)
+    }
+  }
+  private func append(_ entry: Entry) {
+    entries.append(entry)
+    if entries.count > 128 { entries.removeFirst(entries.count - 128) }
+    do {
+      let directory = try FileManager.default.url(
+        for: .cachesDirectory,
+        in: .userDomainMask, appropriateFor: nil, create: true)
+      let data = try JSONEncoder().encode(entries)
+      #if os(iOS)
+        try data.write(
+          to: directory.appendingPathComponent("balabol-reply-observation.json"),
+          options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      #else
+        try data.write(
+          to: directory.appendingPathComponent("balabol-reply-observation.json"),
+          options: .atomic)
+      #endif
+    } catch {
+      // Never print the underlying error, which may contain a private filesystem path.
+      NSLog("Balabol reply observation diagnostics could not be persisted")
+    }
   }
 }

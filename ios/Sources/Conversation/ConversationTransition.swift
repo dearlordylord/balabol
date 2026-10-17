@@ -28,6 +28,7 @@ enum ConversationEvent {
   case replyReceived(ConversationState.Request, ReplySnapshot)
   case interruptedReplyRecovered(
     ConversationState.Request, Result<ReplySnapshot, ConversationFailure>)
+  case observationRecovered(ConversationState.Request, Result<ReplySnapshot, ConversationFailure>)
   case replyEnded(ConversationState.Request, ConversationFailure?)
   case shutdown
   case drained
@@ -49,6 +50,7 @@ enum ConversationCommand {
   case cancelReconnectDisplay
   case history(ConversationState.Request, Int?, older: Bool)
   case observeReply(ConversationState.Request, UUID)
+  case recoverObservation(ConversationState.Request, UUID, Int)
   case recoverInterruptedReply(ConversationState.Request, UUID)
   case cancelInterruptionRecoveries
   case cancelReply
@@ -121,6 +123,7 @@ extension ConversationState {
         if case .observing(let observer, let input, _) = reply, input == turn.input.deliveryId {
           return receiveReply(observer, turn.reply)
         }
+        if case .recovering = reply { return [] }
         if case .completed(let receipt) = reply,
           receipt.inputDeliveryId == turn.input.deliveryId
         {
@@ -132,12 +135,12 @@ extension ConversationState {
         {
           return []
         }
-        if let receipt = turn.reply.receipt {
-          reply = .completed(receipt)
-        } else if let failure = turn.reply.error {
+        if let failure = turn.reply.error {
           reply = .providerFailed(
             inputDeliveryId: turn.input.deliveryId, text: turn.reply.text, failure,
             languageSpans: turn.reply.languageSpans)
+        } else if let receipt = turn.reply.receipt {
+          reply = .completed(receipt)
         } else {
           reply = .observationFailed(
             inputDeliveryId: turn.input.deliveryId, latest: turn.reply, .unavailable)
@@ -228,7 +231,10 @@ extension ConversationState {
       let pending = content.pending ?? PendingDelivery(deliveryId: identity, text: content.text)
       // Invalidate queued old snapshots immediately. Keep its transport attached
       // until POST decides interruption, so disconnect cannot race acceptance.
-      if case .observing(_, let input, _) = reply { interruptedInput = input }
+      switch reply {
+      case .observing(_, let input, _), .recovering(_, let input, _, _): interruptedInput = input
+      default: break
+      }
       currentRequest = nil
       reconnectDisplayRequest = nil
       reconnectDisplayAfter = nil
@@ -326,9 +332,8 @@ extension ConversationState {
           interruptedReceiptFailure = .invalidResponse
           return []
         }
-        // A provider failure can win the race before server interruption. It
-        // contains no durable assistant receipt and must not become one here.
-        if snapshot.state == .failed { return [] }
+        // A pre-delivery provider failure has no durable assistant receipt.
+        if snapshot.state == .failed && snapshot.receipt == nil { return [] }
         guard let receipt = snapshot.receipt, merge([receipt]) else {
           interruptedReceiptFailure = .invalidResponse
           return []
@@ -337,10 +342,28 @@ extension ConversationState {
       case .failure(let error): interruptedReceiptFailure = error
       }
       return []
+    case .observationRecovered(let request, let result):
+      guard isActive, case .recovering(let expected, let input, let latest, _) = reply,
+        expected == request
+      else { return [] }
+      switch result {
+      case .failure(let error):
+        if error == .unavailable { return recoverObservation(input, latest) }
+        reply = .observationFailed(inputDeliveryId: input, latest: latest, error)
+        return []
+      case .success(let snapshot):
+        // A full read is authoritative across backend restarts; never generate here.
+        reply = .observing(request, inputDeliveryId: input, latest: nil)
+        let commands = receiveReply(request, snapshot)
+        return commands
+          + (snapshot.isTerminal || replyObservationFailure != nil
+            ? [] : [.observeReply(request, input)])
+      }
     case .replyEnded(let request, let error):
       guard isActive, case .observing(let expected, let input, let latest) = reply,
         expected == request
       else { return [] }
+      if error == nil || error == .unavailable { return recoverObservation(input, latest) }
       reply = .observationFailed(inputDeliveryId: input, latest: latest, error ?? .unavailable)
       return []
     case .shutdown:
@@ -353,6 +376,9 @@ extension ConversationState {
       currentRequest = nil
       replyRetryRequest = nil
       history = .idle
+      if case .recovering(_, let input, let latest, _) = reply {
+        reply = .observationFailed(inputDeliveryId: input, latest: latest, .unavailable)
+      }
       if case .observing(_, let input, let latest) = reply {
         reply = .observationFailed(inputDeliveryId: input, latest: latest, .unavailable)
       }
@@ -522,11 +548,13 @@ extension ConversationState {
       }
       guard snapshot.text.hasPrefix(latest.text) else { return failObservation(input, latest) }
     }
+    observationRecoveryAttempt = 0
     switch snapshot.state {
     case .waiting, .streaming, .delivering:
       reply = .observing(request, inputDeliveryId: input, latest: snapshot)
     case .failed:
       guard let error = snapshot.error else { return failObservation(input, latest) }
+      if let receipt = snapshot.receipt, !merge([receipt]) { return failObservation(input, latest) }
       reply = .providerFailed(
         inputDeliveryId: input, text: snapshot.text, error,
         languageSpans: snapshot.languageSpans)
@@ -539,6 +567,17 @@ extension ConversationState {
       return [.cancelReply]
     }
     return []
+  }
+
+  private mutating func recoverObservation(_ input: UUID, _ latest: ReplySnapshot?)
+    -> [ConversationCommand]
+  {
+    observationRecoveryAttempt = min(observationRecoveryAttempt + 1, 5)
+    let recovery = request()
+    reply = .recovering(
+      recovery, inputDeliveryId: input, latest: latest,
+      attempt: observationRecoveryAttempt)
+    return [.cancelReply, .recoverObservation(recovery, input, observationRecoveryAttempt)]
   }
 
   private mutating func failObservation(_ input: UUID, _ latest: ReplySnapshot?)
@@ -623,7 +662,8 @@ extension ConversationState {
       var inputs = Array(Set(handedInputs.prefix(2)))
       var current: ReplySnapshot?
       switch reply {
-      case .observing(_, let input, let latest), .observationFailed(let input, let latest, _):
+      case .observing(_, let input, let latest), .recovering(_, let input, let latest, _),
+        .observationFailed(let input, let latest, _):
         current = latest
         if !inputs.contains(input) { inputs.append(input) }
       default: break

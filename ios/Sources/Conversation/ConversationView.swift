@@ -52,7 +52,9 @@
                 Button {
                   followsLatest = false
                   olderAnchor = ConversationReadingAnchor(
-                    frames: rowFrames, viewport: transcriptFrame)
+                    frames: rowFrames.filter {
+                      $0.key != "latest-message" && $0.key != "reply-projection"
+                    }, viewport: transcriptFrame)
                   Task {
                     await model.loadOlderHistory()
                     if model.historyFailure != nil { olderAnchor = nil }
@@ -79,6 +81,13 @@
               details
               if model.replyIsWaiting || !model.replyText.isEmpty {
                 replyProjection.id("reply-projection")
+                  .background {
+                    GeometryReader { geometry in
+                      Color.clear.preference(
+                        key: ConversationRowFrames.self,
+                        value: ["reply-projection": geometry.frame(in: .global)])
+                    }
+                  }
               }
               replyNotices
               historyNotices
@@ -92,6 +101,13 @@
               }
               .font(.footnote).foregroundStyle(.primary.opacity(0.75))
               Color.clear.frame(height: 1).id("latest-message").accessibilityHidden(true)
+                .background {
+                  GeometryReader { geometry in
+                    Color.clear.preference(
+                      key: ConversationRowFrames.self,
+                      value: ["latest-message": geometry.frame(in: .global)])
+                  }
+                }
             }
             .scrollTargetLayout()
             .padding(.horizontal, 16)
@@ -109,6 +125,7 @@
           }
           .onPreferenceChange(ConversationRowFrames.self) { frames in
             rowFrames = frames
+            recordViewport()
             if var anchor = olderAnchor, anchor.isRestoring,
               let frame = frames[anchor.message], frame.intersects(transcriptFrame)
             {
@@ -156,7 +173,11 @@
           .onChange(of: model.isSending) { _, sending in
             if sending { olderAnchor = nil }
           }
-          .onChange(of: model.messages.count) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: transcriptFrame) { _, _ in recordViewport() }
+          .onChange(of: model.messages.count) { _, _ in
+            scrollToLatest(proxy)
+            recordViewport()
+          }
           .onChange(of: model.replyText) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyIsWaiting) { _, _ in scrollToLatest(proxy) }
           .onChange(of: model.replyProviderFailure) { _, _ in scrollToLatest(proxy) }
@@ -229,7 +250,10 @@
               .foregroundStyle(.primary.opacity(0.75))
               .accessibilityIdentifier("message-languages-\(message.position)")
           }
-          if message.outcome == .interrupted {
+          if let failure = message.failure {
+            Text("Reply failed: \(failure.message)").font(.caption)
+              .accessibilityIdentifier("failed-message-\(message.position)")
+          } else if message.outcome == .interrupted {
             HStack(spacing: 6) {
               Image(systemName: "pause.circle").accessibilityHidden(true)
               Text("Interrupted").accessibilityIdentifier("interrupted-message-\(message.position)")
@@ -288,9 +312,7 @@
     @ViewBuilder private var replyNotices: some View {
       if let failure = model.replyProviderFailure {
         notice(
-          failure.code == .memoryFailed || failure.code == .memoryPending
-            ? "Message saved. Conversation context couldn’t be prepared."
-            : "Message saved. Reply unavailable.", id: "reply-provider-status")
+          "Reply failed: \(failure.message)", id: "reply-provider-status")
       }
       if model.canRetryReply {
         Button("Retry reply") { Task { await model.retryReply() } }
@@ -411,6 +433,19 @@
       .font(.footnote)
       .padding(12).frame(maxWidth: 680, alignment: .leading)
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func recordViewport() {
+      guard model.diagnosticsEnabled else { return }
+      let rows = rowFrames.filter { $0.key != "latest-message" }
+      let snapshot = ConversationViewportDiagnostics.Snapshot(
+        uptime: ProcessInfo.processInfo.systemUptime, messages: model.messages.count,
+        replyLength: model.replyText.utf16.count,
+        viewportHeight: transcriptFrame.height, viewportWidth: transcriptFrame.width,
+        measuredRows: rows.count,
+        visibleRows: rows.values.filter { $0.intersects(transcriptFrame) }.count,
+        bottomOffset: rowFrames["latest-message"].map { $0.maxY - transcriptFrame.maxY })
+      ConversationViewportDiagnostics.record(snapshot)
     }
 
     private func scrollToLatest(_ proxy: ScrollViewProxy) {

@@ -38,10 +38,10 @@ export const restoredReply = (receipt: Receipt, inputDeliveryId: string): Reply 
     responseId: receipt.deliveryId,
     inputDeliveryId,
     sequence: maximumReplyLength + 1,
-    state: receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
+    state: receipt.failure !== undefined ? "Failed" : receipt.outcome === "interrupted" ? "Interrupted" : "Completed",
     text: receipt.text,
     languageSpans: receipt.languageSpans,
-    error: null,
+    error: receipt.failure ?? null,
     receipt
   })
 

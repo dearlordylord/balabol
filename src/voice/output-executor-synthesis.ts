@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { Deferred, Effect, Schema, Stream } from "effect"
 import { SynthesisEvent } from "../speech-synthesis/index.ts"
@@ -59,7 +60,12 @@ export const executeSynthesis = (resources: OutputResources, command: Synthesize
             text: command.phrase.text
           })
           .pipe(Stream.runForEach((raw) => packet(resources, command, raw)))
-      ).pipe(Effect.mapError(outputError), Effect.interruptible, Effect.exit)
+      ).pipe(
+        withAuditSpan("voice.synthesis", command.key.ticket.responseId),
+        Effect.mapError(outputError),
+        Effect.interruptible,
+        Effect.exit
+      )
       yield* resources.post({
         kind: "SynthesisSettled",
         operation: command.operation,
@@ -85,7 +91,7 @@ export const executeCapture = (resources: OutputResources, command: Capture) =>
         )
           return Effect.interrupt
         return publication.capture(payload.audio).pipe(Effect.mapError(outputError))
-      }).pipe(Effect.interruptible, Effect.exit)
+      }).pipe(withAuditSpan("voice.capture", command.key.ticket.responseId), Effect.interruptible, Effect.exit)
       yield* resources.post({
         kind: "CaptureFinished",
         operation: command.operation,

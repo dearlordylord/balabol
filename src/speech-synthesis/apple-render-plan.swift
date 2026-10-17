@@ -101,9 +101,10 @@ struct AppleRenderPlanner {
   private func voice(_ text: String, family: String?) throws -> RenderPlanVoice {
     guard let family else { return fallback }
     let fallbackScript = Locale.Language(identifier: fallback.actualLocale).script?.identifier
-    // Same-script FR/EN ambiguity retains the requested voice. For Latin
-    // insertions in a non-Latin reply, ambiguous names retain that voice.
-    if family == "Latn", fallbackScript == "Latn" { return fallback }
+    // The requested voice owns same-script pronunciation. Short text estimates
+    // can confidently misclassify Russian as Bulgarian (and French as English).
+    // Infer a voice only for insertions in a different script.
+    if family == fallbackScript { return fallback }
     let result = estimate(text)
     if family == "Latn" {
       guard let result, result.confidence.isFinite, (0.75...1).contains(result.confidence),
@@ -116,7 +117,6 @@ struct AppleRenderPlanner {
     guard let result, result.confidence.isFinite,
       (0.75...1).contains(result.confidence)
     else {
-      if family == fallbackScript { return fallback }
       throw RenderPlanningError.uncertainLanguage
     }
     guard

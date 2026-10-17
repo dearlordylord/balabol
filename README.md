@@ -19,6 +19,14 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 - [Engineering standards](docs/engineering/standards.md)
 - [Deferred real-model qualification](.scratch/followups/issues/01-create-real-model-check-task.md)
 
+## Local operation audit
+
+The backend exports sanitized Effect spans to `~/.local/share/balabol/diagnostics/operations.jsonl` (private permissions; rotation retains the current and previous file, up to 4 MiB each). No telemetry server is required. Spans record operation, parent/trace identity, hashed response identity, duration, outcome and typed failure reason; conversation text, credentials, raw exceptions and audio are excluded. Queue overflow and write failures are counted and reported to stderr. Shutdown drains pending writes for up to three seconds; this is operational diagnostics, not a crash-durable transaction log.
+
+Delivery failures retain their original cause in the saved assistant receipt and display as failures after refresh or restart. A genuine interruption remains a separate result. Pre-delivery generation failures keep their existing retry semantics and are recorded in the audit.
+
+Debug iPhone builds also retain the last 128 reply-observation diagnostics in the app cache at `balabol-reply-observation.json`: hashed input identity, stage, failure category and URLSession error code, without text, URLs or raw errors. A lost reply stream enters read-only recovery with delays from one to five seconds, retains displayed text and reads the same accepted input before resuming observation. Recovery never resends input or retries model generation. Invalid protocol data remains an explicit failure. The companion `balabol-conversation-viewport.json` records at most 128 coalesced geometry snapshots (up to four writes per second): message count, reply length, viewport size, visible-row count and bottom offset. It contains no message content or identities and helps distinguish transcript state from scroll/layout failures. The shared HTTP resource budget is six minutes so it cannot truncate the five-minute voice delivery lifetime at thirty seconds.
+
 ## Run the text prototype on Simulator
 
 The backend is a Terminal process; the interface is a separate native iOS app. Opening the backend URL in a browser shows setup instructions, not a chat.

@@ -29,6 +29,7 @@ const ledgerPayload = {
   role: Schema.Literals(["user", "assistant"]),
   inputDeliveryId: Schema.NullOr(DeliveryId),
   responseId: Schema.NullOr(DeliveryId),
+  failure: DeliveryPayload.fields.failure,
   outcome: Schema.NullOr(Schema.Literals(["completed", "interrupted"]))
 }
 const Ledger = Schema.Union([
@@ -40,13 +41,22 @@ const Ledger = Schema.Union([
 )
 export type Ledger = typeof Ledger.Type
 
+const encodeFailure = (failure: DeliveryPayload["failure"]) => (failure === undefined ? null : JSON.stringify(failure))
+const decodeFailure = (row: Record<string, unknown>) => {
+  const { failure, ...fields } = row
+  return {
+    ...fields,
+    ...(failure == null ? {} : { failure: JSON.parse(Schema.decodeUnknownSync(Schema.String)(failure)) })
+  }
+}
+
 const decodeReceipt = (row: Record<string, unknown>): Receipt => {
   const fields = Schema.decodeUnknownSync(
     Schema.Struct({ inputDeliveryId: Schema.NullOr(DeliveryId), responseId: Schema.NullOr(DeliveryId) })
   )(row)
   const { inputDeliveryId: _input, outcome: _outcome, responseId: _response, ...rest } = row
   return Schema.decodeUnknownSync(Receipt)({
-    ...rest,
+    ...decodeFailure(rest),
     languageSpans: JSON.parse(Schema.decodeUnknownSync(Schema.String)(row.languageSpans)),
     ...(fields.inputDeliveryId === null ? {} : { inputDeliveryId: fields.inputDeliveryId }),
     ...(fields.responseId === null ? {} : { responseId: fields.responseId }),
@@ -113,6 +123,8 @@ export class SqliteStorage implements Storage {
   }
   // Nullable metadata preserves legacy unknown detection without inventing spans or a preference.
   #migrateLanguages(names: readonly string[]): void {
+    if (!names.includes("failure"))
+      this.transaction(() => this.database.exec("ALTER TABLE deliveries ADD COLUMN failure TEXT"))
     for (const column of ["detectedLanguage", "responseLanguage"])
       if (!names.includes(column))
         this.transaction(() => this.database.exec(`ALTER TABLE deliveries ADD COLUMN ${column} TEXT`))
@@ -149,13 +161,13 @@ export class SqliteStorage implements Storage {
   find(deliveryId: DeliveryPayload["deliveryId"]): Ledger | undefined {
     const row = this.database
       .prepare(
-        "SELECT deliveryId,text,position,firstId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage FROM deliveries WHERE deliveryId=?"
+        "SELECT deliveryId,text,position,firstId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage,failure FROM deliveries WHERE deliveryId=?"
       )
       .get(Schema.decodeUnknownSync(DeliveryId)(deliveryId))
     return row === undefined
       ? undefined
       : Schema.decodeUnknownSync(Ledger)({
-          ...row,
+          ...decodeFailure(row),
           languageSpans: JSON.parse(Schema.decodeUnknownSync(Schema.String)(row.languageSpans))
         })
   }
@@ -209,7 +221,7 @@ export class SqliteStorage implements Storage {
     const parsed = Schema.decodeUnknownSync(DeliveryPayload)(input)
     this.database
       .prepare(
-        "INSERT OR IGNORE INTO deliveries(deliveryId,text,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage) VALUES(?,?,?,?,?,?,?,?,?)"
+        "INSERT OR IGNORE INTO deliveries(deliveryId,text,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage,failure) VALUES(?,?,?,?,?,?,?,?,?,?)"
       )
       .run(
         parsed.deliveryId,
@@ -220,7 +232,8 @@ export class SqliteStorage implements Storage {
         parsed.role === "assistant" ? (parsed.outcome ?? "completed") : null,
         JSON.stringify(parsed.languageSpans),
         parsed.detectedLanguage ?? null,
-        parsed.responseLanguage ?? null
+        parsed.responseLanguage ?? null,
+        encodeFailure(parsed.failure)
       )
     this.#pending = parsed
   }
@@ -231,12 +244,12 @@ export class SqliteStorage implements Storage {
       after === undefined
         ? this.database
             .prepare(
-              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage FROM deliveries WHERE firstId IS NOT NULL ORDER BY position LIMIT ?"
+              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage,failure FROM deliveries WHERE firstId IS NOT NULL ORDER BY position LIMIT ?"
             )
             .all(limit)
         : this.database
             .prepare(
-              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
+              "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage,failure FROM deliveries WHERE firstId IS NOT NULL AND position>? ORDER BY position LIMIT ?"
             )
             .all(after, limit)
     return rows.map(decodeReceipt)
@@ -247,7 +260,7 @@ export class SqliteStorage implements Storage {
     if (before !== undefined) Schema.decodeUnknownSync(Position)(before)
     const rows = this.database
       .prepare(
-        "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage FROM deliveries WHERE firstId IS NOT NULL AND position < ? ORDER BY position DESC LIMIT ?"
+        "SELECT deliveryId,text,position,firstId AS recordId,role,inputDeliveryId,responseId,outcome,languageSpans,detectedLanguage,responseLanguage,failure FROM deliveries WHERE firstId IS NOT NULL AND position < ? ORDER BY position DESC LIMIT ?"
       )
       .all(before ?? Number.MAX_SAFE_INTEGER, limit + 1)
     return rows.map(decodeReceipt)

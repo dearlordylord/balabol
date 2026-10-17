@@ -225,12 +225,14 @@ private struct ConversationRoot: View {
     guard model == nil, session == nil else { return }
     do {
       guard let url = URL(string: urlInput) else { throw ConversationFailure.invalidInput }
-      let configuration = URLSessionConfiguration.ephemeral
-      configuration.timeoutIntervalForRequest = 20
-      configuration.timeoutIntervalForResource = 30
+      let configuration = HTTPConversationTransport.sessionConfiguration()
       let candidate = URLSession(configuration: configuration)
       let transport: HTTPConversationTransport
-      do { transport = try HTTPConversationTransport(baseURL: url, session: candidate) } catch {
+      do {
+        transport = try HTTPConversationTransport(
+          baseURL: url, session: candidate,
+          diagnosticsEnabled: localState.voiceDiagnostics)
+      } catch {
         candidate.invalidateAndCancel()
         throw error
       }
@@ -241,6 +243,7 @@ private struct ConversationRoot: View {
       let inputRelay = VoiceInputIntentRelay()
       let conversation = ConversationViewModel(
         transport: transport, draftStore: draftStore,
+        diagnosticsEnabled: localState.voiceDiagnostics,
         inputIntent: { id in inputRelay.send(id) })
       let control = try HTTPVoiceControl(baseURL: url, session: candidate)
       let checkpointDirectory = localState.draftURL(in: directory).deletingLastPathComponent()

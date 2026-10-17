@@ -49,7 +49,7 @@
         if model.output.locallyInterrupted {
           Text("Interrupted").font(.caption)
         } else if model.output.unavailable {
-          Text("Audio unavailable").font(.caption).accessibilityIdentifier(
+          Text(model.output.current?.error?.message ?? "Audio unavailable").font(.caption).accessibilityIdentifier(
             "voice-output-unavailable")
         } else if let output = model.output.current {
           if output.status == .playing && model.output.receivedAudio {

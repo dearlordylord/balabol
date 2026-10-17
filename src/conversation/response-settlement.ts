@@ -1,9 +1,10 @@
+import type { DeliverySettlement } from "./delivery.ts"
 import { awaitResponseCleanup, finishResponseCleanup } from "./response-cleanup.ts"
 import terminalCore from "./response-terminal-core/index.ts"
 import type { Receipt, DeliveryPayload } from "../memory/index.ts"
 import { samePayload } from "../memory/index.ts"
 import { StorageUnavailable } from "./contracts.ts"
-import type { ResponseState, ResponseAttempt } from "./response-state.ts"
+import type { ResponseState, ResponseAttempt, ReplyFailure } from "./response-state.ts"
 import { sameTarget, ticketMatches } from "./response-state.ts"
 import type { ResponseEvent, ResponseCommand } from "./response-events.ts"
 import {
@@ -211,6 +212,10 @@ export const workFailed = (
     return unchangedResponse(state)
   return failResponse(state, current, event.error)
 }
+const settlementFailure = (settlement: DeliverySettlement): ReplyFailure | undefined =>
+  settlement.outcome === "Completed"
+    ? undefined
+    : (settlement.error ?? { code: "AudioUnavailable", message: "Audio delivery failed without a reported cause" })
 export const settleDelivery = (
   state: ResponseState,
   event: Extract<ResponseEvent, { kind: "Settle" }>
@@ -230,7 +235,8 @@ export const settleDelivery = (
     state,
     { ...current, waiters: [...current.waiters, { requestId: event.requestId, result: "Reply" }] },
     event.settlement.outcome === "Completed" ? "Completed" : "Interrupted",
-    event.settlement.outcome === "Failed" ? "Failed" : "Interrupted"
+    event.settlement.outcome === "Failed" ? "Failed" : "Interrupted",
+    settlementFailure(event.settlement)
   )
 }
 

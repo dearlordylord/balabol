@@ -24,7 +24,11 @@ export const terminateOutput = (
 export const failOutput = (state: OutputState, error: OutputError): OutputTransition => {
   const selected = state.selected
   if (selected === null || outputTerminal(selected.phase)) return unchangedOutput(state)
-  const result = terminateOutput(state, "Failed", { ...error, message: error.message.slice(0, maximumError) })
+  const normalized = {
+    ...error,
+    message: error.message.slice(0, maximumError) || "Audio output failed without a reported cause"
+  }
+  const result = terminateOutput(state, "Failed", normalized)
   const operation = result.state.nextOperation
   return {
     ...result,
@@ -33,7 +37,7 @@ export const failOutput = (state: OutputState, error: OutputError): OutputTransi
       operation,
       key: selected.key,
       outcome: "Failed",
-      error,
+      error: normalized,
       status: "Reserved"
     }),
     commands: [
@@ -41,11 +45,13 @@ export const failOutput = (state: OutputState, error: OutputError): OutputTransi
       {
         kind: "Trace",
         cause: "failed",
+        errorCode: "AudioUnavailable",
+        ...(normalized.reason === undefined ? {} : { failureReason: normalized.reason }),
         applied: true,
         target: { ...selected.key.ticket, outputEpoch: selected.key.outputEpoch },
         priorStatus: outputProjection(state)?.status
       },
-      { kind: "SettleDelivery", operation, key: selected.key, outcome: "Failed", error }
+      { kind: "SettleDelivery", operation, key: selected.key, outcome: "Failed", error: normalized }
     ]
   }
 }

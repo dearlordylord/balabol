@@ -43,8 +43,10 @@ for (const ordering of orderings)
           yield* TestClock.adjust(1)
           terminal = yield* conversation.reply(input.deliveryId)
         }
-        const outcome = ordering === "CompletionFirst" ? "Completed" : "Interrupted"
+        const outcome = ordering === "CompletionFirst" ? "Completed" : "Failed"
         expect(terminal.state).toBe(outcome)
+        if (ordering === "DeadlineFirst") expect(terminal.error?.reason).toBe("DeliveryDeadline")
+        else expect(terminal.error).toBeNull()
         expect(terminal.text).toBe(generated.text)
         expect(terminal.receipt?.outcome).toBe(ordering === "CompletionFirst" ? "completed" : "interrupted")
         expect(authorization.isAuthorized()).toBe(false)

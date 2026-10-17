@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
-import { DeliveryId, MessageText, Position, Receipt } from "../memory/index.ts"
+import { sameDeliveryFailure, DeliveryFailure, DeliveryId, MessageText, Position, Receipt } from "../memory/index.ts"
 export { StorageUnavailable, WriterUnavailable } from "../memory/index.ts"
 export const SendMessage = Schema.Struct({
   deliveryId: DeliveryId,
@@ -51,18 +51,7 @@ const responseFields = {
   text: Schema.String.check(Schema.isMaxLength(maximumReplyLength)),
   languageSpans: Schema.optionalKey(LanguageSpans)
 }
-export const ReplyError = Schema.Struct({
-  code: Schema.Literals([
-    "MemoryPending",
-    "MemoryFailed",
-    "ProviderFailed",
-    "InvalidProviderStream",
-    "StorageUnavailable",
-    "Restarted",
-    "Cancelled"
-  ]),
-  message: Schema.String
-})
+export const ReplyError = DeliveryFailure
 const validCompletion = (value: {
   receipt: Message | null
   responseId: string
@@ -77,6 +66,18 @@ const validCompletion = (value: {
   value.receipt.inputDeliveryId === value.inputDeliveryId &&
   value.receipt.text === value.text &&
   JSON.stringify(value.receipt.languageSpans) === JSON.stringify(value.languageSpans ?? [])
+const validFailedReply = (value: {
+  receipt: Message | null
+  error: typeof ReplyError.Type
+  responseId: string
+  inputDeliveryId: string
+  text: string
+  languageSpans?: typeof LanguageSpans.Type
+}) => value.receipt === null || (validCompletion(value) && sameDeliveryFailure(value.receipt.failure, value.error))
+const validTerminalOutcome = (state: string, receipt: Message | null) =>
+  receipt !== null &&
+  receipt.failure === undefined &&
+  (state === "Interrupted" ? receipt.outcome === "interrupted" : receipt.outcome !== "interrupted")
 export const Reply = Schema.Union([
   Schema.Struct({
     ...responseFields,
@@ -90,21 +91,20 @@ export const Reply = Schema.Union([
     error: Schema.Null,
     receipt: Message
   }),
-  Schema.Struct({ ...responseFields, state: Schema.Literal("Failed"), error: ReplyError, receipt: Schema.Null })
+  Schema.Struct({
+    ...responseFields,
+    state: Schema.Literal("Failed"),
+    error: ReplyError,
+    receipt: Schema.NullOr(Message)
+  })
 ]).check(
   Schema.makeFilter((value) => validLanguageSpans(value.text, value.languageSpans ?? [])),
   Schema.makeFilter((value) => {
     if (value.responseId === value.inputDeliveryId) return false
     if (value.state === "Waiting") return value.text.length === 0
     if (["Streaming", "Delivering"].includes(value.state)) return value.text.length > 0
-    if (value.state === "Failed") return true
-    return (
-      value.receipt !== null &&
-      validCompletion(value) &&
-      (value.state === "Interrupted"
-        ? value.receipt.outcome === "interrupted"
-        : value.receipt.outcome !== "interrupted")
-    )
+    if (value.state === "Failed") return validFailedReply(value)
+    return validCompletion(value) && validTerminalOutcome(value.state, value.receipt)
   })
 )
 export type Reply = typeof Reply.Type

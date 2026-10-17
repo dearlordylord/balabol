@@ -87,7 +87,8 @@ it.effect("a late successful drain cannot revive an expired delivery and a fresh
       expect((yield* conversation.reply(outputInput.deliveryId)).receipt?.outcome).toBe("interrupted")
       yield* Deferred.succeed(release, undefined)
       yield* Deferred.await(closed)
-      expect((yield* conversation.reply(outputInput.deliveryId)).state).toBe("Interrupted")
+      expect((yield* conversation.reply(outputInput.deliveryId)).state).toBe("Failed")
+      expect((yield* conversation.reply(outputInput.deliveryId)).error?.reason).toBe("DeliveryDeadline")
       const fresh = { deliveryId: "22222222-2222-4222-8222-222222222222", text: "Fresh reply" }
       yield* conversation.send(fresh)
       yield* TestClock.adjust(1)

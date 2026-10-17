@@ -33,6 +33,8 @@ const projectionMetadata = (state: SessionState, target: TraceCommand["target"])
 const traceInput = (state: SessionState, command: TraceCommand) => ({
   sessionId: state.id,
   cause: command.cause,
+  ...(command.errorCode === undefined ? {} : { errorCode: command.errorCode }),
+  ...(command.failureReason === undefined ? {} : { failureReason: command.failureReason }),
   applied: command.applied,
   ...projectionMetadata(state, command.target),
   ...targetMetadata(command.target),
