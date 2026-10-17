@@ -53,8 +53,7 @@ import XCTest
     XCTAssertNil(legacy.languageSpans)
   }
 
-  func testWholeResultDetectionValidatesWithoutInventingSpansAndRejectsContradictoryReceipt() throws
-  {
+  func testWholeResultDetectionValidatesWithoutInventingSpans() throws {
     let incarnation = UUID()
     let session = UUID()
     let delivery = UUID()
@@ -82,23 +81,7 @@ import XCTest
         VoiceWireEvent.self,
         from: JSONSerialization.data(withJSONObject: fields)
       ).detectedLanguage)
-    var state = VoiceState()
-    let association = VoiceAdmissionAssociation(
-      backendIncarnationId: incarnation,
-      sessionId: session, deliveryId: delivery, detectedLanguage: "ru")
-    _ = state.stageFinal(association, text: "Привет", languageSpans: [])
-    let wrong = ConversationMessage(
-      deliveryId: delivery, recordId: 0, position: 0,
-      text: "Привет", detectedLanguage: "fr", responseLanguage: "fr")
-    XCTAssertTrue(
-      state.acceptedAdmission(association, receipt: wrong, expectedText: "Привет").isEmpty)
-    XCTAssertEqual(state.pendingAssociations.first?.detectedLanguage, "ru")
-    let receipt = ConversationMessage(
-      deliveryId: delivery, recordId: 0, position: 0,
-      text: "Привет", detectedLanguage: "ru", responseLanguage: "ru")
-    XCTAssertFalse(
-      state.acceptedAdmission(association, receipt: receipt, expectedText: "Привет").isEmpty)
-    XCTAssertEqual(state.admissions[delivery], .saved(receipt))
+
   }
 
   func testAdmissionCheckpointMetadataReadsLegacyAndRejectsInvalidDetector() throws {

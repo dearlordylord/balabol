@@ -87,20 +87,84 @@ public struct VoiceOutput: Codable, Equatable, Sendable {
   }
 }
 
-/// Output metadata is separate from capture and durable input admission.
+/// Immutable output projection and acceptance policy, composed by VoiceState.
 public struct VoiceOutputState: Equatable, Sendable {
-  public internal(set) var current: VoiceOutput?
-  public internal(set) var locallyInterrupted = false
-  public internal(set) var unavailable = false
-  public internal(set) var receivedAudio = false
-  internal var closed = false
-  internal var sequence = -1
-  internal var lastAcceptedInput: UUID?
-  internal var cutInput: UUID?
-  internal var cutAcceptedInput: UUID?
-  internal var cutPendingInputs: [UUID] = []
-  internal var allowedInput: UUID?
-  internal var gated = false
-  internal var prepared: VoiceOutputIdentity?
-  internal var interrupted: VoiceOutputIdentity?
+  public let current: VoiceOutput?
+  public let locallyInterrupted: Bool
+  public let unavailable: Bool
+  public let receivedAudio: Bool
+  internal let closed: Bool
+  internal let sequence: Int
+  internal let lastAcceptedInput: UUID?
+  internal let cutInput: UUID?
+  internal let cutAcceptedInput: UUID?
+  internal let cutPendingInputs: [UUID]
+  internal let allowedInput: UUID?
+  internal let gated: Bool
+  internal let prepared: VoiceOutputIdentity?
+  internal let interrupted: VoiceOutputIdentity?
+  internal init(
+    current: VoiceOutput? = nil,
+    locallyInterrupted: Bool = false,
+    unavailable: Bool = false,
+    receivedAudio: Bool = false,
+    closed: Bool = false,
+    sequence: Int = -1,
+    lastAcceptedInput: UUID? = nil,
+    cutInput: UUID? = nil,
+    cutAcceptedInput: UUID? = nil,
+    cutPendingInputs: [UUID] = [],
+    allowedInput: UUID? = nil,
+    gated: Bool = false,
+    prepared: VoiceOutputIdentity? = nil,
+    interrupted: VoiceOutputIdentity? = nil
+  ) {
+    self.current = current
+    self.locallyInterrupted = locallyInterrupted
+    self.unavailable = unavailable
+    self.receivedAudio = receivedAudio
+    self.closed = closed
+    self.sequence = sequence
+    self.lastAcceptedInput = lastAcceptedInput
+    self.cutInput = cutInput
+    self.cutAcceptedInput = cutAcceptedInput
+    self.cutPendingInputs = cutPendingInputs
+    self.allowedInput = allowedInput
+    self.gated = gated
+    self.prepared = prepared
+    self.interrupted = interrupted
+  }
+  internal func replacing(
+    current: VoiceOutput?? = nil,
+    locallyInterrupted: Bool? = nil,
+    unavailable: Bool? = nil,
+    receivedAudio: Bool? = nil,
+    closed: Bool? = nil,
+    sequence: Int? = nil,
+    lastAcceptedInput: UUID?? = nil,
+    cutInput: UUID?? = nil,
+    cutAcceptedInput: UUID?? = nil,
+    cutPendingInputs: [UUID]? = nil,
+    allowedInput: UUID?? = nil,
+    gated: Bool? = nil,
+    prepared: VoiceOutputIdentity?? = nil,
+    interrupted: VoiceOutputIdentity?? = nil
+  ) -> VoiceOutputState {
+    VoiceOutputState(
+      current: current ?? self.current,
+      locallyInterrupted: locallyInterrupted ?? self.locallyInterrupted,
+      unavailable: unavailable ?? self.unavailable,
+      receivedAudio: receivedAudio ?? self.receivedAudio,
+      closed: closed ?? self.closed,
+      sequence: sequence ?? self.sequence,
+      lastAcceptedInput: lastAcceptedInput ?? self.lastAcceptedInput,
+      cutInput: cutInput ?? self.cutInput,
+      cutAcceptedInput: cutAcceptedInput ?? self.cutAcceptedInput,
+      cutPendingInputs: cutPendingInputs ?? self.cutPendingInputs,
+      allowedInput: allowedInput ?? self.allowedInput,
+      gated: gated ?? self.gated,
+      prepared: prepared ?? self.prepared,
+      interrupted: interrupted ?? self.interrupted
+    )
+  }
 }

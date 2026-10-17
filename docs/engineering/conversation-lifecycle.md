@@ -2,7 +2,7 @@
 
 **Purpose:** Define lifecycle authority, ordering and execution contracts for the functional conversation migration.
 **Audience:** Implementers and architectural reviewers.
-**Status:** Accepted target protocol; admission is integrated in #53, response/delivery in #54, session/registry lifecycle in #55 and provisional recognition in #56; #57–#58 migrate the remaining output and Swift owners.
+**Status:** Implemented protocol: admission in #53, response/delivery in #54, session/registry lifecycle in #55, provisional recognition in #56, output in #57 and the composed Swift feature in #58. Qualification evidence lives in the corresponding issue comments.
 **Authority:** [Specification #51](https://github.com/dearlordylord/balabol/issues/51), its child issues and owner-delegated Astra review.
 **Expected use:** Start Conversation or Voice state changes here, then follow the owner-local transition and interpreter.
 **Lifecycle:** Update this protocol with changes to ownership, command acknowledgement or cancellation semantics. Do not describe planned guarantees as implemented.
@@ -139,6 +139,16 @@ After installing the new state, the interpreter invalidates publication synchron
 Phrase staging preserves scalar-safe 800-character phrases, a 1,600-character staging buffer, punctuation and language-run splitting, and append-only authoritative reply text. Retention of that source text is separate from the staging bound. PCM stays in the executor: one copied packet token waits for actual capture completion and owner-selected release before the provider can advance. Packet identity, order, phrase frame budget and clean stream completion remain owner decisions.
 
 Close waits for the fixed resource set's matching port acknowledgements. Failed publication close or unregistration retains the stable resource obligation and reserves a new release invocation with a 100 ms delay outside the writer. Only the matching invocation can settle it; a stale failure cannot reopen or overwrite its replacement. It does not claim that a LiveKit scope acknowledgement proves all deferred SDK/native cleanup finished; the adapter retains that existing responsibility. Unexpected output defects produce sanitized `outputDefect` technical metadata without exposing provider payloads or private causes.
+
+## Swift feature transition
+
+Start client voice changes in `VoiceFeatureTransition.swift`. Its immutable `VoiceState` composes capture, admission recovery, language capability and output values. Named capture, snapshot, platform, recovery and output subtransitions share this owner; they do not acquire independent task loops. `VoiceFeatureContract.swift` defines explicit input facts, reserved requests, work payloads and correlated results. Bootstrap UUID proposals enter at the ViewModel boundary, and correlated timer completions carry elapsed-time facts. Pure transitions neither generate UUIDs nor read clocks.
+
+`VoiceViewModel` commits one returned feature value before interpreting its commands. Reentrant callback events wait in its concrete inbox until the current command batch is installed, so cancellation cannot miss a reserved Task. `VoiceTaskInterpreter` owns Tasks, dependency handles and platform barriers, and never reads feature state to decide what happens next. Cancellation leaves a command outstanding until its exact physical completion. Local suppression commits before synchronous platform fencing; asynchronous stop and remote acknowledgements follow outside the writer. End and shutdown do not erase unresolved admission checkpoints. A replacement capture must wait for older physical work that could still change the shared media adapter, even after the prior session's local disconnect completes.
+
+A bootstrap that returns after cancellation still creates an exact session/incarnation release obligation. A failed closure attempt retains that obligation and schedules a correlated retry outside the writer, including during shutdown. Successful port acknowledgement discharges it; completion remains conditional on eventual successful closure or definitive producer-absence evidence.
+
+Server receipts remain authoritative for accepted text and order. A selected output, acknowledged readiness and audio actually received remain distinct facts. Client transition tests do not establish physical playback, echo rejection or locked-screen behavior.
 
 ## Qualified compilation boundary
 

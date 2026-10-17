@@ -2,7 +2,7 @@
 
 **Purpose:** Specify the functional lifecycle refactor and proportionate use of Bend law-driven development.
 **Audience:** Implementers and architecture reviewers.
-**Status:** Accepted direction; implementation and proofs pending.
+**Status:** Implemented through #52–#58; qualification evidence is recorded in their issue comments and the lifecycle protocol.
 **Authority:** Owner discussion and delegated Astra architectural review; [issue #51](https://github.com/dearlordylord/balabol/issues/51) is the implementation authority.
 **Expected use:** Start lifecycle changes from these ownership, execution and verification requirements.
 **Lifecycle:** Maintain with the published issue when lifecycle ownership or guarantee scope changes.
@@ -126,4 +126,4 @@ Any eventual-completion claim must name its assumptions: enabled work is eventua
 
 The owner explicitly authorized Astra to review laws in place of the skill's default owner approval loop. Material product behavior or scope changes remain owner decisions; drafting laws must not invent them.
 
-Use proofs where they establish consequential safety or conditional progress that remains hard to trust from ordinary engineering checks. Keep the investment bounded by useful guarantees, not proof count. No proof, compiled integration or liveness qualification is claimed by this specification.
+Use proofs where they establish consequential safety or conditional progress that remains hard to trust from ordinary engineering checks. Keep the investment bounded by useful guarantees, not proof count. Implementation and qualification evidence lives in #52–#58 and the lifecycle protocol; the environmental assumptions above remain outside the proof boundary.

@@ -1,6 +1,6 @@
 import Foundation
 
-enum VoiceOutputEvent {
+internal enum VoiceOutputEvent {
   case observed(sequence: Int, VoiceOutput)
   case inputAccepted(UUID)
   case audioReceived(VoiceOutputIdentity)
@@ -8,92 +8,66 @@ enum VoiceOutputEvent {
   case failed(VoiceOutputIdentity)
   case disconnected
 }
-
-enum VoiceOutputCommand {
+internal enum VoiceOutputCommand {
   case prepare(VoiceAudioManifest)
-  case suppress(VoiceOutputIdentity?)
+  case suppress(VoiceOutputIdentity?, stopLocal: Bool)
 }
-
-extension VoiceOutputState {
-  mutating func transition(_ event: VoiceOutputEvent) -> [VoiceOutputCommand] {
-    switch event {
-    case .disconnected:
-      closed = true
-      current = nil
-      prepared = nil
-      receivedAudio = false
-      locallyInterrupted = false
-      unavailable = false
-      return [.suppress(nil)]
-    case .audioReceived(let identity):
-      guard prepared == identity, current?.identity == identity, !locallyInterrupted else {
-        return []
-      }
-      receivedAudio = true
-      return []
-    case .inputAccepted(let id):
-      if gated, id != cutInput, id != cutAcceptedInput, !cutPendingInputs.contains(id) {
-        allowedInput = id
-      }
-      lastAcceptedInput = id
-      return []
-    case .cut(let nextInput, let pendingInputs):
-      // A discarded utterance cannot reopen this baseline. A later cut takes
-      // a fresh baseline so repeating a previously accepted receipt cannot resume.
-      cutInput = current?.inputDeliveryId
-      cutAcceptedInput = lastAcceptedInput
-      cutPendingInputs = Array(pendingInputs.prefix(2))
-      gated = true
-      allowedInput = nextInput
-      locallyInterrupted = locallyInterrupted || current?.isActive == true
-      prepared = nil
-      let target = current?.isActive == true ? current?.identity : nil
-      if target == interrupted { return [.suppress(nil)] }
-      interrupted = target
-      return [.suppress(target)]
-    case .failed(let identity):
-      guard current?.identity == identity else { return [] }
-      unavailable = true
-      prepared = nil
-      return [.suppress(nil)]
-    case .observed(let sequence, let output):
-      guard !closed, sequence > self.sequence else { return [] }
-      self.sequence = sequence
-      if gated && output.inputDeliveryId != allowedInput {
-        if current == nil {
-          current = output
-          locallyInterrupted = output.isActive || output.status == .interrupted
-          unavailable = output.status == .failed
-        }
-        guard output.isActive, output.identity != interrupted else { return [] }
-        interrupted = output.identity
-        // No subscription was authorized for this late manifest. It needs only
-        // a server cut; suppressing an unrelated fresh track would be incorrect.
-        return [.suppress(output.identity)]
-      }
-      if let current, current.identity == output.identity {
-        let terminal: Set<VoiceOutput.Status> = [.delivered, .interrupted, .failed]
-        if terminal.contains(current.status)
-          || (current.status == .playing && [.preparing, .awaitingReady].contains(output.status))
-        {
-          return []
-        }
-      }
-      if current?.identity != output.identity { receivedAudio = false }
-      current = output
-      locallyInterrupted = output.status == .interrupted
-      unavailable = output.status == .failed
-      if output.status == .delivered {
-        prepared = nil
-        return []
-      }
-      if [.interrupted, .failed].contains(output.status) {
-        prepared = nil
-        return [.suppress(nil)]
-      }
-      guard let manifest = output.manifest, prepared != output.identity else { return [] }
-      prepared = output.identity
-      return [.prepare(manifest)]
+internal struct VoiceOutputStep {
+  let state: VoiceOutputState
+  let commands: [VoiceOutputCommand]
+}
+internal func transitionVoiceOutput(_ state: VoiceOutputState, _ event: VoiceOutputEvent) -> VoiceOutputStep {
+  switch event {
+  case .disconnected:
+    return VoiceOutputStep(state: state.replacing(current: .some(nil), locallyInterrupted: false,
+      unavailable: false, receivedAudio: false, closed: true, prepared: .some(nil)),
+      commands: [.suppress(nil, stopLocal: true)])
+  case .audioReceived(let identity):
+    guard state.prepared == identity, state.current?.identity == identity, !state.locallyInterrupted else {
+      return VoiceOutputStep(state: state, commands: [])
+    }
+    return VoiceOutputStep(state: state.replacing(receivedAudio: true), commands: [])
+  case .inputAccepted(let id):
+    let allow = state.gated && id != state.cutInput && id != state.cutAcceptedInput && !state.cutPendingInputs.contains(id)
+    return VoiceOutputStep(state: state.replacing(lastAcceptedInput: .some(id),
+      allowedInput: allow ? .some(id) : nil), commands: [])
+  case .cut(let next, let pending):
+    let target = state.current?.isActive == true ? state.current?.identity : nil
+    let nextState = state.replacing(locallyInterrupted: state.locallyInterrupted || state.current?.isActive == true,
+      cutInput: .some(state.current?.inputDeliveryId), cutAcceptedInput: .some(state.lastAcceptedInput),
+      cutPendingInputs: Array(pending.prefix(2)), allowedInput: .some(next), gated: true,
+      prepared: .some(nil), interrupted: .some(target))
+    return VoiceOutputStep(state: nextState, commands: [.suppress(target == state.interrupted ? nil : target, stopLocal: true)])
+  case .failed(let identity):
+    guard state.current?.identity == identity else { return VoiceOutputStep(state: state, commands: []) }
+    return VoiceOutputStep(state: state.replacing(unavailable: true, prepared: .some(nil)), commands: [.suppress(nil, stopLocal: true)])
+  case .observed(let sequence, let value): return observeOutput(state, sequence: sequence, value: value)
+  }
+}
+private func observeOutput(_ state: VoiceOutputState, sequence: Int, value: VoiceOutput) -> VoiceOutputStep {
+  guard !state.closed, sequence > state.sequence else { return VoiceOutputStep(state: state, commands: []) }
+  let advanced = state.replacing(sequence: sequence)
+  if state.gated && value.inputDeliveryId != state.allowedInput { return rejectOutput(advanced, value) }
+  if let current = state.current, current.identity == value.identity {
+    if [.delivered, .interrupted, .failed].contains(current.status)
+      || (current.status == .playing && [.preparing, .awaitingReady].contains(value.status)) {
+      return VoiceOutputStep(state: advanced, commands: [])
     }
   }
+  let selected = advanced.replacing(current: .some(value), locallyInterrupted: value.status == .interrupted,
+    unavailable: value.status == .failed, receivedAudio: state.current?.identity == value.identity ? nil : false)
+  if value.status == .delivered { return VoiceOutputStep(state: selected.replacing(prepared: .some(nil)), commands: []) }
+  if [.interrupted, .failed].contains(value.status) {
+    return VoiceOutputStep(state: selected.replacing(prepared: .some(nil)), commands: [.suppress(nil, stopLocal: true)])
+  }
+  guard let manifest = value.manifest, selected.prepared != value.identity else {
+    return VoiceOutputStep(state: selected, commands: [])
+  }
+  return VoiceOutputStep(state: selected.replacing(prepared: .some(value.identity)), commands: [.prepare(manifest)])
+}
+private func rejectOutput(_ state: VoiceOutputState, _ value: VoiceOutput) -> VoiceOutputStep {
+  let selected = state.current == nil ? state.replacing(current: .some(value),
+    locallyInterrupted: value.isActive || value.status == .interrupted, unavailable: value.status == .failed) : state
+  guard value.isActive, value.identity != state.interrupted else { return VoiceOutputStep(state: selected, commands: []) }
+  return VoiceOutputStep(state: selected.replacing(interrupted: .some(value.identity)), commands: [.suppress(value.identity, stopLocal: false)])
 }

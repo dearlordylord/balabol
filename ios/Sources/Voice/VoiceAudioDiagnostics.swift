@@ -66,12 +66,6 @@ import os
       }
     }
   }
-  internal enum VoiceTraceCause: String, Codable, Sendable {
-    case enabled, speech, input, platform, lifecycle, captureFailure, cut, end, shutdown
-    case output, localStop, localStopped, interruptDispatch, interruptReturned, interruptFailed
-    case failure, observationFailed, wireError, transportFailed
-    case onset, onsetAccepted, onsetRejected, audioReceived, playoutPrepared
-  }
   internal struct VoiceTraceRecord: Codable, Sendable {
     let cause: VoiceTraceCause
     let uptime: Double
