@@ -57,6 +57,7 @@ export const RecognitionFailureReason = Schema.Literals([
   "Json",
   "Result",
   "DetectedLanguage",
+  "UntranscribedSpeech",
   "Final",
   "Deadline",
   "Other"

@@ -1,7 +1,12 @@
 import { Deferred, Effect, Layer, Queue, Stream } from "effect"
 import { expect, it } from "vitest"
 import { Conversation } from "../src/conversation/index.ts"
-import { SpeechRecognition, RecognitionFailed, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
+import {
+  SpeechRecognition,
+  RecognitionFailed,
+  fakeRecognitionLayer,
+  whisperRecognitionLayer
+} from "../src/speech-recognition/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice, VoiceDiagnostics } from "../src/voice/index.ts"
@@ -172,3 +177,64 @@ for (const terminal of ["stream error", "malformed late packet"] as const)
       input.layer
     )
   })
+
+it("does not admit a foreign-speech caption or its partial continuation and keeps listening for a valid phrase", async () => {
+  const input = await Effect.runPromise(classifiedVoiceInput())
+  let calls = 0
+  const recognition = whisperRecognitionLayer(
+    { provider: "whisper", executable: "fixture", modelPath: "fixture.bin" },
+    {
+      prepare: () => Effect.void,
+      transcribe: () =>
+        Effect.sync(() => {
+          calls++
+          return JSON.stringify({
+            result: { language: "fr" },
+            transcription: [
+              {
+                text:
+                  calls === 1
+                    ? "(speaking in foreign language) Затем продолжение."
+                    : "Bonjour, je voudrais apprendre le français. Привет."
+              }
+            ]
+          })
+        })
+    }
+  )
+  await withVoiceOutput(
+    (transport) =>
+      Effect.gen(function* () {
+        const voice = yield* Voice
+        const conversation = yield* Conversation
+        const join = yield* voice.start(startVoiceRequest())
+        yield* input.segment(transport)
+        let snapshot = yield* voice.snapshot(join.sessionId, 0)
+        for (let poll = 0; !snapshot.events.some((event) => event.kind === "Error") && poll < 200; poll++) {
+          yield* Effect.sleep(5)
+          snapshot = yield* voice.snapshot(join.sessionId, 0)
+        }
+        expect(snapshot.events.some((event) => event.kind === "Error" && event.code === "RecognitionFailed")).toBe(true)
+        expect(snapshot.events.some((event) => event.kind === "Final" || event.kind === "Accepted")).toBe(false)
+        expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
+        expect(snapshot.status).toBe("active")
+        yield* input.segment(transport)
+        let page = yield* conversation.page({ limit: 100 })
+        for (let poll = 0; !page.messages.some((message) => message.role === "user") && poll < 200; poll++) {
+          yield* Effect.sleep(5)
+          page = yield* conversation.page({ limit: 100 })
+        }
+        expect(page.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual([
+          "Bonjour, je voudrais apprendre le français. Привет."
+        ])
+        expect(calls).toBe(2)
+        yield* voice.end(join.sessionId)
+      }),
+    fakeSynthesisLayer(),
+    fakeAnswerLayer(0),
+    recognition,
+    undefined,
+    undefined,
+    input.layer
+  )
+})

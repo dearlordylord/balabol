@@ -88,6 +88,7 @@ export const whisperNative: WhisperNative = {
         input,
         "-l",
         "auto",
+        "--suppress-nst",
         "-oj",
         "-of",
         output

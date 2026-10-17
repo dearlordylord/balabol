@@ -39,7 +39,7 @@ it.live("executes a native fixture using private files and deletes the utterance
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
 const input = arg('-f'); const output = arg('-of') + '.json';
-writeFileSync(arg('-m'), JSON.stringify({ input, output, bytes: [...readFileSync(input)], inputMode: statSync(input).mode & 511, outputMode: statSync(output).mode & 511, directoryMode: statSync(input.slice(0, input.lastIndexOf('/'))).mode & 511, language: arg('-l') }));
+writeFileSync(arg('-m'), JSON.stringify({ input, output, bytes: [...readFileSync(input)], inputMode: statSync(input).mode & 511, outputMode: statSync(output).mode & 511, directoryMode: statSync(input.slice(0, input.lastIndexOf('/'))).mode & 511, language: arg('-l'), suppressNonSpeech: process.argv.includes('--suppress-nst'), translate: process.argv.includes('--translate') || process.argv.includes('-tr') }));
 writeFileSync(output, '{"result":{"language":"en"},"transcription":[]}');`
     )
     const settings: WhisperSettings = { provider: "whisper", executable, modelPath: marker }
@@ -55,7 +55,9 @@ writeFileSync(output, '{"result":{"language":"en"},"transcription":[]}');`
         inputMode: Schema.Number,
         outputMode: Schema.Number,
         directoryMode: Schema.Number,
-        language: Schema.String
+        language: Schema.String,
+        suppressNonSpeech: Schema.Boolean,
+        translate: Schema.Boolean
       })
     )(raw)
     expect(observation).toMatchObject({
@@ -63,7 +65,9 @@ writeFileSync(output, '{"result":{"language":"en"},"transcription":[]}');`
       inputMode: 0o600,
       outputMode: 0o600,
       directoryMode: 0o700,
-      language: "auto"
+      language: "auto",
+      suppressNonSpeech: true,
+      translate: false
     })
     expect(yield* exists(observation.input)).toBe(false)
     expect(yield* exists(observation.output)).toBe(false)

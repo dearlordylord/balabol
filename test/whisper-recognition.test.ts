@@ -163,6 +163,18 @@ it.effect("discards only observed standalone non-speech caption segments and ret
       { segments: ["[BLANK_AUDIO] (keyboard tapping)"], expected: "" },
       { segments: ["Bonjour ", "(keyboard tapping)", " Hello Привет"], expected: "Bonjour  Hello Привет" },
       { segments: ["keyboard tapping"], expected: "keyboard tapping" },
+      {
+        segments: ["Bonjour, je voudrais apprendre le français. Привет. Hello."],
+        expected: "Bonjour, je voudrais apprendre le français. Привет. Hello."
+      },
+      {
+        segments: ["I said speaking in foreign language literally."],
+        expected: "I said speaking in foreign language literally."
+      },
+      {
+        segments: ["The label is (speaking in foreign language)."],
+        expected: "The label is (speaking in foreign language)."
+      },
       { segments: ["Please say [BLANK_AUDIO] literally."], expected: "Please say [BLANK_AUDIO] literally." },
       {
         segments: ["This is (keyboard tapping) as a quoted label."],
@@ -239,6 +251,29 @@ it.effect("preserves typed failure stage without inspecting or exposing provider
       }).pipe(Effect.provide(whisperRecognitionLayer(settings, item.native)))
       expect(error._tag).toBe("RecognitionFailed")
       expect(error.reason ?? "Other").toBe(item.reason)
+    }
+  })
+)
+
+it.effect("rejects foreign-speech captions instead of saving fabricated or incomplete speech", () =>
+  Effect.gen(function* () {
+    for (const text of [
+      "(speaking in foreign language)",
+      "(speaking in foreign language) Затем продолжение.",
+      "[speaking in a foreign language]"
+    ]) {
+      const error = yield* Effect.gen(function* () {
+        return yield* collect(yield* SpeechRecognition).pipe(Effect.flip)
+      }).pipe(
+        Effect.provide(
+          whisperRecognitionLayer(
+            settings,
+            fixture(() => Effect.succeed(payload("ru", text)))
+          )
+        )
+      )
+      expect(error._tag).toBe("RecognitionFailed")
+      expect(error.reason).toBe("UntranscribedSpeech")
     }
   })
 )

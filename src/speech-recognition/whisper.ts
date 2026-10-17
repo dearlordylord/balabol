@@ -69,6 +69,10 @@ const encodeWav = (audio: RecognitionRequest["audio"]) => {
 // Keep this guard limited to observed complete caption segments. Ordinary words,
 // quoted/inline mentions, and other parenthetical speech remain untouched.
 const observedCaptions = ["[blank_audio]", "[blank audio]", "(keyboard tapping)"]
+// This caption indicates missing speech, unlike silence: dropping it would hide
+// a lost part of a multilingual utterance. Never persist the remaining text as complete.
+const untranscribedSpeech =
+  /^\s*(?:\(speaking in (?:a )?foreign language\)|\[speaking in (?:a )?foreign language\])(?:\s|$)/iu
 const captionOnly = (text: string): boolean => {
   const candidate = text.trim().toLowerCase()
   if (candidate.length === 0) return false
@@ -86,6 +90,8 @@ const parseFinal = (json: string, request: RecognitionRequest) =>
     const result = yield* Schema.decodeUnknownEffect(WhisperResult)(raw).pipe(
       Effect.mapError(() => failed("Invalid recognition result", "Result"))
     )
+    if (result.transcription.some((segment) => untranscribedSpeech.test(segment.text)))
+      return yield* failed("Speech was replaced by a language caption; please repeat", "UntranscribedSpeech")
     const text = result.transcription
       .filter((segment) => !captionOnly(segment.text))
       .map((segment) => segment.text)
