@@ -52,25 +52,32 @@ import {
   voiceDiagnosticFile,
   VoiceDiagnostics
 } from "../voice/index.ts"
+import { sqliteDictionaryLayer } from "../dictionary/index.ts"
 import { sqliteKnowledgeLayer } from "../personal-knowledge/index.ts"
 import { subscriptionLayer, subscriptionInferenceLayer, subscriptionToolInferenceLayer } from "../subscription/index.ts"
 import { trustedControlRoutes } from "./control-access.ts"
+const defaultDictionaryPath = join(homedir(), ".local", "share", "balabol", "dictionaries", "wiktionary.sqlite")
 const sharedKnowledgeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const resource = yield* SqliteMemoryStorage
     return sqliteKnowledgeLayer(resource.storage.database)
   })
 )
+const configuredAnswerLayer = (settings: ReplySettings, dictionaryPath: string) =>
+  settings.answerProvider === "subscription"
+    ? subscriptionAnswerLayer().pipe(
+        Layer.provide(sharedKnowledgeLayer),
+        Layer.provide(sqliteDictionaryLayer(dictionaryPath))
+      )
+    : fakeAnswerLayer(settings.deltaMillis)
 const configuredConversationLayer = (
   settings: ReplySettings = defaultReplySettings,
   memorySettings: MemorySettings = defaultMemorySettings,
   summarySettings?: FakeSummarySettings,
-  subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
+  subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription"),
+  dictionaryPath = defaultDictionaryPath
 ) => {
-  const answer =
-    settings.answerProvider === "subscription"
-      ? subscriptionAnswerLayer().pipe(Layer.provide(sharedKnowledgeLayer))
-      : fakeAnswerLayer(settings.deltaMillis)
+  const answer = configuredAnswerLayer(settings, dictionaryPath)
   const summary =
     memorySettings.summaryProvider === "subscription"
       ? subscriptionSummaryLayer
@@ -96,9 +103,10 @@ export const conversationLayer = (
   settings: ReplySettings = defaultReplySettings,
   memorySettings: MemorySettings = defaultMemorySettings,
   summarySettings?: FakeSummarySettings,
-  subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription")
+  subscriptionDirectory = join(homedir(), ".local", "share", "balabol", "subscription"),
+  dictionaryPath = defaultDictionaryPath
 ) =>
-  configuredConversationLayer(settings, memorySettings, summarySettings, subscriptionDirectory).pipe(
+  configuredConversationLayer(settings, memorySettings, summarySettings, subscriptionDirectory, dictionaryPath).pipe(
     Layer.provide(durableMemoryLayer),
     Layer.provide(sqliteStorageLayer(path))
   )
@@ -111,6 +119,7 @@ export const ServerConfig = Schema.Struct({
   port: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(maximumPort)),
   database: Schema.String.check(Schema.isMinLength(1)),
   subscriptionDirectory: Schema.optionalKey(Schema.NonEmptyString),
+  dictionaryPath: Schema.optionalKey(Schema.NonEmptyString),
   memory: Schema.optionalKey(MemorySettings),
   fakeSummary: Schema.optionalKey(FakeSummarySettings),
   reply: Schema.optionalKey(ReplySettings),
@@ -226,6 +235,7 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
     host: environment.BALABOL_HOST ?? "127.0.0.1",
     port: Number(environment.BALABOL_PORT ?? "8787"),
     database: environment.BALABOL_DATABASE ?? ".data/conversation.sqlite",
+    dictionaryPath: environment.BALABOL_DICTIONARY_PATH ?? defaultDictionaryPath,
     ...subscriptionSelection(environment),
     memory: summarySelection(environment),
     fakeSummary: {
@@ -261,7 +271,8 @@ export const serverLayer = (config: ServerConfig) => {
     config.reply,
     config.memory,
     config.fakeSummary,
-    config.subscriptionDirectory
+    config.subscriptionDirectory,
+    config.dictionaryPath
   )
   const http = NodeHttpServer.layer(createServer, { host: config.host, port: config.port })
   if (config.voice === undefined)
@@ -275,7 +286,8 @@ export const serverLayer = (config: ServerConfig) => {
     config.reply,
     config.memory,
     config.fakeSummary,
-    config.subscriptionDirectory
+    config.subscriptionDirectory,
+    config.dictionaryPath
   ).pipe(Layer.provide(durableMemoryLayer))
   const admissions = Layer.unwrap(
     Effect.gen(function* () {

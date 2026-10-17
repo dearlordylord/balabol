@@ -31,6 +31,7 @@ it("the conversation inspects its empty knowledge schema and answers using the a
       "inspect_knowledge_difference",
       "inspect_knowledge_history",
       "inspect_knowledge_operations",
+      "lookup_dictionary",
       "query_knowledge",
       "query_knowledge_neighborhood"
     ])

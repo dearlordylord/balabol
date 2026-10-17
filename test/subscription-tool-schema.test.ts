@@ -9,12 +9,21 @@ import { answer, lastToolResult, tool } from "./knowledge-tool-frames.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { replyLayer, waitForReply } from "./reply-fixture.ts"
 
-it("projects all seven declared tools to object-root provider schemas while retaining native parameter validation", async () => {
+it("projects all eight declared tools to object-root provider schemas while retaining native parameter validation", async () => {
   const database = await temporaryDatabase()
   let calls = 0
   const transport: ToolInferenceTransport = async (request) => {
     calls++
-    expect(request.tools).toHaveLength(7)
+    expect(request.tools.map((definition) => definition.name).sort()).toEqual([
+      "apply_knowledge",
+      "inspect_knowledge",
+      "inspect_knowledge_difference",
+      "inspect_knowledge_history",
+      "inspect_knowledge_operations",
+      "lookup_dictionary",
+      "query_knowledge",
+      "query_knowledge_neighborhood"
+    ])
     for (const definition of request.tools) {
       expect(definition.parameters).toMatchObject({ type: "object" })
       expect(JSON.stringify(definition.parameters)).not.toContain('"not":')
@@ -34,6 +43,18 @@ it("projects all seven declared tools to object-root provider schemas while reta
     expect(request.tools.find((definition) => definition.name === "query_knowledge")).toMatchObject({
       strict: false,
       parameters: { required: ["limit"], properties: { limit: { minimum: 1, maximum: 100 } } }
+    })
+    expect(request.tools.find((definition) => definition.name === "lookup_dictionary")).toMatchObject({
+      strict: false,
+      parameters: {
+        required: ["language", "word"],
+        properties: {
+          language: { type: "string", maxLength: 16 },
+          word: { type: "string", minLength: 1, maxLength: 512 },
+          offset: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+          limit: { type: "integer", minimum: 1, maximum: 10 }
+        }
+      }
     })
     if (calls === 1) return tool("query_knowledge", { limit: 0 }, "invalid-query-limit")
     if (calls === 2) {

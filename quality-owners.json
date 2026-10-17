@@ -28,7 +28,7 @@
       "name": "answer-generation",
       "root": "src/answer-generation",
       "entry": "index.ts",
-      "dependencies": ["language", "subscription", "personal-knowledge"]
+      "dependencies": ["language", "subscription", "personal-knowledge", "dictionary"]
     },
     {
       "name": "summary-generation",
@@ -82,7 +82,8 @@
         "language",
         "subscription",
         "personal-knowledge",
-        "operation-audit"
+        "operation-audit",
+        "dictionary"
       ]
     },
     {
@@ -96,6 +97,12 @@
       "root": "src/operation-audit",
       "entry": "index.ts",
       "dependencies": ["delivery-failure"]
+    },
+    {
+      "name": "dictionary",
+      "root": "src/dictionary",
+      "entry": "index.ts",
+      "dependencies": []
     }
   ]
 }

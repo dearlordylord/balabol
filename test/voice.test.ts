@@ -139,10 +139,16 @@ describe("voice input uses the sole durable conversation", () => {
             "InvalidAudio"
           ])
           yield* fixture.classifiedSegment
-          yield* settle
-          const discarded = (yield* voice.snapshot(joined.sessionId, 0)).events.filter(
-            (event) => event.kind === "Interim" || event.kind === "Discarded"
-          )
+          let completed = yield* voice.snapshot(joined.sessionId, 0)
+          for (
+            let attempt = 0;
+            !completed.events.some((event) => event.kind === "Discarded") && attempt < 200;
+            attempt++
+          ) {
+            yield* Effect.sleep(5)
+            completed = yield* voice.snapshot(joined.sessionId, 0)
+          }
+          const discarded = completed.events.filter((event) => event.kind === "Interim" || event.kind === "Discarded")
           expect(discarded.map((event) => event.kind)).toEqual(["Interim", "Discarded"])
           expect(discarded[0]?.utteranceId).toBe(discarded[1]?.utteranceId)
           expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])

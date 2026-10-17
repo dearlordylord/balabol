@@ -1,0 +1,14 @@
+{
+  "url": "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz",
+  "bytes": 2981058381,
+  "sha256": "3dac8a09e57827bef493e2e6b552fe917bf3b1fc55dee05c4e4a3702aff5dbdb",
+  "source": {
+    "name": "English Wiktionary via Wiktextract",
+    "url": "https://kaikki.org/dictionary/rawdata.html",
+    "version": "enwiktionary-2026-09-02-extracted-2026-10-03",
+    "license": "CC BY-SA 4.0; https://en.wiktionary.org/wiki/Wiktionary:Copyrights",
+    "dumpDate": "2026-09-02",
+    "extractionDate": "2026-10-03",
+    "extractorRevision": "1a05e46/e3d6d4e"
+  }
+}

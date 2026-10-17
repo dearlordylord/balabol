@@ -1,3 +1,4 @@
+import { type Dictionary, unavailableDictionaryLayer } from "../src/dictionary/index.ts"
 import { Effect, Layer, Redacted } from "effect"
 import { subscriptionAnswerLayer } from "../src/answer-generation/index.ts"
 import { SqliteMemoryStorage } from "../src/memory/index.ts"
@@ -14,9 +15,11 @@ const subscription = Layer.succeed(Subscription, {
 })
 export const knowledgeAnswerLayer = (
   transport: ToolInferenceTransport,
-  decorate: (durable: typeof DurableKnowledge.Service) => typeof DurableKnowledge.Service = (durable) => durable
+  decorate: (durable: typeof DurableKnowledge.Service) => typeof DurableKnowledge.Service = (durable) => durable,
+  dictionary: Layer.Layer<Dictionary> = unavailableDictionaryLayer
 ) =>
   subscriptionAnswerLayer().pipe(
+    Layer.provide(dictionary),
     Layer.provide(
       Layer.unwrap(
         Effect.gen(function* () {
