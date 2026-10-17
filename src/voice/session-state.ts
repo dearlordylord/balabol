@@ -1,8 +1,11 @@
 import type { RecognitionState } from "./recognition-state.ts"
+import type { OutputState, OutputContext } from "./output-state.ts"
+import { outputProjection } from "./output-state.ts"
+import { initialOutput } from "./output-transition.ts"
 import { initialRecognition, readyFinal } from "./recognition-transition.ts"
 import type { Message } from "../conversation/index.ts"
 import type { LanguageSpan } from "../language/index.ts"
-import type { PendingVoiceInput, VoiceEvent, VoiceOutput, VoiceSnapshot } from "./contracts.ts"
+import type { PendingVoiceInput, VoiceEvent, VoiceSnapshot } from "./contracts.ts"
 export type SessionEventInput = VoiceEvent extends infer E
   ? E extends VoiceEvent
     ? Omit<E, "sequence" | "sessionId">
@@ -46,6 +49,8 @@ export interface SessionState {
   readonly track: string | undefined
   readonly joinDeadlineAt: number
   readonly controlDeadlineAt: number
+  readonly expiryTimer: { readonly operation: number; readonly deadlineAt: number } | null
+  readonly nextExpiryOperation: number
   readonly speechRevision: number
   readonly sequence: number
   readonly events: readonly VoiceEvent[]
@@ -55,7 +60,8 @@ export interface SessionState {
   readonly audioFramesReceived: number
   readonly sampleFramesReceived: number
   readonly releasePending: readonly string[]
-  readonly output: VoiceOutput | null
+  readonly output: OutputState
+  readonly outputContext: OutputContext
 }
 export const sessionJoinMillis = 10000
 export const sessionControlMillis = 30000
@@ -65,7 +71,8 @@ export const initialSession = (
   incarnation: string,
   muted: boolean,
   now: number,
-  recognitionLanguages: readonly string[]
+  recognitionLanguages: readonly string[],
+  outputContext: OutputContext
 ): SessionState => ({
   id,
   incarnation,
@@ -81,6 +88,8 @@ export const initialSession = (
   track: undefined,
   joinDeadlineAt: now + sessionJoinMillis,
   controlDeadlineAt: now + sessionControlMillis,
+  expiryTimer: null,
+  nextExpiryOperation: 1,
   speechRevision: 0,
   sequence: 0,
   events: [],
@@ -90,7 +99,8 @@ export const initialSession = (
   audioFramesReceived: 0,
   sampleFramesReceived: 0,
   releasePending: [],
-  output: null
+  output: initialOutput(),
+  outputContext
 })
 export const pendingCount = (state: SessionState) => {
   const ready = readyFinal(state.recognition)
@@ -109,7 +119,7 @@ export const sessionSnapshot = (state: SessionState, after: number): VoiceSnapsh
   audioFramesReceived: state.audioFramesReceived,
   sampleFramesReceived: state.sampleFramesReceived,
   pending: state.finals,
-  output: state.output,
+  output: outputProjection(state.output),
   nextAfter: state.sequence
 })
 export const finalInput = (

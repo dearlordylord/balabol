@@ -4,6 +4,7 @@ import { finalInput, replaceFinal } from "./session-state.ts"
 import type { SessionEvent } from "./session-events.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
+import { composeSessionOutput } from "./session-transition-output.ts"
 const lastEventOffset = -1
 type AdmissionEvent = Extract<SessionEvent, { kind: "Prepared" | "Accepted" | "AdmissionFailed" | "AdmissionFinished" }>
 const accepted = (state: SessionState, event: Extract<SessionEvent, { kind: "Accepted" }>): SessionTransition => {
@@ -82,9 +83,9 @@ export const transitionAdmission = (state: SessionState, event: AdmissionEvent):
     case "AdmissionFinished":
       return !state.admitting.includes(event.id)
         ? unchanged(state)
-        : {
-            state: { ...state, admitting: state.admitting.filter((id) => id !== event.id) },
-            commands: [{ kind: "ReleaseAdmission", id: event.id }]
-          }
+        : composeSessionOutput(
+            { state: { ...state, admitting: state.admitting.filter((id) => id !== event.id) }, commands: [] },
+            { kind: "AdmissionReleased", inputDeliveryId: event.id }
+          )
   }
 }

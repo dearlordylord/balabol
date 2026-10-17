@@ -2,8 +2,13 @@ import type { SessionState, SpeechFenceState } from "./session-state.ts"
 import type { SessionEvent, SessionCommand } from "./session-events.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
+import { composeSessionOutput } from "./session-transition-output.ts"
 type ClosureEvent = Extract<SessionEvent, { kind: "End" | "Expire" | "Disconnected" | "Released" }>
-const end = (state: SessionState, code?: string): SessionTransition => {
+const end = (
+  state: SessionState,
+  code?: string,
+  message = "Media disconnected or audio queue overloaded"
+): SessionTransition => {
   if (state.phase === "closing" || state.phase === "ended") return unchanged(state)
   const fenced = {
     ...state,
@@ -14,24 +19,19 @@ const end = (state: SessionState, code?: string): SessionTransition => {
     releasePending: ["capture", "connection", "output", "source"]
   }
   const result =
-    code === undefined
-      ? unchanged(fenced)
-      : emit(fenced, {
-          kind: "Error",
-          utteranceId: null,
-          code,
-          message: "Media disconnected or audio queue overloaded"
-        })
-  return {
-    state: result.state,
-    commands: [
-      { kind: "RetireOutput" },
-      { kind: "CancelAcquisition" },
-      { kind: "ResetCapture" },
-      ...result.commands,
-      ...fenced.releasePending.map((resource): SessionCommand => ({ kind: "Release", resource }))
-    ]
-  }
+    code === undefined ? unchanged(fenced) : emit(fenced, { kind: "Error", utteranceId: null, code, message })
+  return composeSessionOutput(
+    {
+      state: result.state,
+      commands: [
+        { kind: "CancelAcquisition" },
+        { kind: "ResetCapture" },
+        ...result.commands,
+        ...fenced.releasePending.map((resource): SessionCommand => ({ kind: "Release", resource }))
+      ]
+    },
+    { kind: "Retire" }
+  )
 }
 const retireSourceFences = (state: SessionState) =>
   state.speechFences.map(
@@ -58,7 +58,7 @@ export const transitionClosure = (state: SessionState, event: ClosureEvent): Ses
     case "Expire":
       return expired(state, event.now) ? end(state, "SessionExpired") : unchanged(state)
     case "Disconnected":
-      return end(state, event.code)
+      return end(state, event.code, event.message)
     case "Released":
       return released(state, event.resource)
   }

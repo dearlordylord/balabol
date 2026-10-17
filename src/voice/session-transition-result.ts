@@ -2,12 +2,14 @@ import type { VoiceFailed } from "./contracts.ts"
 import type { RecognitionFailureReason } from "../speech-recognition/index.ts"
 import type { SessionState, SessionEventInput } from "./session-state.ts"
 import type { SessionCommand } from "./session-events.ts"
+import type { OutputDecision } from "./output-state.ts"
 const maximumEvents = 100
 const maximumEventBytes = 256000
 export interface SessionTransition {
   readonly state: SessionState
   readonly commands: readonly SessionCommand[]
   readonly error?: VoiceFailed
+  readonly outputDecision?: OutputDecision
 }
 export const unchanged = (state: SessionState): SessionTransition => ({ state, commands: [] })
 export const emit = (

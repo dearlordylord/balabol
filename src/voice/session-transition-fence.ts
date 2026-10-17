@@ -2,6 +2,7 @@ import type { SessionEvent, SessionCommand } from "./session-events.ts"
 import type { SessionState, SpeechFenceState } from "./session-state.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
+import { composeSessionOutput } from "./session-transition-output.ts"
 type FenceEvent = Extract<SessionEvent, { kind: "Speech" | "FenceApplied" | "FenceRejected" }>
 const retainedTerminalFences = 2
 const retainFence = (state: SessionState, fence: SpeechFenceState) => {
@@ -14,21 +15,22 @@ const speech = (state: SessionState, event: Extract<FenceEvent, { kind: "Speech"
   if (event.generation !== state.generation || state.phase !== "active" || state.muted) return unchanged(state)
   if (state.speechFences.some((item) => item.fenceId === event.fenceId)) return unchanged(state)
   const sequence = state.speechRevision + 1
-  return {
-    state: {
-      ...state,
-      speechRevision: sequence,
-      speechFences: retainFence(state, {
-        fenceId: event.fenceId,
-        generation: event.generation,
-        sequence,
-        status: "Pending"
-      })
+  return composeSessionOutput(
+    {
+      state: {
+        ...state,
+        speechRevision: sequence,
+        speechFences: retainFence(state, {
+          fenceId: event.fenceId,
+          generation: event.generation,
+          sequence,
+          status: "Pending"
+        })
+      },
+      commands: [{ kind: "FenceSpeech", sequence, fenceId: event.fenceId, generation: event.generation }]
     },
-    commands: [
-      { kind: "FenceSpeech", sequence, fenceId: event.fenceId, generation: event.generation, suppress: state.admitting }
-    ]
-  }
+    { kind: "Speech", suppress: state.admitting, generation: event.generation, fenceId: event.fenceId, sequence }
+  )
 }
 const matchesPending = (
   fence: SpeechFenceState | undefined,
@@ -55,7 +57,15 @@ const settle = (state: SessionState, event: Exclude<FenceEvent, { kind: "Speech"
   const result = event.kind === "FenceApplied" ? unchanged(next) : rejection(next, event)
   const reset: readonly SessionCommand[] =
     result.state.generation !== state.generation ? [{ kind: "ResetCapture" }] : []
-  return { state: result.state, commands: [...reset, ...result.commands] }
+  return composeSessionOutput(
+    { state: result.state, commands: [...reset, ...result.commands] },
+    {
+      kind: "FenceSettled",
+      fenceId: event.fenceId,
+      sequence: event.sequence,
+      status: event.kind === "FenceApplied" ? "Applied" : "Rejected"
+    }
+  )
 }
 export const transitionSpeechFence = (state: SessionState, event: FenceEvent): SessionTransition =>
   event.kind === "Speech" ? speech(state, event) : settle(state, event)

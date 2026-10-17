@@ -7,9 +7,11 @@ import { initialSession, pendingCount, sessionSnapshot } from "./session-state.t
 import type { SessionState } from "./session-state.ts"
 import { transitionSession } from "./session-transitions.ts"
 import { VoiceFrame, failed } from "./contracts.ts"
-import type { VoiceFailed, MediaConnection } from "./contracts.ts"
+import type { VoiceFailed, MediaConnection, OutputReady, OutputInterrupt } from "./contracts.ts"
 import type { ActivityStream } from "./activity.ts"
-import { ReplyAudio } from "./output.ts"
+import { makeOutputExecutor } from "./output-executor.ts"
+import { makeSessionExpiryExecutor } from "./session-expiry-executor.ts"
+import type { OutputDecision } from "./output-state.ts"
 import { makeRecognitionExecutor } from "./recognition-executor.ts"
 import { makeSessionAdmissions } from "./session-admissions.ts"
 import { recordSessionEventDiagnostic } from "./session-diagnostics.ts"
@@ -17,10 +19,13 @@ import { recordVoiceDiagnostic } from "./diagnostics.ts"
 import type { VoiceDiagnosticInput } from "./diagnostics.ts"
 type DirectCommand = Extract<
   SessionCommand,
-  { kind: "ResetCapture" | "RetireOutput" | "ReleaseAdmission" | "FenceSpeech" }
+  { kind: "ResetCapture" | "FenceSpeech" | "OutputWork" | "ScheduleExpiry" | "CancelExpiry" }
 >
 type WorkCommand = Exclude<SessionCommand, DirectCommand>
-type MetadataCommand = Extract<WorkCommand, { kind: "CancelAcquisition" | "TraceEvent" | "TraceRecognition" }>
+type MetadataCommand = Extract<
+  WorkCommand,
+  { kind: "CancelAcquisition" | "TraceEvent" | "TraceRecognition" | "TraceOutput" }
+>
 const retentionChanged = (before: SessionState, after: SessionState) =>
   before.phase !== after.phase ||
   pendingCount(before) !== pendingCount(after) ||
@@ -28,7 +33,11 @@ const retentionChanged = (before: SessionState, after: SessionState) =>
 const datagramPublishMillis = 250
 interface Envelope {
   readonly event: SessionEvent
-  readonly ack: Deferred.Deferred<SessionState, VoiceFailed>
+  readonly ack: Deferred.Deferred<SessionAcknowledgement, VoiceFailed>
+}
+interface SessionAcknowledgement {
+  readonly state: SessionState
+  readonly outputDecision?: OutputDecision
 }
 interface CaptureFrame {
   readonly track: string
@@ -53,12 +62,17 @@ export const makeSessionRuntime = (
       deps.admissions.backendIncarnationId,
       muted,
       startedAt,
-      deps.languages.allowedLanguages
+      deps.languages.allowedLanguages,
+      {
+        sessionId: identity.sessionId,
+        languages: [...deps.synthesis.capabilities.languages],
+        maxAudioFrames: deps.synthesis.capabilities.maxAudioFrames,
+        completionMillis: deps.outputSettings.completionMillis
+      }
     )
     let retired = false
     let revision = 0
     let connection: MediaConnection | undefined
-    let audio: ReplyAudio | undefined
     let acquisition: Fiber.Fiber<unknown, unknown> | undefined
     const mailbox = yield* Queue.unbounded<Envelope>()
     const frames = yield* Queue.make<CaptureFrame>({ capacity: 8 })
@@ -67,18 +81,31 @@ export const makeSessionRuntime = (
     let frameOperation = 0
     const notify = (event: SessionEvent) => {
       if (retired) return
-      Queue.offerUnsafe(mailbox, { event, ack: Deferred.makeUnsafe<SessionState, VoiceFailed>() })
+      Queue.offerUnsafe(mailbox, { event, ack: Deferred.makeUnsafe<SessionAcknowledgement, VoiceFailed>() })
     }
+    const expiry = makeSessionExpiryExecutor(ownerScope, notify)
     const idleWaiters = new Set<Deferred.Deferred<void>>()
-    const pending = new Set<Deferred.Deferred<SessionState, VoiceFailed>>()
-    const post = (event: SessionEvent) =>
+    const pending = new Set<Deferred.Deferred<SessionAcknowledgement, VoiceFailed>>()
+    const request = (event: SessionEvent) =>
       Effect.gen(function* () {
         if (retired) return yield* failed("SessionNotFound", "Voice session has been disposed")
-        const ack = yield* Deferred.make<SessionState, VoiceFailed>()
+        const ack = yield* Deferred.make<SessionAcknowledgement, VoiceFailed>()
         pending.add(ack)
         yield* Queue.offer(mailbox, { event, ack })
         return yield* Deferred.await(ack).pipe(Effect.ensuring(Effect.sync(() => pending.delete(ack))))
       })
+    const post = (event: SessionEvent) => request(event).pipe(Effect.map((ack) => ack.state))
+    const output = makeOutputExecutor({
+      conversation: deps.conversation,
+      synthesis: deps.synthesis,
+      connection: () => connection,
+      scope: ownerScope,
+      current: () => state.output,
+      sessionId: identity.sessionId,
+      diagnostics: deps.diagnostics,
+      post: (input) =>
+        request({ kind: "Output", input }).pipe(Effect.map((ack) => ack.outputDecision ?? { kind: "Ignored" }))
+    })
     const trace = (cause: VoiceDiagnosticInput["cause"], samples?: number, generation = state.generation) =>
       recordVoiceDiagnostic(deps.diagnostics, {
         cause,
@@ -124,7 +151,7 @@ export const makeSessionRuntime = (
         case "connection":
           return Deferred.await(acquired).pipe(Effect.andThen(Effect.suspend(() => connection?.close() ?? Effect.void)))
         case "output":
-          return Deferred.await(acquired).pipe(Effect.andThen(Effect.suspend(() => audio?.close() ?? Effect.void)))
+          return output.close()
         case "source":
           return admission.closeSource()
         default:
@@ -140,6 +167,8 @@ export const makeSessionRuntime = (
           return Effect.sync(() => recordSessionEventDiagnostic(deps.diagnostics, state, command))
         case "TraceRecognition":
           return Effect.sync(() => trace(command.cause, command.sampleFrames, command.generation))
+        case "TraceOutput":
+          return Effect.sync(() => recordVoiceDiagnostic(deps.diagnostics, command.input))
       }
     }
     const executeWork = (command: WorkCommand): Effect.Effect<void> => {
@@ -167,37 +196,31 @@ export const makeSessionRuntime = (
       }
     }
     const fenceSpeech = (command: Extract<SessionCommand, { kind: "FenceSpeech" }>): Effect.Effect<void> => {
-      for (const id of command.suppress) audio?.suppressDelivery(id)
-      const interrupted = audio?.speechStarted(command.generation) ?? Effect.void
-      return fork(interrupted.pipe(Effect.ignore)).pipe(
-        Effect.andThen(
-          fork(
-            deps.conversation
-              .fenceSpeech({ capability: source, sequence: command.sequence, fenceId: command.fenceId })
-              .pipe(
-                Effect.flatMap((ack) =>
-                  post({
-                    kind: "FenceApplied",
-                    fenceId: command.fenceId,
-                    generation: command.generation,
-                    sequence: command.sequence,
-                    revision: ack.revision
-                  })
-                ),
-                Effect.catch((error) =>
-                  post({
-                    kind: "FenceRejected",
-                    fenceId: command.fenceId,
-                    generation: command.generation,
-                    sequence: command.sequence,
-                    message: error.message
-                  })
-                ),
-                Effect.asVoid,
-                Effect.ignore
-              )
+      return fork(
+        deps.conversation
+          .fenceSpeech({ capability: source, sequence: command.sequence, fenceId: command.fenceId })
+          .pipe(
+            Effect.flatMap((ack) =>
+              post({
+                kind: "FenceApplied",
+                fenceId: command.fenceId,
+                generation: command.generation,
+                sequence: command.sequence,
+                revision: ack.revision
+              })
+            ),
+            Effect.catch((error) =>
+              post({
+                kind: "FenceRejected",
+                fenceId: command.fenceId,
+                generation: command.generation,
+                sequence: command.sequence,
+                message: error.message
+              })
+            ),
+            Effect.asVoid,
+            Effect.ignore
           )
-        )
       )
     }
     const cancelAcquisition = () => {
@@ -205,17 +228,13 @@ export const makeSessionRuntime = (
     }
     const execute = (command: SessionCommand): Effect.Effect<void> => {
       switch (command.kind) {
+        case "ScheduleExpiry":
+        case "CancelExpiry":
+          return expiry(command)
+        case "OutputWork":
+          return output.execute(command.command)
         case "ResetCapture":
           return Effect.sync(() => activity.reset())
-        case "RetireOutput":
-          return Effect.sync(() => {
-            audio?.retire()
-            const output = audio?.snapshot
-            if (output != null) notify({ kind: "Output", output })
-            trace("lifecycle")
-          })
-        case "ReleaseAdmission":
-          return Effect.sync(() => audio?.releaseAdmission(command.id))
         case "FenceSpeech":
           return fenceSpeech(command)
         default:
@@ -234,7 +253,11 @@ export const makeSessionRuntime = (
           yield* Effect.forEach(idleWaiters, (done) => Deferred.succeed(done, undefined), { discard: true })
           idleWaiters.clear()
         }
-        if (result.error === undefined) yield* Deferred.succeed(envelope.ack, state)
+        if (result.error === undefined)
+          yield* Deferred.succeed(envelope.ack, {
+            state,
+            ...(result.outputDecision === undefined ? {} : { outputDecision: result.outputDecision })
+          })
         else yield* Deferred.fail(envelope.ack, result.error)
       })
     yield* Effect.forever(Queue.take(mailbox).pipe(Effect.flatMap(consume))).pipe(Effect.forkIn(ownerScope))
@@ -323,18 +346,8 @@ export const makeSessionRuntime = (
         Effect.gen(function* () {
           connection = media
           if (state.phase !== "starting" && state.phase !== "active") return
-          audio = new ReplyAudio(
-            state.id,
-            deps.conversation,
-            deps.synthesis,
-            media,
-            captureScope,
-            (output) => post({ kind: "Output", output }).pipe(Effect.asVoid, Effect.ignore),
-            deps.outputSettings,
-            deps.diagnostics
-          )
-          yield* audio.attach()
-          if (state.phase !== "starting" && state.phase !== "active") audio.retire()
+          yield* post({ kind: "Output", input: { kind: "Attach" } })
+          yield* output.awaitAttached
         }),
       installAcquisition: (fiber: Fiber.Fiber<unknown, unknown>) =>
         Effect.sync(() => {
@@ -342,8 +355,17 @@ export const makeSessionRuntime = (
           if (state.phase === "closing" || state.phase === "ended") cancelAcquisition()
         }),
       acquisitionFinished: Deferred.succeed(acquired, undefined).pipe(Effect.asVoid),
-      ready: (input: Parameters<ReplyAudio["ready"]>[0]) => audio?.ready(input) ?? Effect.void,
-      interrupt: (input: Parameters<ReplyAudio["interrupt"]>[0]) => audio?.interrupt(input) ?? Effect.void,
+      ready: (input: OutputReady) => post({ kind: "Output", input: { kind: "Ready", input } }).pipe(Effect.asVoid),
+      interrupt: (input: OutputInterrupt) =>
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const ack = yield* request({ kind: "Output", input: { kind: "Interrupt", input } })
+            const decision = ack.outputDecision
+            if (decision?.kind !== "Applied" || decision.operation === undefined) return
+            const completed = yield* output.consumeAck(decision.operation)
+            yield* restore(completed)
+          })
+        ),
       reconcile: admission.reconcile,
       close,
       dispose,

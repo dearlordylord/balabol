@@ -1,9 +1,13 @@
 import type { RecognitionInput, RecognitionCommand } from "./recognition-events.ts"
+import type { OutputEvent, OutputCommand } from "./output-events.ts"
+import type { VoiceDiagnosticInput } from "./diagnostics.ts"
 import type { RecognitionFailureReason } from "../speech-recognition/index.ts"
 import type { Message } from "../conversation/index.ts"
 import type { SpeechPayload } from "./session-state.ts"
-import type { VoiceEvent, VoiceOutput } from "./contracts.ts"
+import type { VoiceEvent } from "./contracts.ts"
 export type SessionEvent =
+  | { readonly kind: "InitializeExpiry" }
+  | { readonly kind: "ExpiryDue"; readonly operation: number; readonly deadlineAt: number; readonly now: number }
   | { readonly kind: "Activated" }
   | { readonly kind: "Joined" }
   | { readonly kind: "Renew"; readonly now: number }
@@ -17,7 +21,7 @@ export type SessionEvent =
       readonly code: string
       readonly message: string
     }
-  | { readonly kind: "Disconnected"; readonly code: string }
+  | { readonly kind: "Disconnected"; readonly code: string; readonly message?: string }
   | { readonly kind: "Released"; readonly resource: string }
   | {
       readonly kind: "Frame"
@@ -53,8 +57,12 @@ export type SessionEvent =
     }
   | { readonly kind: "Accepted"; readonly id: string; readonly receipt: Message }
   | { readonly kind: "AdmissionFinished"; readonly id: string }
-  | { readonly kind: "Output"; readonly output: VoiceOutput }
+  | { readonly kind: "Output"; readonly input: OutputEvent }
 export type SessionCommand =
+  | { readonly kind: "ScheduleExpiry"; readonly operation: number; readonly deadlineAt: number }
+  | { readonly kind: "CancelExpiry"; readonly operation: number }
+  | { readonly kind: "OutputWork"; readonly command: Exclude<OutputCommand, { kind: "Project" | "Trace" }> }
+  | { readonly kind: "TraceOutput"; readonly input: VoiceDiagnosticInput }
   | {
       readonly kind: "RecognitionWork"
       readonly command: Extract<RecognitionCommand, { kind: "Recognize" | "Cancel" | "ReleaseFragment" }>
@@ -72,16 +80,8 @@ export type SessionCommand =
     }
   | { readonly kind: "CancelAcquisition" }
   | { readonly kind: "ResetCapture" }
-  | { readonly kind: "RetireOutput" }
   | { readonly kind: "Release"; readonly resource: string }
   | { readonly kind: "Publish"; readonly event: VoiceEvent }
   | { readonly kind: "BeginAdmission"; readonly input: SpeechPayload; readonly sourceSequence: number }
   | { readonly kind: "SubmitAdmission"; readonly id: string; readonly event: VoiceEvent }
-  | { readonly kind: "ReleaseAdmission"; readonly id: string }
-  | {
-      readonly kind: "FenceSpeech"
-      readonly sequence: number
-      readonly fenceId: string
-      readonly generation: number
-      readonly suppress: readonly string[]
-    }
+  | { readonly kind: "FenceSpeech"; readonly sequence: number; readonly fenceId: string; readonly generation: number }

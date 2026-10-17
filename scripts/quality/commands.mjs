@@ -11,7 +11,7 @@ export const command = (root, executable, args, silent = false, environment = pr
     cwd: root,
     env: environment,
     encoding: "utf8",
-    timeout: 120_000,
+    timeout: 600_000,
     maxBuffer: 4 * 1024 * 1024,
   });
   if (!silent && result.stdout) process.stdout.write(result.stdout);

@@ -3,7 +3,6 @@ import { failed } from "./contracts.ts"
 import type { SessionDependencies, SessionFactory, SessionHandle } from "./session-port.ts"
 import { withinSessionPreparationDeadline } from "./session-preparation.ts"
 import { makeSessionRuntime } from "./session-runtime.ts"
-const expiryPollMillis = 20
 /** One mailbox owns lifecycle and projections. Capture resources can close while
  * already handed Conversation admissions continue in the host scope. */
 export function createVoiceSession(deps: SessionDependencies): SessionFactory {
@@ -73,12 +72,7 @@ export function createVoiceSession(deps: SessionDependencies): SessionFactory {
           expire,
           dispose: runtime.dispose
         }
-        yield* Effect.gen(function* pollSessionExpiry() {
-          while (runtime.current().phase === "active" || runtime.current().phase === "starting") {
-            yield* Effect.sleep(expiryPollMillis)
-            yield* expire(yield* Clock.currentTimeMillis)
-          }
-        }).pipe(Effect.forkIn(deps.hostScope))
+        yield* runtime.post({ kind: "InitializeExpiry" })
         const acquisition = yield* restore(
           deps.transport
             .open(identity, runtime.incoming, runtime.disconnected, runtime.joined)

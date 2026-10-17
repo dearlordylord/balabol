@@ -96,8 +96,10 @@ it("preserves exact classified PCM across partial 512-sample recognition rollove
         expect(chunks.map((chunk) => chunk.length)).toEqual([320000, 320000, 32000])
         const expected = Buffer.alloc(640000)
         for (let sample = 0; sample < 320000; sample++) expected.writeInt16LE(Math.floor(sample / 512), sample * 2)
-        expect(Buffer.concat(chunks.slice(0, 2))).toEqual(expected)
-        expect(chunks[2]).toEqual(new Uint8Array(32000))
+        expect(Buffer.concat(chunks.slice(0, 2)).equals(expected)).toBe(true)
+        const tail = chunks[2]
+        if (tail === undefined) throw new Error("Missing quiet recognition tail")
+        expect(Buffer.from(tail).equals(Buffer.alloc(32000))).toBe(true)
         expect(page.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual([
           "chunk chunk chunk"
         ])

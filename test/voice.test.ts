@@ -129,6 +129,15 @@ describe("voice input uses the sole durable conversation", () => {
           const joined = yield* voice.start(startVoiceRequest())
           yield* fixture.sendClassified(0)
           yield* fixture.send({ ...fixture.audio(1000), channels: 2 })
+          // Observe the capture reset before sending frames for the next valid turn.
+          let invalid = yield* voice.snapshot(joined.sessionId, 0)
+          for (let attempt = 0; !invalid.events.some((event) => event.kind === "Error") && attempt < 200; attempt++) {
+            yield* Effect.sleep(5)
+            invalid = yield* voice.snapshot(joined.sessionId, 0)
+          }
+          expect(invalid.events.filter((event) => event.kind === "Error").map((event) => event.code)).toEqual([
+            "InvalidAudio"
+          ])
           yield* fixture.classifiedSegment
           yield* settle
           const discarded = (yield* voice.snapshot(joined.sessionId, 0)).events.filter(

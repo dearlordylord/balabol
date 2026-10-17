@@ -1,19 +1,22 @@
 import { composeRecognition, settleRecognition, transitionRecognitionInput } from "./session-transition-recognition.ts"
+import { transitionSessionOutput } from "./session-transition-output.ts"
 import { Match } from "effect"
 import type { SessionState } from "./session-state.ts"
 import type { SessionEvent } from "./session-events.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
-import { emit } from "./session-transition-result.ts"
 import { transitionControl } from "./session-transition-control.ts"
 import { transitionClosure } from "./session-transition-closure.ts"
 import { transitionCapture } from "./session-transition-capture.ts"
 import { transitionSpeechFence } from "./session-transition-fence.ts"
 import { transitionAdmission } from "./session-transition-admission.ts"
+import { reconcileSessionExpiry, transitionSessionExpiry } from "./session-expiry.ts"
 export type { SessionTransition } from "./session-transition-result.ts"
 /** Compile the routing table once. Adding an event requires an explicit owner;
  * a handwritten narrowing predicate cannot silently route it to Output. */
 const dispatch = Match.type<SessionEvent & { readonly state: SessionState }>().pipe(
   Match.discriminatorsExhaustive("kind")({
+    InitializeExpiry: (input) => transitionSessionExpiry(input.state, input),
+    ExpiryDue: (input) => transitionSessionExpiry(input.state, input),
     Activated: (input) => transitionControl(input.state, input),
     Joined: (input) => transitionControl(input.state, input),
     Renew: (input) => transitionControl(input.state, input),
@@ -33,14 +36,26 @@ const dispatch = Match.type<SessionEvent & { readonly state: SessionState }>().p
     AdmissionFailed: (input) => transitionAdmission(input.state, input),
     Accepted: (input) => transitionAdmission(input.state, input),
     AdmissionFinished: (input) => transitionAdmission(input.state, input),
-    Output: (input) => emit({ ...input.state, output: input.output }, { kind: "Output", output: input.output })
+    Output: (input) => transitionSessionOutput(input.state, input.input)
   })
 )
 export const transitionSession = (state: SessionState, event: SessionEvent): SessionTransition => {
-  const result = dispatch({ ...event, state })
+  const selected = dispatch({ ...event, state })
+  const result = closeBrokenSubscription(selected, event)
   const fenced =
     state.generation === result.state.generation
       ? result
       : composeRecognition(result, { kind: "Reset", generation: result.state.generation })
-  return settleRecognition(fenced)
+  return reconcileSessionExpiry(settleRecognition(fenced))
+}
+/** A dead delivery subscription cannot silently leave a live voice session
+ * without an output consumer. Recovery starts a fresh scoped session. */
+const closeBrokenSubscription = (result: SessionTransition, event: SessionEvent): SessionTransition => {
+  if (event.kind !== "Output" || event.input.kind !== "SubscriptionFailed" || result.error === undefined) return result
+  const closed = transitionClosure(result.state, {
+    kind: "Disconnected",
+    code: "AudioUnavailable",
+    message: "Reply delivery subscription failed"
+  })
+  return { ...result, state: closed.state, commands: [...result.commands, ...closed.commands] }
 }

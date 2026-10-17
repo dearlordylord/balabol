@@ -9,9 +9,7 @@ import {
   VoiceDiagnostics,
   voiceDiagnosticsLayer,
   voiceDiagnosticFile,
-  VoiceDiagnosticRecord,
-  defaultVoiceOutputSettings,
-  VoiceTransport
+  VoiceDiagnosticRecord
 } from "../src/voice/index.ts"
 import type { VoiceDiagnosticInput } from "../src/voice/diagnostics.ts"
 import { SpeechSynthesis, SpeechSynthesisFailed, fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
@@ -19,13 +17,12 @@ import { fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { diagnosticErrorCode } from "../src/voice/diagnostics.ts"
 import { parseConfig } from "../src/bootstrap/index.ts"
 import { Conversation, type ReplyDeliveryUpdate } from "../src/conversation/index.ts"
-import { ReplyAudio } from "../src/voice/output.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { replyLayer, waitForReply } from "./reply-fixture.ts"
 import { temporaryDatabase } from "./memory-fixture.ts"
 import { voiceTransportFixture } from "./voice-fixture.ts"
 import { voiceOutputLayer, waitForOutput, classifiedVoiceInput } from "./voice-output-fixture.ts"
-import { startVoiceRequest } from "./voice-admission-fixture.ts"
+import { startVoiceRequest, voiceAdmissionsFixture } from "./voice-admission-fixture.ts"
 const identity = "11111111-1111-4111-8111-111111111111"
 const Snapshot = Schema.Struct({
   run: Schema.String,
@@ -267,79 +264,84 @@ it("ignores a replayed delivery projection without borrowing the active epoch", 
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const conversation = yield* Conversation
-        const synthesis = yield* SpeechSynthesis
-        const media = yield* VoiceTransport
-        const scope = yield* Effect.scope
         const injected = yield* Queue.unbounded<ReplyDeliveryUpdate>()
-        const secondReady = yield* Deferred.make<void>()
+        const consumed = yield* Deferred.make<void>()
         let firstUpdate: ReplyDeliveryUpdate | undefined
-        const observed = Conversation.of({
-          ...conversation,
-          registerReplyDelivery(input) {
-            return conversation.registerReplyDelivery(input).pipe(
-              Effect.map((registration) => ({
-                ...registration,
-                updates: Stream.merge(
-                  registration.updates.pipe(
-                    Stream.tap((update) =>
-                      Effect.sync(() => {
-                        if (firstUpdate === undefined && update.kind === "Started") firstUpdate = update
-                      })
+        const conversation = replyLayer(database.path, fakeAnswerLayer(0))
+        const observed = Layer.effect(
+          Conversation,
+          Effect.gen(function* () {
+            const real = yield* Conversation
+            return Conversation.of({
+              ...real,
+              registerReplyDelivery: (input) =>
+                real.registerReplyDelivery(input).pipe(
+                  Effect.map((registration) => ({
+                    ...registration,
+                    updates: Stream.merge(
+                      registration.updates.pipe(
+                        Stream.tap((update) =>
+                          Effect.sync(() => {
+                            if (firstUpdate === undefined && update.kind === "Started") firstUpdate = update
+                          })
+                        )
+                      ),
+                      Stream.fromQueue(injected).pipe(
+                        Stream.flatMap((update) =>
+                          Stream.make(update).pipe(
+                            Stream.concat(Stream.fromEffect(Deferred.succeed(consumed, undefined)).pipe(Stream.drain))
+                          )
+                        )
+                      )
                     )
-                  ),
-                  Stream.fromQueue(injected)
+                  }))
                 )
-              }))
+            })
+          })
+        ).pipe(Layer.provide(conversation))
+        const application = Voice.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              observed,
+              transport.layer,
+              fakeRecognitionLayer(),
+              fakeSynthesisLayer(),
+              voiceAdmissionsFixture().pipe(Layer.provide(conversation))
             )
-          }
-        })
-        const opened = yield* media.open(
-          { sessionId: identity, roomName: identity, participantIdentity: identity },
-          () => {},
-          () => {},
-          () => {}
+          ),
+          Layer.provideMerge(conversation),
+          Layer.provide(
+            Layer.succeed(VoiceDiagnostics, {
+              record(input) {
+                records.push(input)
+              }
+            })
+          )
         )
-        const audio = new ReplyAudio(
-          identity,
-          observed,
-          synthesis,
-          opened.connection,
-          scope,
-          (): Effect.Effect<void> =>
-            audio.snapshot?.inputDeliveryId === "22222222-2222-4222-8222-222222222222" &&
-            audio.snapshot.status === "AwaitingReady"
-              ? Deferred.succeed(secondReady, undefined).pipe(Effect.asVoid)
-              : Effect.void,
-          defaultVoiceOutputSettings,
-          {
-            record(input) {
-              records.push(input)
-            }
-          }
-        )
-        yield* audio.attach()
-        yield* conversation.send({ deliveryId: identity, text: "First fixture" })
-        const first = audio.snapshot
-        if (first === null) throw new Error("Missing first output")
-        yield* conversation.send({ deliveryId: "22222222-2222-4222-8222-222222222222", text: "Second fixture" })
-        yield* Deferred.await(secondReady).pipe(Effect.timeout("2 seconds"))
-        const second = audio.snapshot
-        if (second === null || firstUpdate === undefined || firstUpdate.kind !== "Started")
-          throw new Error("Missing second output")
-        records.length = 0
-        yield* Queue.offer(injected, { ...firstUpdate, kind: "Invalidated", reason: "Interrupted" })
-        yield* Effect.sleep(1)
-        expect(records).toEqual([])
-        expect(audio.snapshot).toEqual(second)
-        expect(second.responseId).not.toBe(first.responseId)
-        yield* audio.close()
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(replyLayer(database.path, fakeAnswerLayer(0)), fakeSynthesisLayer(), transport.layer)
-        )
-      )
+        yield* Effect.gen(function* () {
+          const voice = yield* Voice
+          const durable = yield* Conversation
+          const join = yield* voice.start(startVoiceRequest())
+          yield* durable.send({ deliveryId: identity, text: "First fixture" })
+          const first = (yield* waitForOutput(voice, join.sessionId, "AwaitingReady")).output
+          yield* durable.send({ deliveryId: "22222222-2222-4222-8222-222222222222", text: "Second fixture" })
+          const second = (yield* waitForOutput(voice, join.sessionId, "AwaitingReady")).output
+          if (second?.manifest == null || firstUpdate?.kind !== "Started") throw new Error("Missing second output")
+          expect(second.responseId).not.toBe(first?.responseId)
+          records.length = 0
+          yield* Queue.offer(injected, { ...firstUpdate, kind: "Invalidated", reason: "Interrupted" })
+          yield* Deferred.await(consumed).pipe(Effect.timeout("2 seconds"))
+          expect(records).toEqual([])
+          expect((yield* voice.snapshot(join.sessionId, 0)).output).toEqual(second)
+          yield* voice.ready(join.sessionId, {
+            responseId: second.responseId,
+            outputEpoch: second.outputEpoch,
+            trackSid: second.manifest.trackSid
+          })
+          expect((yield* waitForOutput(voice, join.sessionId, "Delivered")).output?.status).toBe("Delivered")
+          yield* voice.end(join.sessionId)
+        }).pipe(Effect.scoped, Effect.provide(application))
+      })
     )
   } finally {
     await database.close()

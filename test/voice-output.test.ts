@@ -1,3 +1,4 @@
+import { withCompletedVoiceOutput } from "./voice-output-completion-fixture.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
 import { Effect, Layer, Stream } from "effect"
 import { expect, it } from "vitest"
@@ -237,8 +238,8 @@ it("speaks every bounded phrase of a fast long mixed reply while synthesis is sl
     capabilities: { languages: ["en", "fr", "ru"], output: "text-deltas" },
     generate: () => Stream.make({ kind: "Delta", text, languageSpans: spans }, { kind: "Completed" })
   })
-  return withVoiceOutput(
-    () =>
+  return withCompletedVoiceOutput(
+    (_transport, completed) =>
       Effect.gen(function* () {
         const voice = yield* Voice
         const conversation = yield* Conversation
@@ -252,8 +253,8 @@ it("speaks every bounded phrase of a fast long mixed reply while synthesis is sl
           outputEpoch: output.outputEpoch,
           trackSid: output.manifest.trackSid
         })
-        const delivered = yield* waitForOutput(voice, join.sessionId, "Delivered")
-        expect(delivered.output?.status).toBe("Delivered")
+        const delivered = yield* completed(output)
+        expect(delivered.status).toBe("Delivered")
         expect(phrases.map((phrase) => phrase.text).join("")).toBe(text)
         expect(phrases.every((phrase) => phrase.text.length <= 800 && !/[\uD800-\uDFFF]/u.test(phrase.text))).toBe(true)
         expect(
