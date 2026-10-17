@@ -65,3 +65,6 @@ models-cache
 # Rebuilt and qualified Bend compiler artifacts
 src/conversation/admission-core/generated/
 src/conversation/response-terminal-core/generated/
+
+# Reproducible local Quint checker output
+_apalache-out/

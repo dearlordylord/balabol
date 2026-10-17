@@ -1,0 +1,486 @@
+{
+  "#meta": {
+    "format": "ITF",
+    "format-description": "https://apalache-mc.org/docs/adr/015adr-trace.html",
+    "source": "quint-specs/VoiceOutputTest.qnt",
+    "status": "ok",
+    "description": "Created by Quint on Sat Oct 17 2026 01:55:46 GMT-0400 (Eastern Daylight Time)",
+    "timestamp": 1792216546572
+  },
+  "vars": [
+    "VoiceOutputTest::VoiceOutputMachine::commands",
+    "VoiceOutputTest::VoiceOutputMachine::event",
+    "VoiceOutputTest::VoiceOutputMachine::previous",
+    "VoiceOutputTest::VoiceOutputMachine::state"
+  ],
+  "states": [
+    {
+      "#meta": { "index": 0 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [],
+      "VoiceOutputTest::VoiceOutputMachine::event": { "tag": "None", "value": { "#tup": [] } },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": { "tag": "None", "value": { "#tup": [] } },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": { "tag": "None", "value": { "#tup": [] } },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "-1" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": { "tag": "None", "value": { "#tup": [] } },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": { "tag": "None", "value": { "#tup": [] } },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "-1" },
+        "unavailable": false
+      }
+    },
+    {
+      "#meta": { "index": 1 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [
+        {
+          "tag": "Prepare",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+          }
+        }
+      ],
+      "VoiceOutputTest::VoiceOutputMachine::event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Observe",
+          "value": {
+            "output": {
+              "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+              "manifest": true,
+              "session": { "#bigint": "1" },
+              "status": { "tag": "Playing", "value": { "#tup": [] } }
+            },
+            "sequence": { "#bigint": "0" }
+          }
+        }
+      },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": { "tag": "None", "value": { "#tup": [] } },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": { "tag": "None", "value": { "#tup": [] } },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "-1" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "0" },
+        "unavailable": false
+      }
+    },
+    {
+      "#meta": { "index": 2 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [],
+      "VoiceOutputTest::VoiceOutputMachine::event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Observe",
+          "value": {
+            "output": {
+              "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "2" }, "response": { "#bigint": "2" } },
+              "manifest": true,
+              "session": { "#bigint": "1" },
+              "status": { "tag": "Playing", "value": { "#tup": [] } }
+            },
+            "sequence": { "#bigint": "0" }
+          }
+        }
+      },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "0" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "0" },
+        "unavailable": false
+      }
+    },
+    {
+      "#meta": { "index": 3 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [],
+      "VoiceOutputTest::VoiceOutputMachine::event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Observe",
+          "value": {
+            "output": {
+              "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+              "manifest": true,
+              "session": { "#bigint": "1" },
+              "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+            },
+            "sequence": { "#bigint": "1" }
+          }
+        }
+      },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "0" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "1" },
+        "unavailable": false
+      }
+    },
+    {
+      "#meta": { "index": 4 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [
+        {
+          "tag": "Prepare",
+          "value": {
+            "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+          }
+        }
+      ],
+      "VoiceOutputTest::VoiceOutputMachine::event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Observe",
+          "value": {
+            "output": {
+              "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+              "manifest": true,
+              "session": { "#bigint": "1" },
+              "status": { "tag": "Playing", "value": { "#tup": [] } }
+            },
+            "sequence": { "#bigint": "2" }
+          }
+        }
+      },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "1" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "2" },
+        "unavailable": false
+      }
+    },
+    {
+      "#meta": { "index": 5 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [],
+      "VoiceOutputTest::VoiceOutputMachine::event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Audio",
+          "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        }
+      },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "2" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "2" },
+        "unavailable": false
+      }
+    },
+    {
+      "#meta": { "index": 6 },
+      "VoiceOutputTest::VoiceOutputMachine::commands": [],
+      "VoiceOutputTest::VoiceOutputMachine::event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Audio",
+          "value": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        }
+      },
+      "VoiceOutputTest::VoiceOutputMachine::previous": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": false,
+        "sequence": { "#bigint": "2" },
+        "unavailable": false
+      },
+      "VoiceOutputTest::VoiceOutputMachine::state": {
+        "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+        "closed": false,
+        "current": {
+          "tag": "Some",
+          "value": {
+            "identity": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+            "manifest": true,
+            "session": { "#bigint": "1" },
+            "status": { "tag": "Playing", "value": { "#tup": [] } }
+          }
+        },
+        "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutInput": { "tag": "None", "value": { "#tup": [] } },
+        "cutPendingInputs": [],
+        "gated": false,
+        "interrupted": { "tag": "None", "value": { "#tup": [] } },
+        "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+        "locallyInterrupted": false,
+        "prepared": {
+          "tag": "Some",
+          "value": { "epoch": { "#bigint": "2" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+        },
+        "receivedAudio": true,
+        "sequence": { "#bigint": "2" },
+        "unavailable": false
+      }
+    }
+  ]
+}

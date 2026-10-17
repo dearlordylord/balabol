@@ -193,6 +193,47 @@ Receiving and processing valid terminal evidence for a selected output is a next
 
 The client inventory records existing guards rather than proving every combination. Quint models and Swift trace replay are developed in #61–#63; backend Bend proofs do not automatically extend to this projection. Protocol checks do not establish SwiftUI visibility, speech classification, physical echo rejection or locked-screen playback. The blank-transcript investigation remains separate.
 
+## Executable client output contracts
+
+Start output-policy changes at `quint-specs/VoiceOutput.qnt` and the corresponding Swift output transition. The stateless Core describes selection, accepted-input eligibility, cuts, observations, audio callbacks, failures and disconnection. Its machine records each explicit event, prior state, resulting state and command values. `VoicePreparation.qnt` adds only the preparation-completion boundary: real preparation/ready/stop obligations, request generations and explicit owner-context facts. It is not a model of how Voice acquires or changes that context; composed lifecycle coverage belongs to #62.
+
+| Model boundary                                        | Actual Swift boundary                                        | Scope                                                                                                                                                                           |
+| ----------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Output Core initialization and all six event variants | `VoiceOutputState`, `transitionVoiceOutput`                  | Every output field and emitted Prepare/Suppress intent; replacing helpers are value construction, not separate lifecycle entry points.                                          |
+| Preparation Project and Progress                      | `composeVoiceOutput`, `progressVoiceOutput`                  | Output intent, cancellation, physical-stop dependencies and preparation reservation.                                                                                            |
+| Preparation Complete                                  | `completeVoice`, `outputVoicePrepared`                       | Matching preparation results/cancellation and retained ready/stop/interrupt settlement. Nonempty ready-success snapshot parsing remains canonical observation work for #62–#63. |
+| Explicit Context facts                                | Test fixture construction of Voice capture/execution context | Checks admission given context; actual lifecycle transitions establishing it remain #62.                                                                                        |
+| Wire validity and symbolic identity mapping           | Actual Swift Codable validation and test-only ITF mapping    | Fixed synthetic failure payloads; transcript strings, PCM and vendor internals are excluded.                                                                                    |
+| Interpreter scheduling, transport and UI              | ViewModels, interpreters and adapters                        | Excluded from this output model; composed checks belong to #62–#63 and physical/UI qualification remains separate.                                                              |
+
+The test-only ITF bridge under `ios/Tests/VoiceTests` translates finite symbols into separate UUID namespaces, invokes the actual Swift transitions and compares state plus command intent after every event. It does not decide which observations or completions should be admitted. The model-generated fixtures are synthetic, contain no conversation content, and run in ordinary fast Swift tests without Quint installed. Decoder/domain validation and projection checks are part of the trusted bridge boundary.
+
+Run the manual acceptance path with the qualified **Quint 0.31.0** toolchain already installed:
+
+```sh
+node scripts/quint/check-output.mjs
+```
+
+This generates deterministic ITF scenarios with seed 61, replays them through Swift, requires rejection of abstract faulty-rule controls, temporarily restores two faulty Swift rules, requires semantic conformance failures, restores exact source bytes, and repeats the normal replay. It retains synthetic traces and command logs in the reported temporary directory. Run it alone, with no other Swift tests/builds or source edits: its mutation controls intentionally edit and restore the production transition. The ordinary fast tests never mutate source or invoke the checker.
+
+For additional manual exploration, use fixed seeds and report the actual sample bounds:
+
+```sh
+quint run quint-specs/VoiceOutput.qnt --main VoiceOutput --invariant safety --seed 61 --max-samples 100 --max-steps 20
+quint run quint-specs/VoicePreparation.qnt --main VoicePreparation --invariant safety --seed 61 --max-samples 100 --max-steps 20
+```
+
+A deliberately smaller exhaustive instance is `VoiceOutputFinite`: one output identity, sequence 0…1, all six statuses and cuts allowing either no input or input 2. It excludes replacement identities, audio callbacks, accepted-input events and disconnection; the larger replay/simulation models cover those paths. With an existing qualified Java/checker installation, run:
+
+```sh
+printf '%s\n' '{"maxHeap":"-Xmx1G","stackSize":"-Xss16m","workers":2}' > /tmp/balabol-quint-tlc.json
+quint verify quint-specs/VoiceOutput.qnt --main VoiceOutputFinite --step finiteStep --backend tlc --invariant safety --tlc-config /tmp/balabol-quint-tlc.json --verbosity 3
+```
+
+This is a finite safety check, not a temporal or whole-client proof. Do not add exploration or TLC to mandatory commit hooks.
+
+Passing a pinned trace corpus establishes conformance on those sequences. Random simulation samples additional sequences; it is not exhaustive verification. A checked finite model remains limited to its declared domains and environment assumptions, and does not prove all Swift executions. In particular, explicit preparation-context changes do not verify actual pause, retirement or reconnection transitions, and an abstract context combination is not evidence of a reachable application bug without a corresponding lifecycle path. Physical execution, UI visibility, speech quality and network availability retain the separate assurance limits above.
+
 ## Qualified compilation boundary
 
 Run `pnpm check:bend` with Node 24, Bend **2.0.36** and `timeout` or `gtimeout` already available. It installs nothing. The installed compiler guide and `bend version` own the syntax/compilation contract; requalify another compiler version rather than silently accepting it.

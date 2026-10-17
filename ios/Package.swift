@@ -10,7 +10,8 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.17.0"),
-    .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git", exact: "1.24.2")
+    .package(
+      url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git", exact: "1.24.2"),
   ],
   targets: [
     .target(name: "Conversation"),
@@ -21,7 +22,9 @@ let package = Package(
         .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
         .product(name: "LiveKit", package: "client-sdk-swift", condition: .when(platforms: [.iOS])),
       ]),
-    .testTarget(name: "VoiceTests", dependencies: ["Voice", "Conversation"]),
+    .testTarget(
+      name: "VoiceTests", dependencies: ["Voice", "Conversation"],
+      resources: [.copy("Fixtures/OutputConformance")]),
     .testTarget(name: "ConversationTests", dependencies: ["Conversation"]),
   ]
 )
