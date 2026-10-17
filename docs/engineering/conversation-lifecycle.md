@@ -265,6 +265,45 @@ node scripts/quint/check-lifecycle.mjs
 
 It generates lifecycle traces with seed 62, replays them through Swift, exercises the existing ViewModel seams, rejects faulty terminal rules through the enclosing owner, restores exact production source and repeats normal replay. Like the output runner, run it alone; its controlled mutations are not part of fast tests or commit hooks. Small pinned lifecycle traces and port-level examples remain fast. Scheduler dependency checks and synchronous resource revocation tests do not establish that a physical speaker has stopped; that remains adapter/device qualification.
 
+## Server/client observation convergence
+
+Convergence concerns the same relevant output and a live eligible owner. A delayed observation may recover that owner's canonical terminal state; a Voice transport failure can retire its session and establish a new origin instead. Replacement is not recovery of the old owner's authorization. The latter path must reject old events and allow a new eligible response, as checked by the composed lifecycle scenarios.
+
+An interrupt acknowledgement settles a request; it does not replace canonical observation. Local suppression is synchronous and remains effective while observation is unavailable. Once a fresh, valid terminal snapshot for the selected output reaches an eligible owner, terminal admission is immediate. Fair execution and eventual connectivity are assumptions for receiving that snapshot, not excuses for ignoring it after delivery. Independent channels have no shared global sequence.
+
+The isolated real-server acceptance uses production HTTP routes, SQLite/unii, both Swift ViewModels and their production HTTP adapters. Its ports delay a Voice read before HTTP starts, lose the acknowledgement after the server commits interruption, and disconnect the Conversation reply observer. Subsequent reads recover the same output and durable receipt without another answer request. Summary generation remains independently pending through recovery and then completes when its provider is released. Reload checks durable history through another Conversation ViewModel; it does not claim a process-restart scenario.
+
+Run this manual boundary check with Node 24 and the existing compiled Bend artifacts:
+
+```sh
+pnpm check:bend
+node scripts/quint/check-convergence.mjs
+node scripts/quint/check-convergence.mjs --controls
+```
+
+The controls path runs normal acceptance, restores the faulty terminal-evidence gate, requires a semantic terminal-convergence failure, restores the exact source and repeats normal acceptance. Run it alone without concurrent Swift builds or edits. Its fixture uses an ephemeral loopback server and temporary storage, never the personal backend, microphone or real model providers. The integration test skips unless that runner supplies its isolated endpoints; an opt-in run must execute and pass rather than accept a skip. Small output and composed-lifecycle replay remains the routine fast-check path.
+
+### Finite communication model
+
+`VoiceConvergence.qnt` composes the existing output core with server authority and explicit communication lanes. Interrupt requests and acknowledgements have capacity one; polls have one outstanding request and up to two FIFO responses. One independent delayed response permits cross-channel reordering. The network permits one observation loss, one outage and one duplicate. Quiescent poll identities are reused abstractly; concurrent operation correlation is covered by the composed Swift lifecycle model. Snapshot pages are created by server reads, never by assigning the desired client result.
+
+The model starts after accepted input X and its first answer exist. It checks their retention and prevents communication from generating another answer; actual durable acceptance and summary execution belong to the real-server test. The general instance permits replacement Y, retirement, Delivered and Failed. The stable instance fixes the relevant owner and output X for conditional terminal convergence. Weak fairness applies to cut, interrupt service, poll issuance/read/delivery and link recovery. It does not promise progress with a permanently unavailable network, abandoned executor, lost non-retried interrupt request or superseding owner.
+
+Use the already-qualified Quint **0.31.0**, TLC **2.19**, Apalache compiler **0.51.1** and installed Java. With Node 24 selected, explicitly invoking the Quint JavaScript entry also avoids a package-manager shebang selecting another Node:
+
+```sh
+balabol_quint_cli="$(command -v quint)"
+node "$balabol_quint_cli" typecheck quint-specs/VoiceConvergence.qnt
+node "$balabol_quint_cli" test quint-specs/VoiceConvergenceTest.qnt --main VoiceConvergenceTest --seed 63 --max-samples 1
+cat > /tmp/balabol-quint-tlc.json <<'JSON'
+{"maxHeap":"-Xmx1G","stackSize":"-Xss16m","workers":2}
+JSON
+node "$balabol_quint_cli" verify quint-specs/VoiceConvergence.qnt --main VoiceConvergenceStable --backend tlc --invariant safety --temporal terminalConvergence --tlc-config /tmp/balabol-quint-tlc.json --verbosity 3
+node "$balabol_quint_cli" verify quint-specs/VoiceConvergence.qnt --main VoiceConvergence --backend tlc --invariant safety --tlc-config /tmp/balabol-quint-tlc.json --verbosity 3
+```
+
+Negative controls must produce counterexamples. Repeat the temporal command without `--invariant safety` for `VoiceConvergenceDropTerminal` and `VoiceConvergenceResurrection`: the same fairness premise must reject each faulty projection on progress itself. On normal `VoiceConvergenceStable`, replace `terminalConvergence` with `unfairConvergence`; the expected counterexample demonstrates why removing fairness invalidates the progress claim. Deterministic scenarios exercise loss/recovery, acknowledgement authority, duplicates, wrong incarnation, replacement, all terminal statuses and retirement. These finite checks remain manual, with exact domains, reachability and checker results recorded in #63; they do not prove arbitrary network histories or the whole application.
+
 ## Qualified compilation boundary
 
 Run `pnpm check:bend` with Node 24, Bend **2.0.36** and `timeout` or `gtimeout` already available. It installs nothing. The installed compiler guide and `bend version` own the syntax/compilation contract; requalify another compiler version rather than silently accepting it.

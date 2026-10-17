@@ -1,0 +1,38 @@
+module VoiceConvergenceTest {
+  import basicSpells.* from "./spells/basicSpells"
+  import VoiceOutputCore.* from "./VoiceOutput"
+  import VoiceConvergenceCore.* from "./VoiceConvergence"
+  import VoiceConvergenceMachine(allowReplacement = true, allowFinish = true, dropTerminal = false, resurrect = false).* from "./VoiceConvergence"
+  run lostObservationRecoveryTest = init.then(captureLate).then(localCut).then(serveInterrupt)
+    .then(requestPoll).then(readSnapshot).then(loseObservation)
+    .then(disconnectLink).then(recoverLink).then(requestPoll).then(readSnapshot).then(receivePoll)
+    .expect(converged(system) and system.client.output.locallyInterrupted and system.commands.length() == 1)
+    .then(receiveAck).expect(system.commands == List() and converged(system))
+    .then(receiveLate).expect(system.commands == List() and converged(system) and safety)
+    .expect(system.server.answers == 1 and system.server.accepted == Set(1))
+  run acknowledgementIsNotTerminalEvidenceTest = init.then(localCut).then(serveInterrupt).then(receiveAck)
+    .expect(system.client.output.current == Some(value(X, Playing)))
+    .then(requestPoll).then(readSnapshot).then(receivePoll).expect(converged(system) and safety)
+  run duplicatedOrderedObservationTest = init.then(requestPoll).then(readSnapshot).then(duplicateObservation)
+    .then(localCut).then(serveInterrupt).then(receivePoll).then(receivePoll)
+    .expect(system.client.output.current == Some(value(X, Playing)))
+    .then(requestPoll).then(readSnapshot).then(receivePoll).expect(converged(system) and safety)
+  run oldIncarnationRejectedTest = init.then(receiveHistorical)
+    .expect(system.client.output.current == Some(value(X, Playing)) and system.commands == List() and safety)
+  run replacementRejectsLateOldOutputTest = init.then(captureLate).then(localCut).then(serveInterrupt)
+    .then(requestPoll).then(readSnapshot).then(receivePoll).then(replaceOutput)
+    .then(requestPoll).then(readSnapshot).then(receivePoll)
+    .expect(system.client.output.prepared == Some(Y))
+    .then(receiveLate).then(receiveHistorical)
+    .expect(identity(system.client.output.current) == Some(Y) and safety)
+    .expect(system.server.answers == 2 and system.server.accepted == Set(1, 2))
+  run deliveredTerminalTest = init.then(localCut).then(finish(Delivered))
+    .then(requestPoll).then(readSnapshot).then(receivePoll)
+    .expect(converged(system) and system.client.output.locallyInterrupted and system.commands == List() and safety)
+  run failedTerminalTest = init.then(localCut).then(finish(Failed))
+    .then(requestPoll).then(readSnapshot).then(receivePoll)
+    .expect(converged(system) and system.client.output.unavailable and safety)
+  run retiredOwnerRejectsLateObservationTest = init.then(captureLate).then(localCut).then(serveInterrupt)
+    .then(requestPoll).then(readSnapshot).then(retireOwner).then(receivePoll).then(receiveLate)
+    .expect(system.client.output.current == None and system.client.output.closed and safety)
+}
