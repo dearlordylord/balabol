@@ -34,7 +34,7 @@ enum ConversationEvent {
   case drained
 }
 
-enum ConversationCommand {
+enum ConversationCommand: Equatable {
   case inputIntent(UUID)
   case findPlatformTarget(ConversationState.Request, UUID)
   case interruptPlatformTarget(ConversationState.Request, UUID, UUID)
@@ -56,6 +56,21 @@ enum ConversationCommand {
   case cancelReply
   case cancelSend
   case cancelHistory
+}
+
+/// Pure feature boundary: local value mutation stays inside the transition.
+/// Callers install the returned state before executing its command batch.
+struct ConversationTransition {
+  let state: ConversationState
+  let commands: [ConversationCommand]
+}
+
+func transitionConversation(_ state: ConversationState, _ event: ConversationEvent)
+  -> ConversationTransition
+{
+  var next = state
+  let commands = next.transition(event)
+  return ConversationTransition(state: next, commands: commands)
 }
 
 extension ConversationState {
@@ -709,7 +724,9 @@ extension ConversationState {
         snapshot.responseId == target.responseId
       else { return [] }
       platformCancellations[input] = nil
-      if let receipt = snapshot.receipt { _ = merge([receipt]) }
+      if let receipt = snapshot.receipt {
+        interruptedReceiptFailure = merge([receipt]) ? nil : .invalidResponse
+      }
       return []
     default: return []
     }

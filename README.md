@@ -16,6 +16,7 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 - [Personal knowledge specification — implementation in progress](https://github.com/dearlordylord/balabol/issues/40)
 - [Wayfinder map](.scratch/voice-prototype/map.md)
 - [Functional conversation lifecycle specification](docs/product/functional-conversation-spec.md) — implemented through #52–#58; start changes from the [owner protocol](docs/engineering/conversation-lifecycle.md)
+- [Client lifecycle verification specification](https://github.com/dearlordylord/balabol/issues/59) — event admission contracts and Quint-to-Swift conformance, implemented incrementally through #60–#63
 - [Engineering standards](docs/engineering/standards.md)
 - [Deferred real-model qualification](.scratch/followups/issues/01-create-real-model-check-task.md)
 

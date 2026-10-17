@@ -388,6 +388,45 @@ import XCTest
     await replacement.shutdown()
   }
 
+  func testLocalCutAcceptsEveryCanonicalTerminalWithoutPreparingAgain() async throws {
+    for status in ["Interrupted", "Delivered", "Failed"] {
+      let control = FixtureControl()
+      let media = FixtureMedia(allowed: true)
+      media.holdOutput = false
+      let model = VoiceViewModel(control: control, media: media) { _ in }
+      model.start()
+      await settle { model.state.capture == .listening }
+      let session = await control.identity()
+      var output = outputValue(session: session, input: UUID(), response: UUID(), epoch: UUID())
+      output["status"] = "Playing"
+      await control.append(
+        try event(session: session, sequence: 1, kind: "Output", fields: ["output": output]))
+      await settle { media.preparedOutputs == 1 }
+      XCTAssertEqual(model.output.current?.status, .playing)
+      model.speechStarted()
+      XCTAssertTrue(model.output.locallyInterrupted)
+      var terminal = output
+      terminal["status"] = status
+      if status == "Failed" {
+        terminal["error"] = ["code": "AudioUnavailable", "message": "Output failed"]
+      }
+      await control.append(
+        try event(session: session, sequence: 2, kind: "Output", fields: ["output": terminal]))
+      await settle { model.state.sequence == 2 }
+      XCTAssertEqual(model.output.current?.status.rawValue, status)
+      XCTAssertEqual(model.output.unavailable, status == "Failed")
+      XCTAssertEqual(model.output.locallyInterrupted, status != "Failed")
+      XCTAssertNil(model.output.prepared)
+      XCTAssertEqual(media.preparedOutputs, 1)
+      await control.append(
+        try event(session: session, sequence: 3, kind: "Output", fields: ["output": output]))
+      await settle { model.state.sequence == 3 }
+      XCTAssertEqual(model.output.current?.status.rawValue, status)
+      XCTAssertEqual(media.preparedOutputs, 1)
+      await model.shutdown()
+    }
+  }
+
   func testTextIntentRetiresOutputBeforeLateSubscriptionCanAcknowledgeReady() async throws {
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)

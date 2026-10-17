@@ -28,6 +28,9 @@ public final class ConversationViewModel {
   @ObservationIgnored private var deliveryRequest: ConversationState.Request?
   @ObservationIgnored private var historyRequest: ConversationState.Request?
 
+  @ObservationIgnored private var pendingEvents: [ConversationEvent] = []
+  @ObservationIgnored private var isDraining = false
+
   public init(
     transport: any ConversationTransport, draftStore: any DraftStore,
     diagnosticsEnabled: Bool = false,
@@ -135,13 +138,24 @@ public final class ConversationViewModel {
   }
 
   private func receive(_ event: ConversationEvent) {
-    let commands = state.transition(event)
+    pendingEvents.append(event)
+    guard !isDraining else { return }
+    isDraining = true
+    defer { isDraining = false }
+    while !pendingEvents.isEmpty {
+      let transition = transitionConversation(state, pendingEvents.removeFirst())
+      state = transition.state
+      recordObservationFailure()
+      for command in transition.commands { execute(command) }
+    }
+  }
+
+  private func recordObservationFailure() {
     if diagnosticsEnabled, let failure = state.replyObservationFailure,
       case .observationFailed(let input, _, _) = state.reply
     {
       ReplyObservationDiagnostics.record(input: input, stage: "projection", failure: failure)
     }
-    for command in commands { execute(command) }
   }
 
   private func execute(_ command: ConversationCommand) {

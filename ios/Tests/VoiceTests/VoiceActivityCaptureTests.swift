@@ -123,9 +123,13 @@ extension VoiceActivityCaptureTests {
     let classifier = ControlledActivity()
     await classifier.release()
     let observations = OSAllocatedUnfairLock(initialState: (onsets: 0, failures: 0))
+    let onset = expectation(description: "Fresh lifetime produces a classified onset")
     let capture = VoiceActivityCapture(
       classifier: classifier,
-      started: { _, _ in observations.withLock { $0.onsets += 1 } },
+      started: { _, _ in
+        observations.withLock { $0.onsets += 1 }
+        onset.fulfill()
+      },
       failed: { _ in observations.withLock { $0.failures += 1 } })
     XCTAssertFalse(
       capture.capture(
@@ -140,10 +144,7 @@ extension VoiceActivityCaptureTests {
     XCTAssertEqual(observations.withLock { $0.failures }, 0)
     XCTAssertTrue(
       capture.capture(frameCount: 1024, channels: 1, sampleRate: 16000, sample: { _, _ in 0.01 }))
-    for _ in 0..<1000 {
-      if observations.withLock({ $0.onsets == 1 }) { break }
-      await Task.yield()
-    }
+    await fulfillment(of: [onset], timeout: 2)
     XCTAssertEqual(observations.withLock { $0.onsets }, 1)
     await capture.stop()
   }

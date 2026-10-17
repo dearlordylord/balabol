@@ -1,7 +1,7 @@
 import Foundation
 
 /// Feature-local state: the server owns acceptance/order; the client owns its
-/// checkpoint and independent delivery/history work. Follow Event → transition
+/// checkpoint and independent delivery/history work. Follow Event → transitionConversation
 /// → Command → ViewModel-owned task → completion Event for every mutation.
 /// Keep this feature-specific; before shared effect/task/testing infrastructure,
 /// review the TCA adoption condition in docs/engineering/ownership.md.
