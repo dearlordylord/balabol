@@ -21,6 +21,42 @@ final class ConversationTransitionContractTests: XCTestCase {
     XCTAssertEqual(first.state.draft, .loading(request, previous: nil))
   }
 
+  func testHandedInputOrderDeterministicallyAssignsRequests() {
+    let state = ConversationState()
+    let first = UUID()
+    let second = UUID()
+    for _ in 0..<100 {
+      let result = transitionConversation(state, .platformInterrupt([first, second, first]))
+      XCTAssertEqual(result.state.platformCancellations[first]?.request.id, 1)
+      XCTAssertEqual(result.state.platformCancellations[second]?.request.id, 2)
+      XCTAssertEqual(result.state.platformCancellations.count, 2)
+      XCTAssertEqual(state, ConversationState())
+    }
+    let bounded = transitionConversation(state, .platformInterrupt([first, first, second]))
+    XCTAssertEqual(bounded.state.platformCancellations.count, 1)
+    XCTAssertEqual(bounded.state.platformCancellations[first]?.request.id, 1)
+    XCTAssertNil(bounded.state.platformCancellations[second])
+  }
+
+  func testObsoleteCancellationCommandsHaveStableRequestOrder() {
+    var state = ConversationState()
+    let requests = [
+      ConversationState.Request(generation: 1, id: 2),
+      ConversationState.Request(generation: 0, id: 3),
+      ConversationState.Request(generation: 0, id: 1),
+    ]
+    for request in requests {
+      state.platformCancellations[UUID()] = .init(request: request, responseId: nil)
+    }
+    let event = ConversationEvent.platformInterrupt([])
+    let expected = [requests[2], requests[1], requests[0]]
+    for _ in 0..<100 {
+      let result = transitionConversation(state, event)
+      XCTAssertEqual(result.commands, [.cancelPlatformTargets(expected)])
+      XCTAssertEqual(result.state.platformCancellations.count, 0)
+    }
+  }
+
   func testConflictingPlatformReceiptIsExplicitWithoutReplacingDurableHistory() {
     var state = ConversationState()
     let input = UUID()

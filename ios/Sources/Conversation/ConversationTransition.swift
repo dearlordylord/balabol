@@ -674,7 +674,10 @@ extension ConversationState {
       interruptedReceiptFailure = .unavailable
       return []
     case .platformInterrupt(let handedInputs):
-      var inputs = Array(Set(handedInputs.prefix(2)))
+      var inputs: [UUID] = []
+      for input in handedInputs.prefix(2) where !inputs.contains(input) {
+        inputs.append(input)
+      }
       var current: ReplySnapshot?
       switch reply {
       case .observing(_, let input, let latest), .recovering(_, let input, let latest, _),
@@ -686,6 +689,7 @@ extension ConversationState {
       // A new platform intent supersedes obsolete displayed targets; the
       // handed-final set itself is supplied from the bounded Voice owner.
       let obsolete = platformCancellations.filter { !inputs.contains($0.key) }.values.map(\.request)
+        .sorted { ($0.generation, $0.id) < ($1.generation, $1.id) }
       platformCancellations = platformCancellations.filter { inputs.contains($0.key) }
       var commands: [ConversationCommand] =
         obsolete.isEmpty ? [] : [.cancelPlatformTargets(obsolete)]
