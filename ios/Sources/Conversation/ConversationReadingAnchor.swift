@@ -3,7 +3,7 @@
   import os
 
   /// Matching row and viewport anchors restores the same visible pixel after a prepend.
-  struct ConversationReadingAnchor {
+  struct ConversationReadingAnchor: Equatable {
     let message: String
     private let originalY: CGFloat
     private let viewportHeight: CGFloat

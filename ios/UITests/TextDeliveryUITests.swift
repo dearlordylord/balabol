@@ -19,7 +19,11 @@ final class TextDeliveryUITests: XCTestCase {
     let projection = app.staticTexts["reply-progress"]
     XCTAssertTrue(projection.waitForExistence(timeout: 5))
     app.buttons["start-voice"].tap()
-    for _ in 0..<12 {
+    for step in 0..<12 {
+      if step % 4 == 1 {
+        app.descendants(matching: .any)["message-draft"].firstMatch.tap()
+        app.buttons["Done"].tap()
+      }
       _ = try await URLSession.shared.data(from: URL(string: server + "/test/step")!)
       let visible =
         projection.exists
@@ -28,10 +32,46 @@ final class TextDeliveryUITests: XCTestCase {
       XCTAssertTrue(
         visible || (completed.exists && completed.isHittable),
         "A streaming or saved reply must remain visible; the transcript must not become blank.")
+      if projection.exists {
+        XCTAssertLessThanOrEqual(projection.frame.maxY,
+          app.scrollViews["conversation-transcript"].frame.maxY + 2,
+          "Following must reveal the end of a growing reply after layout changes.")
+      }
       try await Task.sleep(for: .milliseconds(200))
     }
     _ = try await URLSession.shared.data(from: URL(string: server + "/test/finish")!)
     XCTAssertTrue(app.staticTexts["assistant-message-96"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["assistant-message-96"].isHittable)
+  }
+
+  func testReturningToBottomResumesFollowingNewReplies() async throws {
+    let server = "http://127.0.0.1:8792"
+    do { _ = try await URLSession.shared.data(from: URL(string: server + "/test/reset")!) } catch {
+      throw XCTSkip("Run conversation-live-ui-fixture.mjs for this isolated UI check.")
+    }
+    let app = XCUIApplication()
+    defer { app.terminate() }
+    app.launchEnvironment["BALABOL_UI_TEST_NAMESPACE"] = UUID().uuidString
+    app.launchEnvironment["BALABOL_UI_TEST_CONTROL_URL"] = server
+    app.launch()
+    XCTAssertTrue(app.staticTexts["message-94"].waitForExistence(timeout: 10))
+    let transcript = app.scrollViews["conversation-transcript"]
+    transcript.swipeDown()
+    XCTAssertTrue(app.buttons["latest-message"].waitForExistence(timeout: 3))
+    for _ in 0..<8 {
+      if app.staticTexts["About this prototype"].isHittable { break }
+      transcript.swipeUp()
+    }
+    XCTAssertTrue(app.staticTexts["About this prototype"].isHittable)
+    XCTAssertFalse(app.buttons["latest-message"].exists,
+      "Returning to the bottom must resume following without a separate button tap.")
+    _ = try await URLSession.shared.data(from: URL(string: server + "/test/start")!)
+    app.buttons["Refresh conversation"].tap()
+    XCTAssertTrue(app.staticTexts["reply-progress"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["reply-progress"].isHittable,
+      "A new reply must appear in the viewport after returning to the bottom.")
+    _ = try await URLSession.shared.data(from: URL(string: server + "/test/finish")!)
+    XCTAssertTrue(app.staticTexts["assistant-message-96"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["assistant-message-96"].isHittable)
   }
 

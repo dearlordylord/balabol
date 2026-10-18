@@ -10,7 +10,7 @@
     #endif
     @FocusState private var draftFocused: Bool
     @State private var followsLatest = true
-    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var readingAnchor: ConversationReadingAnchor?
     @State private var transcriptFrame: CGRect = .zero
     @State private var olderAnchor: ConversationReadingAnchor?
     @Bindable private var model: ConversationViewModel
@@ -41,7 +41,8 @@
         if !scrollsControls { controls.padding(.horizontal, 16) }
         ScrollViewReader { proxy in
           ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
+            // Loaded history has real row heights before scrolling, including live-to-saved replacement.
+            VStack(alignment: .leading, spacing: 16) {
               if scrollsControls {
                 controls
               }
@@ -51,10 +52,7 @@
               if model.nextBefore != nil {
                 Button {
                   followsLatest = false
-                  olderAnchor = ConversationReadingAnchor(
-                    frames: rowFrames.filter {
-                      $0.key != "latest-message" && $0.key != "reply-projection"
-                    }, viewport: transcriptFrame)
+                  olderAnchor = readingAnchor
                   Task {
                     await model.loadOlderHistory()
                     if model.historyFailure != nil { olderAnchor = nil }
@@ -109,7 +107,6 @@
                   }
                 }
             }
-            .scrollTargetLayout()
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
           }
@@ -124,8 +121,22 @@
             }
           }
           .onPreferenceChange(ConversationRowFrames.self) { frames in
-            rowFrames = frames
-            recordViewport()
+            recordViewport(frames)
+            if !followsLatest && olderAnchor == nil {
+              let anchor = ConversationReadingAnchor(
+                frames: frames.filter {
+                  $0.key != "latest-message" && $0.key != "reply-projection"
+                }, viewport: transcriptFrame)
+              if readingAnchor != anchor { readingAnchor = anchor }
+              if let bottom = frames["latest-message"],
+                bottom.maxY <= transcriptFrame.maxY + 24,
+                bottom.maxY >= transcriptFrame.minY
+              { followsLatest = true }
+            }
+            // Geometry arrives after layout; model notifications can still carry the old height.
+            if followsLatest, olderAnchor == nil, transcriptFrame.height > 0,
+              let bottom = frames["latest-message"], bottom.maxY > transcriptFrame.maxY + 1
+            { scrollToLatest(proxy) }
             if var anchor = olderAnchor, anchor.isRestoring,
               let frame = frames[anchor.message], frame.intersects(transcriptFrame)
             {
@@ -144,7 +155,6 @@
               proxy.scrollTo(anchor.message, anchor: anchor.alignment)
             }
           }
-          .defaultScrollAnchor(.bottom)
           .accessibilityIdentifier("conversation-transcript")
           .scrollDismissesKeyboard(.interactively)
           .simultaneousGesture(
@@ -173,19 +183,7 @@
           .onChange(of: model.isSending) { _, sending in
             if sending { olderAnchor = nil }
           }
-          .onChange(of: transcriptFrame) { _, _ in recordViewport() }
-          .onChange(of: model.messages.count) { _, _ in
-            scrollToLatest(proxy)
-            recordViewport()
-          }
-          .onChange(of: model.replyText) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.replyIsWaiting) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.replyProviderFailure) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.replyObservationFailure) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.historyFailure) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.deliveryFailure) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.draftFailure) { _, _ in scrollToLatest(proxy) }
-          .onChange(of: model.state.interruptedReceiptFailure) { _, _ in scrollToLatest(proxy) }
+          .onChange(of: transcriptFrame) { _, _ in scrollToLatest(proxy) }
         }
       }
       .safeAreaInset(edge: .bottom, spacing: 0) { composer }
@@ -435,7 +433,7 @@
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func recordViewport() {
+    private func recordViewport(_ rowFrames: [String: CGRect]) {
       guard model.diagnosticsEnabled else { return }
       let rows = rowFrames.filter { $0.key != "latest-message" }
       let snapshot = ConversationViewportDiagnostics.Snapshot(
