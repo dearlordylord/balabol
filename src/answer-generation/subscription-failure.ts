@@ -5,6 +5,7 @@ import { InferenceFailed } from "../subscription/index.ts"
 const descriptions = {
   Authentication: "ChatGPT authentication failed; reconnect the subscription or switch account",
   Quota: "ChatGPT subscription usage limit reached; check the connected account limits",
+  Unavailable: "ChatGPT is temporarily unavailable; try again shortly",
   Failed: "ChatGPT could not generate this answer; try again",
   Incomplete: "ChatGPT returned an incomplete answer; try again",
   Protocol: "ChatGPT returned an unsupported response; the subscription adapter needs attention",

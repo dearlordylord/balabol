@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Option, Schema, Stream } from "effect"
 import { LanguageModel, Model, Tool, type Prompt } from "effect/ai"
 import {
   SubscriptionToolInference,
@@ -7,6 +7,7 @@ import {
   ToolReplay,
   type ToolInput
 } from "../subscription/index.ts"
+import { AnswerProgressObserver } from "./contracts.ts"
 import { SubscriptionParts } from "./subscription-parts.ts"
 import { yieldedAnswerLayer } from "./yielded.ts"
 
@@ -81,18 +82,24 @@ const subscriptionModel = (inference: typeof SubscriptionToolInference.Service) 
         generateText: () => Effect.fail(providerError()),
         streamText: (options) =>
           Stream.unwrap(
-            request(options).pipe(
+            Effect.gen(function* () {
+              const progress = Option.getOrUndefined(yield* Effect.serviceOption(AnswerProgressObserver))
+              const value = yield* request(options).pipe(Effect.mapError(providerError))
+              return { value, progress }
+            }).pipe(
               Effect.mapError(providerError),
-              Effect.map((value) => {
+              Effect.map(({ progress, value }) => {
                 const parts = new SubscriptionParts()
-                return inference.generate(value).pipe(
-                  Stream.mapEffect((event) => Effect.try({ try: () => parts.accept(event), catch: providerError })),
-                  Stream.flatMap(Stream.fromIterable),
-                  Stream.concat(
-                    Stream.unwrap(Effect.sync(() => (parts.completed ? Stream.empty : Stream.fail(providerError()))))
-                  ),
-                  Stream.mapError(providerError)
-                )
+                return inference
+                  .generate(value, (retry) => progress?.({ kind: "Retry", ...retry }) ?? Effect.void)
+                  .pipe(
+                    Stream.mapEffect((event) => Effect.try({ try: () => parts.accept(event), catch: providerError })),
+                    Stream.flatMap(Stream.fromIterable),
+                    Stream.concat(
+                      Stream.unwrap(Effect.sync(() => (parts.completed ? Stream.empty : Stream.fail(providerError()))))
+                    ),
+                    Stream.mapError(providerError)
+                  )
               })
             )
           )

@@ -11,7 +11,7 @@ internal enum VoiceOperationKind: Equatable, Sendable {
   case resolve([VoiceAdmissionAssociation])
   case seal(VoiceOrigin)
   case endBootstrap(VoiceOrigin)
-  case stopMedia(Bool, Bool, VoiceOutputIdentity?, UUID?)
+  case stopMedia(Bool, Bool, VoiceOutputIdentity?, UUID?, Bool)
   case disconnect
   case prepareOutput(VoiceAudioManifest)
   case ready(VoiceOrigin, VoiceAudioManifest)
@@ -33,7 +33,7 @@ internal enum VoiceOperationKind: Equatable, Sendable {
     case .resolve(let values): self = .resolve(values)
     case .seal(let origin): self = .seal(origin)
     case .endBootstrap(let id): self = .endBootstrap(id)
-    case .stopMedia(let capture, let output, let target, let session): self = .stopMedia(capture, output, target, session)
+    case .stopMedia(let capture, let output, let target, let session, let preservingFailureCue): self = .stopMedia(capture, output, target, session, preservingFailureCue)
     case .disconnect: self = .disconnect
     case .prepareOutput(let manifest): self = .prepareOutput(manifest)
     case .ready(let origin, let manifest): self = .ready(origin, manifest)
@@ -56,11 +56,12 @@ internal struct VoiceExecutionState: Equatable, Sendable {
   let platformObservation: VoiceRequest?
   let preparedOutput: VoiceOutputIdentity?
   let localStop: VoiceRequest?
+  let pendingFailureCue: VoiceOutputIdentity?
   let shuttingDown: Bool
   let resolutionStep: Int
   init(bootstrapReleases: [VoiceOrigin: VoiceBootstrapRelease] = [:], operations: [VoiceRequest: VoiceOperation] = [:], nextRequest: Int = 1,
     activeCapture: VoiceRequest? = nil, platformObservation: VoiceRequest? = nil,
-    preparedOutput: VoiceOutputIdentity? = nil, localStop: VoiceRequest? = nil, shuttingDown: Bool = false, resolutionStep: Int = 0) {
+    preparedOutput: VoiceOutputIdentity? = nil, localStop: VoiceRequest? = nil, pendingFailureCue: VoiceOutputIdentity? = nil, shuttingDown: Bool = false, resolutionStep: Int = 0) {
     self.bootstrapReleases = bootstrapReleases
     self.operations = operations
     self.nextRequest = nextRequest
@@ -68,15 +69,16 @@ internal struct VoiceExecutionState: Equatable, Sendable {
     self.platformObservation = platformObservation
     self.preparedOutput = preparedOutput
     self.localStop = localStop
+    self.pendingFailureCue = pendingFailureCue
     self.shuttingDown = shuttingDown
     self.resolutionStep = resolutionStep
   }
   func replacing(bootstrapReleases: [VoiceOrigin: VoiceBootstrapRelease]? = nil, operations: [VoiceRequest: VoiceOperation]? = nil, nextRequest: Int? = nil,
     activeCapture: VoiceRequest?? = nil, platformObservation: VoiceRequest?? = nil,
-    preparedOutput: VoiceOutputIdentity?? = nil, localStop: VoiceRequest?? = nil, shuttingDown: Bool? = nil, resolutionStep: Int? = nil) -> VoiceExecutionState {
+    preparedOutput: VoiceOutputIdentity?? = nil, localStop: VoiceRequest?? = nil, pendingFailureCue: VoiceOutputIdentity?? = nil, shuttingDown: Bool? = nil, resolutionStep: Int? = nil) -> VoiceExecutionState {
     VoiceExecutionState(bootstrapReleases: bootstrapReleases ?? self.bootstrapReleases, operations: operations ?? self.operations, nextRequest: nextRequest ?? self.nextRequest,
       activeCapture: activeCapture ?? self.activeCapture, platformObservation: platformObservation ?? self.platformObservation,
-      preparedOutput: preparedOutput ?? self.preparedOutput, localStop: localStop ?? self.localStop, shuttingDown: shuttingDown ?? self.shuttingDown,
+      preparedOutput: preparedOutput ?? self.preparedOutput, localStop: localStop ?? self.localStop, pendingFailureCue: pendingFailureCue ?? self.pendingFailureCue, shuttingDown: shuttingDown ?? self.shuttingDown,
       resolutionStep: resolutionStep ?? self.resolutionStep)
   }
 }

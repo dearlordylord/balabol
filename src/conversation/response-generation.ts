@@ -238,8 +238,19 @@ export const providerEvent = (
   if (current === undefined) return unchangedResponse(state)
   if (current.work.completed)
     return failResponse(state, current, { code: "ProviderFailed", message: "Provider emitted after terminal" })
+  if (event.event.kind === "Retry")
+    return updateResponse(state, {
+      ...current,
+      retry: { attempt: event.event.attempt, maximumAttempts: event.event.maximumAttempts },
+      sequence: current.sequence + 1
+    })
   if (event.event.kind === "Completed")
-    return updateResponse(state, { ...current, work: { ...current.work, completed: true } })
+    return updateResponse(state, {
+      ...current,
+      retry: undefined,
+      sequence: current.sequence + 1,
+      work: { ...current.work, completed: true }
+    })
   const text = current.text + event.event.text
   const languageSpans = [
     ...current.languageSpans,
@@ -258,7 +269,7 @@ export const providerEvent = (
       code: "ProviderFailed",
       message: "Provider output exceeds bounded valid text and annotations"
     })
-  return updateResponse(state, { ...current, text, languageSpans, sequence: current.sequence + 1 })
+  return updateResponse(state, { ...current, retry: undefined, text, languageSpans, sequence: current.sequence + 1 })
 }
 export const providerEnded = (
   state: ResponseState,

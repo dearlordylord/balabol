@@ -14,7 +14,7 @@ import { dictionaryHandlers, dictionaryTools } from "./dictionary-tools.ts"
 import { LanguageTags } from "../language/index.ts"
 import { PersonalKnowledge, knowledgeLimits } from "../personal-knowledge/index.ts"
 import { acceptedKnowledgeOperations, knowledgeHandlers, knowledgeTools } from "./knowledge-tools.ts"
-import { AnswerFailed, AnswerGeneration, AnswerRequest, type AnswerEvent } from "./contracts.ts"
+import { AnswerProgressObserver, AnswerFailed, AnswerGeneration, AnswerRequest, type AnswerEvent } from "./contracts.ts"
 
 const maximumInputCharacters = 1100000
 const maximumOutputCharacters = 100000
@@ -72,7 +72,7 @@ export const yieldedAnswerLayer = (
       )
       return AnswerGeneration.of({
         capabilities: { languages: supported, output: "text-deltas" },
-        generate: (raw) =>
+        generate: (raw, progress = () => Effect.void) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const request = yield* Schema.decodeUnknownEffect(AnswerRequest)(raw).pipe(
@@ -136,6 +136,7 @@ export const yieldedAnswerLayer = (
                   )
                 ),
                 Stream.provide(Layer.mergeAll(InMemory.layer, handlers)),
+                Stream.provideService(AnswerProgressObserver, progress),
                 Stream.mapError((error) =>
                   error instanceof AnswerFailed
                     ? error

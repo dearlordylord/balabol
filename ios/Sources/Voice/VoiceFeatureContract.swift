@@ -56,7 +56,7 @@ internal enum VoiceWork: Sendable {
   case resolve([VoiceAdmissionAssociation])
   case seal(VoiceOrigin)
   case endBootstrap(VoiceOrigin)
-  case stopMedia(capture: Bool, output: Bool, target: VoiceOutputIdentity?, session: UUID?)
+  case stopMedia(capture: Bool, output: Bool, target: VoiceOutputIdentity?, session: UUID?, preservingFailureCue: Bool = false)
   case disconnect
   case prepareOutput(VoiceAudioManifest)
   case ready(VoiceOrigin, VoiceAudioManifest)
@@ -116,5 +116,6 @@ internal enum VoiceTraceCause: String, Codable, Sendable {
   case output, localStop, cleanupAttemptFinished, mediaCleanupFailed
   case interruptDispatch, interruptReturned, interruptFailed
   case failure, observationFailed, wireError, transportFailed
+  case nativeCapture
   case onset, onsetAccepted, onsetRejected, audioReceived, playoutPrepared
 }

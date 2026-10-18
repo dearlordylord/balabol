@@ -39,7 +39,7 @@ it.effect("requests exact Luna with explicit source, context and refinement, pub
   )
 )
 for (const [type, expected] of [
-  ["response.failed", "Failed"],
+  ["response.failed", "Protocol"],
   ["response.incomplete", "Incomplete"]
 ])
   it.effect(`does not return partial ${type} text`, () =>

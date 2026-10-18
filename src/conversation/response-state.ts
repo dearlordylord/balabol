@@ -38,6 +38,7 @@ export type ResponseAttempt = {
   readonly issuedRevision: bigint
   readonly authorization: "Active" | "Revoked"
   readonly sequence: number
+  readonly retry?: Reply["retry"]
   readonly text: string
   readonly languageSpans: readonly LanguageSpan[]
   readonly observer: string | undefined
@@ -104,6 +105,8 @@ export const ticketMatches = (left: DeliveryTicket | undefined, right: DeliveryT
   left.deliveryId === right.deliveryId &&
   left.responseId === right.responseId &&
   left.inputDeliveryId === right.inputDeliveryId
+const retryProjection = (response: ResponseAttempt) =>
+  response.work.kind === "Generating" && response.retry !== undefined ? { retry: response.retry } : {}
 const projectReply = (response: ResponseAttempt): Reply => {
   const base = {
     ...responseTarget(response),
@@ -111,6 +114,7 @@ const projectReply = (response: ResponseAttempt): Reply => {
     generationStarted: response.work.kind === "Generating" || response.work.kind === "AwaitingDelivery",
     generationCompleted: response.work.kind === "AwaitingDelivery",
     sequence: response.sequence,
+    ...retryProjection(response),
     text: response.text,
     languageSpans: response.languageSpans
   }

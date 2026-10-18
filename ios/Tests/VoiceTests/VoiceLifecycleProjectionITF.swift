@@ -92,7 +92,7 @@ extension VoiceLifecycleITFMapping {
         "Snapshot", .record(["origin": preparation.project(origin), "after": .integer(after)]))
     case .seal(let origin): return try .variant("Seal", preparation.project(origin))
     case .endBootstrap(let origin): return try .variant("EndBootstrap", preparation.project(origin))
-    case .stopMedia(let capture, let playback, let target, let session):
+    case .stopMedia(let capture, let playback, let target, let session, _):
       return try .variant(
         "Stop",
         .record([
@@ -144,8 +144,10 @@ extension VoiceLifecycleITFMapping {
         case .cancel(let requests):
           return .variant("Cancel", .list(requests.map(preparation.project)))
         case .refreshConversation: return .variant("RefreshConversation", .unit)
-        case .generationCue, .cancelGenerationCue:
-          throw VoiceITFError.invalid("Progress cues are excluded from lifecycle trace commands")
+        // Sound envelopes are outside this resource-lifecycle abstraction. Keep
+        // projecting every stop, cancellation and dependency above; dedicated
+        // generation-cue tests cover sound cancellation and failure-tone ordering.
+        case .generationCue, .cancelGenerationCue: return nil
         case .interruptConversation(let inputs, let after):
           guard inputs.isEmpty else {
             throw VoiceITFError.invalid("admissions outside lifecycle model")

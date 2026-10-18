@@ -1,6 +1,8 @@
 import { Schema } from "effect"
 import { LanguageTag, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 import { sameDeliveryFailure, DeliveryFailure, DeliveryId, MessageText, Position, Receipt } from "../memory/index.ts"
+const firstRetryAttempt = 2
+const maximumAnswerAttempts = 3
 export { StorageUnavailable, WriterUnavailable } from "../memory/index.ts"
 export const SendMessage = Schema.Struct({
   deliveryId: DeliveryId,
@@ -48,6 +50,15 @@ const responseFields = {
   responseLanguage: Schema.optionalKey(LanguageTag),
   generationStarted: Schema.optionalKey(Schema.Boolean),
   generationCompleted: Schema.optionalKey(Schema.Boolean),
+  retry: Schema.optionalKey(
+    Schema.Struct({
+      attempt: Schema.Int.check(
+        Schema.isGreaterThanOrEqualTo(firstRetryAttempt),
+        Schema.isLessThanOrEqualTo(maximumAnswerAttempts)
+      ),
+      maximumAttempts: Schema.Literal(maximumAnswerAttempts)
+    })
+  ),
   inputDeliveryId: DeliveryId,
   sequence: Position,
   text: Schema.String.check(Schema.isMaxLength(maximumReplyLength)),

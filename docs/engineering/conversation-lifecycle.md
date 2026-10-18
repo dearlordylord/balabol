@@ -336,3 +336,9 @@ The approved laws establish selected transition safety and conditional single-st
 - #56 removes that recognition adapter and mutable recognition policy. #57 replaces output coordination. #58 composes pure Swift capture/output policy and removes ViewModel lifecycle decisions.
 
 At each milestone, delete the replaced policy, review changed owners and preserve tests through Conversation/Voice and Swift ports. Add direct bridge/law checks only where those interfaces cannot establish the property. The complete routine quality harness runs fast tests; slow scale checks are explicit manual commands. Physical audio qualification remains in its existing issues and is not a recurring contributor ritual.
+
+## Subscription answer recovery progress
+
+Automatic transient recovery repeats one immutable subscription model request, before that request has released output. It does not create a new Conversation response attempt, replay an agent run or execute completed tools again. Two scheduled retries remain inside the existing request/run deadlines. Intentional cancellation cancels the request and backoff; authentication, quota, protocol and application-limit failures remain terminal without automatic retry. Summary jobs keep their separate policy.
+
+Retry notifications enter the same correlated provider-event boundary as answer deltas. A matching active generation advances the reply sequence and projects bounded attempt counters; stale/cancelled notifications cannot revive a response. Swift observes this server state and never initiates inference retries itself. Retry cues are deduplicated by response identity and observed sequence, because separate model steps can have equal local attempt counters. Live final failure is distinct from interruption and from restored history. Cue rendering shares the existing managed echo-reference path and never changes microphone intent.

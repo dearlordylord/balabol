@@ -57,10 +57,10 @@ private func ensureVoicePlatform(_ step: VoiceTransition) -> VoiceTransition {
 internal func physicalVoiceRequests(_ state: VoiceState) -> [VoiceRequest] {
   state.execution.operations.filter { voicePhysicalMedia($0.value.kind) }.map(\.key).sorted { $0.id < $1.id }
 }
-internal func stopVoiceMedia(_ state: VoiceState, capture: Bool, output: Bool) -> VoiceTransition {
+internal func stopVoiceMedia(_ state: VoiceState, capture: Bool, output: Bool, preservingFailureCue: Bool = false) -> VoiceTransition {
   let request = VoiceRequest(generation: state.generation, id: state.execution.nextRequest)
   let stopped = reserveVoice(state, .stopMedia(capture: capture, output: output,
-    target: state.output.current?.identity, session: state.sessionId))
+    target: state.output.current?.identity, session: state.sessionId, preservingFailureCue: preservingFailureCue))
   return VoiceTransition(state: stopped.state.replacing(execution: stopped.state.execution.replacing(localStop: .some(request))), commands: stopped.commands)
 }
 internal func closeVoiceProducer(_ state: VoiceState, origin: VoiceOrigin?, preserveObservation: Bool = false) -> VoiceTransition {

@@ -124,3 +124,48 @@ it.each([401, 403, 429])(
     }
   }
 )
+
+it("publishes retry progress through the real agent and Conversation without replacing accepted input", async () => {
+  const database = await temporaryDatabase()
+  let calls = 0
+  const requests: unknown[] = []
+  const answer = knowledgeAnswerLayer(async (request) => {
+    requests.push(request)
+    calls++
+    return calls === 1
+      ? new Response(event({ type: "response.failed", response: { error: { code: "server_error" } } }))
+      : new Response(success)
+  })
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const conversation = yield* Conversation
+          yield* conversation.send(input)
+          let progress = yield* conversation.reply(input.deliveryId)
+          for (let index = 0; progress.retry === undefined && index < 100; index++) {
+            yield* Effect.sleep(5)
+            progress = yield* conversation.reply(input.deliveryId)
+          }
+          expect(progress.retry).toEqual({ attempt: 2, maximumAttempts: 3 })
+          expect(progress.state).toBe("Waiting")
+          const completed = yield* waitForReply(conversation, input.deliveryId)
+          expect(completed.state).toBe("Completed")
+          expect(completed.responseId).toBe(progress.responseId)
+          expect(completed.sequence).toBeGreaterThan(progress.sequence)
+          expect(completed.retry).toBeUndefined()
+          expect(completed.text).toBe("synthetic answer")
+          expect((yield* conversation.page({ limit: 100 })).messages).toHaveLength(2)
+          expect(calls).toBe(2)
+          expect(requests[1]).toEqual(requests[0])
+        })
+      ).pipe(
+        Effect.provide(
+          replyLayer(database.path, answer, { answerProvider: "subscription", answerModel: "gpt-6.1-sol" })
+        )
+      )
+    )
+  } finally {
+    await database.close()
+  }
+})

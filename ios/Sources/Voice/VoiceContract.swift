@@ -211,7 +211,7 @@ public protocol VoiceControl: Sendable {
 }
 
 public enum VoiceProgressCue: Equatable, Sendable {
-  case generationStarted, textReady
+  case generationStarted, textReady, retrying, failed
 }
 
 @MainActor public protocol VoiceMedia: AnyObject {
@@ -228,7 +228,7 @@ public enum VoiceProgressCue: Equatable, Sendable {
   func prepareOutput(_ manifest: VoiceAudioManifest) async throws
   func playCue(_ cue: VoiceProgressCue)
   func cancelCue()
-  func stopOutput() -> Task<Void, Never>
+  func stopOutput(preservingFailureCue: Bool) -> Task<Void, Never>
 }
 
 extension VoiceControl {

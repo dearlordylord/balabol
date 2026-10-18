@@ -26,10 +26,10 @@
         value.tone.play(cue, now: now, sampleRate: value.sampleRate)
       }
     }
-    func cancel() {
+    func cancel(preservingFailure: Bool = false) {
       state.withLock {
-        $0.pending = nil
-        $0.tone.cancel()
+        if !preservingFailure || $0.pending?.0 != .failed { $0.pending = nil }
+        $0.tone.cancel(preservingFailure: preservingFailure)
       }
     }
     func audioProcessingInitialize(sampleRate sampleRateHz: Int, channels: Int) {

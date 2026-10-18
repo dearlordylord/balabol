@@ -78,6 +78,7 @@ public struct ConversationState: Equatable, Sendable {
   internal var cueInput: UUID?
   internal var cueResponse: UUID?
   internal var cueStage = 0
+  internal var cueRetrySequence = -1
   internal var observationRecoveryAttempt = 0
   internal var replyRetryRequest: Request?
   public var isRetryingReply: Bool { replyRetryRequest != nil }
@@ -116,9 +117,13 @@ public struct ConversationState: Equatable, Sendable {
   }
   public var replyIsWaiting: Bool {
     if case .observing(_, _, let latest) = reply {
-      return latest == nil || latest?.state == .waiting
+      return latest == nil || latest?.state == .waiting || latest?.retry != nil
     }
     return false
+  }
+  public var replyRetryProgress: ReplyRetryProgress? {
+    if case .observing(_, _, let latest) = reply { return latest?.retry }
+    return nil
   }
   public var replyProviderFailure: ReplyFailure? {
     if case .providerFailed(_, _, let error, _) = reply { return error }

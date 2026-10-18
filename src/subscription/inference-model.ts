@@ -19,6 +19,7 @@ export class InferenceFailed extends Schema.TaggedError<InferenceFailed>()("Infe
   diagnostic: Schema.optionalKey(FailureDiagnostic),
   reason: Schema.Literals([
     "Authentication",
+    "Unavailable",
     "Quota",
     "Failed",
     "Incomplete",

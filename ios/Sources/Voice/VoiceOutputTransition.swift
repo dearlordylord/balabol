@@ -10,7 +10,7 @@ internal enum VoiceOutputEvent {
 }
 internal enum VoiceOutputCommand {
   case prepare(VoiceAudioManifest)
-  case suppress(VoiceOutputIdentity?, stopLocal: Bool)
+  case suppress(VoiceOutputIdentity?, stopLocal: Bool, preservingFailureCue: Bool = false)
 }
 internal struct VoiceOutputStep {
   let state: VoiceOutputState
@@ -62,7 +62,7 @@ private func observeOutput(_ state: VoiceOutputState, sequence: Int, value: Voic
     unavailable: value.status == .failed, receivedAudio: state.current?.identity == value.identity ? nil : false)
   if value.status == .delivered { return VoiceOutputStep(state: selected.replacing(prepared: .some(nil)), commands: []) }
   if [.interrupted, .failed].contains(value.status) {
-    return VoiceOutputStep(state: selected.replacing(prepared: .some(nil)), commands: [.suppress(nil, stopLocal: true)])
+    return VoiceOutputStep(state: selected.replacing(prepared: .some(nil)), commands: [.suppress(nil, stopLocal: true, preservingFailureCue: value.status == .failed)])
   }
   guard let manifest = value.manifest, selected.prepared != value.identity else {
     return VoiceOutputStep(state: selected, commands: [])

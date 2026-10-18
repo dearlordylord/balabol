@@ -96,7 +96,7 @@ struct VoiceOutputITFMapping {
         switch command {
         case .prepare(let manifest):
           return try .variant("Prepare", project(manifest))
-        case .suppress(let target, let stopLocal):
+        case .suppress(let target, let stopLocal, _):
           return try .variant(
             "Suppress",
             .record(["target": .optional(target, project), "stopLocal": .boolean(stopLocal)]))

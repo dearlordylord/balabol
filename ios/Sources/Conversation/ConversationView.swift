@@ -291,7 +291,8 @@
         if model.replyIsWaiting {
           HStack(spacing: 10) {
             ProgressView()
-            Text(model.state.isRetryingReply ? "Retrying reply…" : "Preparing your reply…")
+            Text(model.state.replyRetryProgress.map { "Trying again… Retry \($0.attempt - 1) of \($0.maximumAttempts - 1)" }
+              ?? (model.state.isRetryingReply ? "Retrying reply…" : "Preparing your reply…"))
               .foregroundStyle(.primary.opacity(0.75)).accessibilityIdentifier("reply-waiting")
           }
         }

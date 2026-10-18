@@ -104,14 +104,14 @@ import Foundation
   }
 
   private func stopBarrier(_ work: VoiceWork) -> Task<Void, Never>? {
-    guard case .stopMedia(let capture, let output, let target, let session) = work else {
+    guard case .stopMedia(let capture, let output, let target, let session, let preservingFailureCue) = work else {
       return nil
     }
     let captureStopped = capture ? media.fenceCapture() : nil
     #if DEBUG
       if output { VoiceTransitionTrace.shared.record(.localStop, target: target, session: session) }
     #endif
-    let outputStopped = output ? media.stopOutput() : nil
+    let outputStopped = output ? media.stopOutput(preservingFailureCue: preservingFailureCue) : nil
     return Task {
       await captureStopped?.value
       await outputStopped?.value

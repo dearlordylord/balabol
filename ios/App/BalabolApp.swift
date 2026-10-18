@@ -52,8 +52,13 @@ private struct ClientLocalState {
   weak var voice: VoiceViewModel?
   func send(_ id: UUID) { voice?.inputIntent(id) }
   func cue(_ input: UUID, _ response: UUID, _ cue: ConversationGenerationCue) {
-    voice?.generationCue(input: input, response: response,
-      cue: cue == .generationStarted ? .generationStarted : .textReady)
+    let progress: VoiceProgressCue = switch cue {
+    case .generationStarted: .generationStarted
+    case .textReady: .textReady
+    case .retrying: .retrying
+    case .failed: .failed
+    }
+    voice?.generationCue(input: input, response: response, cue: progress)
   }
   func cancelCue() { voice?.cancelGenerationCue() }
 }

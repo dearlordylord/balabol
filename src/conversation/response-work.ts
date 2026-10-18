@@ -17,6 +17,13 @@ export const generateResponse = (
   authorized: () => boolean
 ) => {
   const permitted = Effect.suspend(() => (authorized() ? Effect.void : Effect.interrupt))
+  const publish = (raw: unknown) =>
+    permitted.pipe(
+      Effect.andThen(parseAnswerEvent(raw, answer.capabilities)),
+      Effect.flatMap((event) =>
+        post({ kind: "ProviderEvent", attempt: command.attempt, operation: command.operation, event })
+      )
+    )
   const prior = /^[0-9]+\+[0-9]+\|assistant_interrupted:/m.test(command.prior)
     ? `[Interrupted assistant output: generated text may not have been heard; no user agreement implied]\n${command.prior}`
     : command.prior
@@ -26,26 +33,25 @@ export const generateResponse = (
       Effect.suspend(() =>
         authorized()
           ? answer
-              .generate({
-                inputDeliveryId: command.input.deliveryId,
-                responseId: command.responseId,
-                model: settings.answerModel,
-                prior,
-                input: command.input.text,
-                inputLanguageSpans: command.input.languageSpans,
-                responseLanguage: command.responseLanguage,
-                capabilities: ["memory.context"]
-              })
-              .pipe(
-                Stream.runForEach((raw) =>
+              .generate(
+                {
+                  inputDeliveryId: command.input.deliveryId,
+                  responseId: command.responseId,
+                  model: settings.answerModel,
+                  prior,
+                  input: command.input.text,
+                  inputLanguageSpans: command.input.languageSpans,
+                  responseLanguage: command.responseLanguage,
+                  capabilities: ["memory.context"]
+                },
+                (event) =>
                   permitted.pipe(
-                    Effect.andThen(parseAnswerEvent(raw, answer.capabilities)),
-                    Effect.flatMap((event) =>
+                    Effect.andThen(
                       post({ kind: "ProviderEvent", attempt: command.attempt, operation: command.operation, event })
                     )
                   )
-                )
               )
+              .pipe(Stream.runForEach(publish))
           : Effect.interrupt
       )
     ),

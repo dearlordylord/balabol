@@ -8,7 +8,8 @@ internal func transitionVoice(_ state: VoiceState, _ input: VoiceInput) -> Voice
   let recovery = continueVoice(checkpoint, progressVoiceResolution)
   let observation = continueVoice(recovery, progressVoiceObservation)
   let capture = continueVoice(observation, progressVoiceCapture)
-  let output = continueVoice(capture, progressVoiceOutput)
+  let outputWork = continueVoice(capture, progressVoiceOutput)
+  let output = continueVoice(outputWork, progressVoiceFailureCue)
   #if DEBUG
     let traces = state.output == output.state.output ? [] : voiceTrace(output.state, .output)
     return VoiceTransition(state: output.state, commands: output.commands + traces)
@@ -27,14 +28,29 @@ private func decideVoice(_ state: VoiceState, _ input: VoiceInput) -> VoiceTrans
       !state.output.gated || state.output.allowedInput == input
     else { return unchangedVoice(state) }
     if let current = state.output.current, current.responseId == response {
-      guard current.inputDeliveryId == input, current.isActive, !state.output.receivedAudio
+      // Speech already playing wins. A known failure may signal only after this
+      // exact output becomes terminal and its physical stop has completed.
+      if cue == .failed, current.inputDeliveryId == input, state.output.receivedAudio {
+        let pending = state.replacing(execution: state.execution.replacing(pendingFailureCue: .some(current.identity)))
+        if current.isActive {
+          let retired = pending.replacing(output: pending.output.replacing(current: .some(VoiceOutput(failing: current))))
+          return composeVoiceOutput(unchangedVoice(retired), .failed(current.identity))
+        }
+        if current.status == .failed, hasVoiceOperation(state, where: {
+          if case .stopMedia(_, true, _, _, _) = $0 { true } else { false }
+        }) { return unchangedVoice(pending) }
+      }
+      guard current.inputDeliveryId == input,
+        current.isActive || (cue == .failed && current.status == .failed),
+        !state.output.receivedAudio || (cue == .failed && current.status == .failed)
       else { return unchangedVoice(state) }
     } else if state.output.current != nil && state.output.allowedInput != input {
       return unchangedVoice(state)
     }
     return VoiceTransition(state: state, commands: [.generationCue(cue)])
   case .cancelGenerationCue:
-    return VoiceTransition(state: state, commands: [.cancelGenerationCue])
+    let cleared = state.replacing(execution: state.execution.replacing(pendingFailureCue: .some(nil)))
+    return VoiceTransition(state: cleared, commands: [.cancelGenerationCue])
   case .completed: return unchangedVoice(state)
   case .restore:
     return state.checkpointLoaded || hasVoiceOperation(state, where: { $0 == .restoreCheckpoint }) ? unchangedVoice(state)

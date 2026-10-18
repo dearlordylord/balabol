@@ -6,6 +6,7 @@ import { Subscription } from "./service.ts"
 import { inferenceStream, responsesHttpTransport, safeFailure } from "./inference.ts"
 import type { ToolInput } from "./tool-model.ts"
 import { SubscriptionToolInference, ToolInferenceRequest } from "./tool-model.ts"
+import { retryToolInference } from "./tool-retry.ts"
 import { boundReasoning } from "./tool-reasoning.ts"
 import { ToolResponseParser } from "./tool-parser.ts"
 export type ToolInferenceTransport = (
@@ -39,20 +40,24 @@ export const subscriptionToolInferenceLayer = (transport: ToolInferenceTransport
       const subscription = yield* Subscription
       const ledger = Option.getOrUndefined(yield* Effect.serviceOption(UsageLedger))
       return SubscriptionToolInference.of({
-        generate: (raw) =>
+        generate: (raw, onRetry) =>
           Stream.unwrap(
             Effect.try({
               try: () => validateRequest(Schema.decodeUnknownSync(ToolInferenceRequest)(raw)),
               catch: safeFailure
             }).pipe(
               Effect.map((request) =>
-                inferenceStream(
-                  request,
-                  ToolInferenceRequest,
-                  transport,
-                  subscription,
-                  () => new ToolResponseParser(request),
-                  ledger
+                retryToolInference(
+                  () =>
+                    inferenceStream(
+                      request,
+                      ToolInferenceRequest,
+                      transport,
+                      subscription,
+                      () => new ToolResponseParser(request),
+                      ledger
+                    ),
+                  onRetry
                 )
               )
             )

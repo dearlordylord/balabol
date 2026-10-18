@@ -1,6 +1,6 @@
 import { TokenUsage } from "../usage/index.ts"
 import { Context, Schema } from "effect"
-import type { Stream } from "effect"
+import type { Effect, Stream } from "effect"
 import type { InferenceFailed } from "./inference-model.ts"
 const maximumRequestCharacters = 1100000
 const maximumIdentityCharacters = 256
@@ -71,7 +71,18 @@ export const ToolInferenceEvent = Schema.Union([
   })
 ])
 export type ToolInferenceEvent = typeof ToolInferenceEvent.Type
+const maximumToolInferenceAttempts = 3
+export type ToolInferenceRetry = {
+  readonly attempt: number
+  readonly maximumAttempts: typeof maximumToolInferenceAttempts
+}
+export type ToolRetryObserver = (retry: ToolInferenceRetry) => Effect.Effect<void>
 export class SubscriptionToolInference extends Context.Service<
   SubscriptionToolInference,
-  { readonly generate: (request: ToolInferenceRequest) => Stream.Stream<ToolInferenceEvent, InferenceFailed> }
+  {
+    readonly generate: (
+      request: ToolInferenceRequest,
+      onRetry?: ToolRetryObserver
+    ) => Stream.Stream<ToolInferenceEvent, InferenceFailed>
+  }
 >()("balabol/subscription-tool-inference") {}

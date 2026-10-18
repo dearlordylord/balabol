@@ -85,6 +85,61 @@ final class GenerationCueTests: XCTestCase {
     })
   }
 
+  func testEachLiveRetrySnapshotCuesOnceEvenWhenLaterModelStepRestartsAttemptCount() {
+    let input = UUID(), response = UUID()
+    let request = ConversationState.Request(generation: 0, id: 1)
+    var state = ConversationState()
+    state.cueInput = input
+    state.reply = .observing(request, inputDeliveryId: input, latest: nil)
+    func retry(_ sequence: Int) -> ReplySnapshot {
+      ReplySnapshot(responseId: response, inputDeliveryId: input, sequence: sequence,
+        state: .waiting, text: "", generationStarted: true,
+        retry: ReplyRetryProgress(attempt: 2, maximumAttempts: 3))
+    }
+    XCTAssertEqual(state.transition(.replyReceived(request, retry(2))), [.generationCue(input, response, .retrying)])
+    XCTAssertEqual(state.replyRetryProgress?.attempt, 2)
+    XCTAssertEqual(state.transition(.replyReceived(request, retry(2))), [])
+    XCTAssertEqual(state.transition(.replyReceived(request, retry(1))), [])
+    XCTAssertEqual(state.transition(.replyReceived(request, retry(3))), [.generationCue(input, response, .retrying)])
+    let streaming = ReplySnapshot(responseId: response, inputDeliveryId: input, sequence: 4,
+      state: .streaming, text: "Hello", generationStarted: true)
+    XCTAssertEqual(state.transition(.replyReceived(request, streaming)), [])
+    XCTAssertNil(state.replyRetryProgress)
+  }
+
+  func testOnlyLiveFinalFailureCuesAndLeavesActionableRetryWithoutPendingState() {
+    let input = UUID(), response = UUID()
+    let request = ConversationState.Request(generation: 0, id: 1)
+    for code in [ReplyFailure.Code.providerFailed, .cancelled] {
+      var state = ConversationState()
+      state.cueInput = input
+      state.reply = .observing(request, inputDeliveryId: input, latest: nil)
+      let failed = ReplySnapshot(responseId: response, inputDeliveryId: input, sequence: 2,
+        state: .failed, text: "", error: ReplyFailure(code: code, message: "Failed"))
+      let commands = state.transition(.replyReceived(request, failed))
+      XCTAssertEqual(commands.contains(.generationCue(input, response, .failed)), code != .cancelled)
+      XCTAssertNotNil(state.replyProviderFailure)
+      XCTAssertFalse(state.replyIsWaiting)
+      XCTAssertEqual(state.transition(.replyReceived(request, failed)), [])
+      var restored = ConversationState()
+      restored.reply = .observing(request, inputDeliveryId: input, latest: nil)
+      XCTAssertFalse(restored.transition(.replyReceived(request, failed)).contains(.generationCue(input, response, .failed)))
+    }
+  }
+
+  func testRetryProgressValidationRejectsInvalidOrTerminalProgress() throws {
+    for retry in [ReplyRetryProgress(attempt: 1, maximumAttempts: 3),
+      ReplyRetryProgress(attempt: 4, maximumAttempts: 3), ReplyRetryProgress(attempt: 2, maximumAttempts: 4)] {
+      let invalid = ReplySnapshot(responseId: UUID(), inputDeliveryId: UUID(), sequence: 1,
+        state: .waiting, text: "", retry: retry)
+      XCTAssertThrowsError(try JSONDecoder().decode(ReplySnapshot.self, from: JSONEncoder().encode(invalid)))
+    }
+    let invalid = ReplySnapshot(responseId: UUID(), inputDeliveryId: UUID(), sequence: 1,
+      state: .failed, text: "", error: ReplyFailure(code: .providerFailed, message: "Failed"),
+      retry: ReplyRetryProgress(attempt: 2, maximumAttempts: 3))
+    XCTAssertFalse(invalid.isValid)
+  }
+
   func testInvalidGenerationEvidenceIsRejectedAtCodableBoundary() throws {
     let invalid = ReplySnapshot(
       responseId: UUID(), inputDeliveryId: UUID(), sequence: 1, state: .waiting, text: "",

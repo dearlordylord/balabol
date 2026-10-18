@@ -25,6 +25,17 @@ public struct ReplyFailure: Codable, Equatable, Sendable {
   }
 }
 
+/// Provider attempt progress is ephemeral and belongs to one response identity.
+public struct ReplyRetryProgress: Codable, Equatable, Sendable {
+  public let attempt: Int
+  public let maximumAttempts: Int
+  public var isValid: Bool { maximumAttempts == 3 && (2...maximumAttempts).contains(attempt) }
+  public init(attempt: Int, maximumAttempts: Int) {
+    self.attempt = attempt
+    self.maximumAttempts = maximumAttempts
+  }
+}
+
 /// Full snapshots replace projected text. Sequence gaps are permitted because
 /// the bounded server observer may coalesce snapshots; missing text is not lost.
 public struct ReplySnapshot: Codable, Equatable, Sendable {
@@ -45,10 +56,12 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
   public let receipt: ConversationMessage?
   public let languageSpans: [LanguageSpan]
   public let responseLanguage: String?
+  public let retry: ReplyRetryProgress?
   public let generationStarted: Bool
   public let generationCompleted: Bool
   public var isTerminal: Bool { state == .completed || state == .interrupted || state == .failed }
   public var isValid: Bool {
+    guard retry.map({ $0.isValid && (state == .waiting || state == .streaming) && !generationCompleted }) ?? true else { return false }
     guard !generationCompleted || generationStarted else { return false }
     guard sequence >= 0, responseId != inputDeliveryId, text.utf16.count <= 100_000,
       LanguageSpan.areValid(languageSpans, for: text),
@@ -79,8 +92,10 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     responseId: UUID, inputDeliveryId: UUID, sequence: Int, state: Phase, text: String,
     error: ReplyFailure? = nil, receipt: ConversationMessage? = nil,
     languageSpans: [LanguageSpan] = [], responseLanguage: String? = nil,
-    generationStarted: Bool = false, generationCompleted: Bool = false
+    generationStarted: Bool = false, generationCompleted: Bool = false,
+    retry: ReplyRetryProgress? = nil
   ) {
+    self.retry = retry
     self.responseId = responseId
     self.inputDeliveryId = inputDeliveryId
     self.sequence = sequence
@@ -95,7 +110,7 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
   }
   private enum CodingKeys: String, CodingKey {
     case responseId, inputDeliveryId, sequence, state, text, error, receipt, languageSpans,
-      responseLanguage, generationStarted, generationCompleted
+      responseLanguage, generationStarted, generationCompleted, retry
   }
   public func encode(to encoder: any Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
@@ -108,11 +123,13 @@ public struct ReplySnapshot: Codable, Equatable, Sendable {
     try c.encode(receipt, forKey: .receipt)
     try c.encode(languageSpans, forKey: .languageSpans)
     try c.encodeIfPresent(responseLanguage, forKey: .responseLanguage)
+    try c.encodeIfPresent(retry, forKey: .retry)
     try c.encode(generationStarted, forKey: .generationStarted)
     try c.encode(generationCompleted, forKey: .generationCompleted)
   }
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
+    retry = try c.decodeIfPresent(ReplyRetryProgress.self, forKey: .retry)
     responseId = try c.decode(UUID.self, forKey: .responseId)
     inputDeliveryId = try c.decode(UUID.self, forKey: .inputDeliveryId)
     sequence = try c.decode(Int.self, forKey: .sequence)

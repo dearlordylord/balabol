@@ -26,11 +26,13 @@ export function providerFailure(raw: unknown, shape: "response.failed" | "error"
   try {
     const code =
       shape === "response.failed" ? Schema.decodeUnknownSync(Failed)(raw).response.error.code : errorCode(raw, shape)
+    if (["server_error", "internal_server_error", "service_unavailable", "temporarily_unavailable"].includes(code))
+      return "Unavailable"
     if (quotaCodes.has(code)) return "Quota"
     if (authenticationCodes.has(code)) return "Authentication"
     return "Failed"
   } catch {
-    return "Failed"
+    return "Protocol"
   }
 }
 function errorCode(raw: unknown, shape: "error" | "json") {

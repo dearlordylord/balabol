@@ -128,7 +128,7 @@ actor ConvergenceConversationTransport: ConversationTransport {
     prepared.append(manifest.identity)
     audio?(manifest.identity)
   }
-  func stopOutput() -> Task<Void, Never> {
+  func stopOutput(preservingFailureCue: Bool) -> Task<Void, Never> {
     stops += 1
     return Task {}
   }

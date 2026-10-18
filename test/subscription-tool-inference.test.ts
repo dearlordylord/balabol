@@ -289,3 +289,19 @@ for (const [name, input] of [
       )
     )
   )
+
+for (const malformed of [{ type: "response.failed", response: {} }, { type: "error" }])
+  it.effect("rejects a malformed failure envelope without retrying a protocol error", () =>
+    Effect.gen(function* () {
+      let calls = 0
+      const layer = subscriptionToolInferenceLayer(async () => {
+        calls++
+        return new Response(frame(malformed))
+      }).pipe(Layer.provide(credentials))
+      const error = yield* Effect.gen(function* () {
+        return yield* Stream.runCollect((yield* SubscriptionToolInference).generate(request)).pipe(Effect.flip)
+      }).pipe(Effect.provide(layer))
+      expect(error.reason).toBe("Protocol")
+      expect(calls).toBe(1)
+    })
+  )

@@ -14,6 +14,7 @@
     private var room: Room?
     private var delegate: VoiceRoomDelegate?
     private var generation = 0
+    private var captureSession: UUID?
     private var publisher: UUID?
     private var wanted: VoiceAudioManifest?
     private var outputTrack: RemoteAudioTrack?
@@ -263,6 +264,7 @@
       await captureStopTask?.value
       captureStopTask = nil
       guard expected == generation, !Task.isCancelled else { throw CancellationError() }
+      captureSession = join.sessionId
       publisher = join.backendParticipantIdentity
       if AudioManager.shared.renderPreProcessingDelegate == nil {
         AudioManager.shared.renderPreProcessingDelegate = generationCue
@@ -299,19 +301,13 @@
           await candidate.disconnect()
           throw CancellationError()
         }
-        do {
-          if !initiallyMuted {
-            guard
-              let publication = try await candidate.localParticipant.setMicrophone(enabled: true),
-              let track = publication.track as? LocalAudioTrack, !publication.isMuted
-            else { throw VoiceFailure.capture }
-            try await installMicrophone(track, generation: expected, speechStarted: speechStarted)
-            // Publication alone is signaling, not usable capture. A fresh
-            // readable SDK renderer frame qualifies this attempt, even silence.
-            try await awaitCapture(generation: expected)
+        if !initiallyMuted {
+          let track = try await updateMicrophone(candidate, enabled: true, generation: expected, stage: .publication)
+          try await captureStage(.processor) {
+            try await self.installMicrophone(track, generation: expected, speechStarted: speechStarted)
           }
-        } catch {
-          throw VoiceFailure.capture
+          // Signaling alone does not prove readable native microphone capture.
+          try await captureStage(.firstFrame) { try await self.awaitCapture(generation: expected) }
         }
         guard expected == generation, !Task.isCancelled else {
           await candidate.disconnect()
@@ -427,18 +423,50 @@
       let expected = generation
       if muted, microphone == nil { return }
       renderer?.resetOnset()
-      do {
-        guard let publication = try await room.localParticipant.setMicrophone(enabled: !muted),
-          let track = publication.track as? LocalAudioTrack, publication.isMuted == muted,
-          expected == generation, !Task.isCancelled
-        else { throw VoiceFailure.capture }
-        renderer?.resetOnset()
-        if !muted, let speechStartedCallback {
-          try await installMicrophone(
-            track, generation: expected, speechStarted: speechStartedCallback)
-          try await awaitCapture(generation: expected)
+      let track = try await updateMicrophone(room, enabled: !muted, generation: expected, stage: .mute)
+      renderer?.resetOnset()
+      if !muted, let speechStartedCallback {
+        try await captureStage(.processor) {
+          try await self.installMicrophone(track, generation: expected, speechStarted: speechStartedCallback)
         }
-      } catch { throw VoiceFailure.capture }
+        try await captureStage(.firstFrame) { try await self.awaitCapture(generation: expected) }
+      }
+    }
+    private func updateMicrophone(_ candidate: Room, enabled: Bool, generation expected: Int,
+      stage: VoiceCaptureStage) async throws -> LocalAudioTrack {
+      try await captureStage(stage) {
+        let publication = try await candidate.localParticipant.setMicrophone(enabled: enabled)
+        guard expected == self.generation, !Task.isCancelled else { throw CancellationError() }
+        guard let publication, let track = publication.track as? LocalAudioTrack,
+          publication.isMuted != enabled else { throw VoiceFailure.capture }
+        return track
+      }
+    }
+    private func captureContext() -> VoiceCaptureContext {
+      let application: VoiceCaptureContext.Application
+      switch UIApplication.shared.applicationState {
+      case .active: application = .active
+      case .inactive: application = .inactive
+      case .background: application = .background
+      @unknown default: application = .unknown
+      }
+      return VoiceCaptureContext(application: application,
+        protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable)
+    }
+    private func captureStage<Value>(_ stage: VoiceCaptureStage,
+      operation: () async throws -> Value) async throws -> Value {
+      let session = captureSession
+      return try await performVoiceCaptureStage(stage, context: { self.captureContext() }, record: { diagnostic in
+        #if DEBUG
+          if self.evidenceEnabled {
+            VoiceTransitionTrace.shared.record(.nativeCapture, session: session, nativeCapture: diagnostic)
+          }
+        #endif
+        if diagnostic.outcome == .failed {
+          os.Logger(subsystem: "app.balabol.voice", category: "capture").error(
+            "Capture phase failed: stage=\(diagnostic.stage.rawValue, privacy: .public) domain=\(diagnostic.domain?.rawValue ?? "none", privacy: .public) code=\(diagnostic.code.map(String.init) ?? "unavailable", privacy: .public)")
+        }
+      }, operation: operation)
     }
     public func disconnect() async {
       generationCue.cancel()
@@ -446,7 +474,7 @@
         AudioManager.shared.renderPreProcessingDelegate = nil
       }
       await captureStopTask?.value
-      let stopped = stopOutput()
+      let stopped = stopOutput(preservingFailureCue: false)
       speechTask?.cancel()
       speechTask = nil
       #if DEBUG
@@ -547,8 +575,8 @@
     }
     public func cancelCue() { generationCue.cancel() }
 
-    public func stopOutput() -> Task<Void, Never> {
-      generationCue.cancel()
+    public func stopOutput(preservingFailureCue: Bool) -> Task<Void, Never> {
+      generationCue.cancel(preservingFailure: preservingFailureCue)
       #if DEBUG
         let manifest = wanted
       #endif

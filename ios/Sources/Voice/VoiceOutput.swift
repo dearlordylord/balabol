@@ -63,6 +63,16 @@ public struct VoiceOutput: Codable, Equatable, Sendable {
       throw VoiceFailure.invalidResponse
     }
   }
+  /// A canonical conversation failure retires the selected local playout even
+  /// when the independently observed server output has not caught up yet.
+  internal init(failing value: VoiceOutput) {
+    responseId = value.responseId
+    inputDeliveryId = value.inputDeliveryId
+    outputEpoch = value.outputEpoch
+    status = .failed
+    manifest = value.manifest
+    error = Failure(code: "AnswerFailed", message: "The answer could not be completed.")
+  }
   public var identity: VoiceOutputIdentity {
     VoiceOutputIdentity(
       inputDeliveryId: inputDeliveryId, responseId: responseId, outputEpoch: outputEpoch)

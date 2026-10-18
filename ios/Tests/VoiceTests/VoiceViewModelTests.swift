@@ -1953,7 +1953,7 @@ import XCTest
     outputWaiting = true
     if holdOutput { await withCheckedContinuation { outputContinuation = $0 } }
   }
-  func stopOutput() -> Task<Void, Never> {
+  func stopOutput(preservingFailureCue: Bool) -> Task<Void, Never> {
     stoppedOutput += 1
     return Task {
       defer { stopsCompleted += 1 }

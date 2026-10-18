@@ -1,7 +1,9 @@
 import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
-import type { Stream } from "effect"
+import type { Effect, Stream } from "effect"
 import { Context, Schema } from "effect"
 import { LanguageTag, LanguageTags, LanguageSpans, validLanguageSpans } from "../language/index.ts"
+const firstRetryAttempt = 2
+const maximumAnswerAttempts = 3
 const modelNameLimit = 200
 const priorContextLimit = 1000000
 const answerTextLimit = 100000
@@ -19,7 +21,21 @@ export const AnswerRequest = Schema.Struct({
   capabilities: Schema.Array(Schema.Literal("memory.context")).check(Schema.isMaxLength(1))
 }).check(Schema.makeFilter((request) => validLanguageSpans(request.input, request.inputLanguageSpans)))
 export type AnswerRequest = typeof AnswerRequest.Type
+export const AnswerRetry = Schema.Struct({
+  kind: Schema.Literal("Retry"),
+  attempt: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(firstRetryAttempt),
+    Schema.isLessThanOrEqualTo(maximumAnswerAttempts)
+  ),
+  maximumAttempts: Schema.Literal(maximumAnswerAttempts)
+})
+export type AnswerRetry = typeof AnswerRetry.Type
+export type AnswerProgress = (event: AnswerRetry) => Effect.Effect<void>
+export class AnswerProgressObserver extends Context.Service<AnswerProgressObserver, AnswerProgress>()(
+  "balabol/answer-progress"
+) {}
 export const AnswerEvent = Schema.Union([
+  AnswerRetry,
   Schema.Struct({
     kind: Schema.Literal("Delta"),
     text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(answerTextLimit)),
@@ -34,5 +50,8 @@ export class AnswerFailed extends Schema.TaggedError<AnswerFailed>()("AnswerFail
 }) {}
 export class AnswerGeneration extends Context.Service<
   AnswerGeneration,
-  { capabilities: AnswerCapabilities; generate: (request: AnswerRequest) => Stream.Stream<AnswerEvent, AnswerFailed> }
+  {
+    capabilities: AnswerCapabilities
+    generate: (request: AnswerRequest, progress?: AnswerProgress) => Stream.Stream<AnswerEvent, AnswerFailed>
+  }
 >()("balabol/answer-generation") {}

@@ -134,7 +134,7 @@ struct VoicePreparationITFMapping {
       return try .variant(
         "ReadyWork",
         .record(["origin": project(origin), "output": project(manifest, state: state)]))
-    case .stopMedia(let capture, let playback, let target, let session):
+    case .stopMedia(let capture, let playback, let target, let session, _):
       guard !capture, playback else { throw VoiceITFError.invalid("unexpected stop resources") }
       return try .variant(
         "StopWork",

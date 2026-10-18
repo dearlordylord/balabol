@@ -41,7 +41,7 @@ it.effect("accepts schema-valid SSE despite MIME and emits one completion, exclu
   )
 )
 for (const [name, text, reason] of [
-  ["failed", frame({ type: "response.failed" }), "Failed"],
+  ["failed", frame({ type: "response.failed" }), "Protocol"],
   ["incomplete", frame({ type: "response.incomplete" }), "Incomplete"],
   ["EOF", delta, "Protocol"],
   ["empty", completed, "Protocol"],

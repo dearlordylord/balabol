@@ -80,6 +80,7 @@ import os
     let backendCode: String?
     let httpStatus: Int?
     let networkCode: Int?
+    let nativeCapture: VoiceCaptureDiagnostic?
     let capturedAt: Double?
     let classifiedAt: Double?
   }
@@ -122,7 +123,7 @@ import os
       microphone: UUID? = nil, status: String? = nil,
       capturedAt: Double? = nil, classifiedAt: Double? = nil,
       failure: VoiceFailure? = nil, session: UUID? = nil,
-      httpStatus: Int? = nil, networkCode: Int? = nil
+      httpStatus: Int? = nil, networkCode: Int? = nil, nativeCapture: VoiceCaptureDiagnostic? = nil
     ) {
       let event = VoiceTraceRecord(
         cause: cause, uptime: ProcessInfo.processInfo.systemUptime,
@@ -132,7 +133,7 @@ import os
         outputEpoch: target.map { Self.hash($0.outputEpoch) },
         microphoneEpoch: microphone.map(Self.hash), status: status.map { String($0.prefix(32)) },
         failureKind: failure?.traceKind, backendCode: failure?.traceBackendCode,
-        httpStatus: httpStatus, networkCode: networkCode,
+        httpStatus: httpStatus, networkCode: networkCode, nativeCapture: nativeCapture,
         capturedAt: capturedAt, classifiedAt: classifiedAt)
       let schedule = state.withLock { value in
         guard value.destination != nil else { return false }

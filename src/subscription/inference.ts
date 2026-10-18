@@ -7,6 +7,8 @@ import { InferenceRequest, InferenceFailed, SubscriptionInference, inferenceFail
 import { ResponseParser } from "./inference-parser.ts"
 const cleanupMillis = 1000
 const deadlineMillis = 60000
+const requestTimeout = 408
+const firstServerError = 500
 const unauthorized = 401
 const forbidden = 403
 const tooManyRequests = 429
@@ -109,7 +111,8 @@ function consume<Event extends { readonly kind: string }>(
 }
 function httpFailure(status: number): InferenceFailed["reason"] {
   if (status === unauthorized || status === forbidden) return "Authentication"
-  return status === tooManyRequests ? "Quota" : "Failed"
+  if (status === tooManyRequests) return "Quota"
+  return status === requestTimeout || status >= firstServerError ? "Unavailable" : "Failed"
 }
 export interface InferenceParser<Event> {
   readonly usage?: TokenUsage | undefined

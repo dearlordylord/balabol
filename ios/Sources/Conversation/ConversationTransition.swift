@@ -3,7 +3,7 @@ import Foundation
 /// All intents and async results enter this concrete conversation transition.
 /// Commands describe work; they do not execute it or acquire resources here.
 public enum ConversationGenerationCue: Equatable, Sendable {
-  case generationStarted, textReady
+  case generationStarted, textReady, retrying, failed
 }
 
 enum ConversationEvent {
@@ -347,6 +347,10 @@ extension ConversationState {
     case .replyReceived(let request, let snapshot):
       guard case .observing(let expected, _, _) = reply, expected == request else { return [] }
       let commands = receiveReply(request, snapshot)
+      if case .providerFailed(let input, _, let failure, _) = reply,
+        input == snapshot.inputDeliveryId, failure == snapshot.error {
+        return commands + generationCue(snapshot)
+      }
       guard case .observing(let expected, _, let latest) = reply, expected == request,
         latest == snapshot else { return commands }
       return commands + generationCue(snapshot)
@@ -566,12 +570,23 @@ extension ConversationState {
     cueInput = input
     cueResponse = nil
     cueStage = 0
+    cueRetrySequence = -1
   }
 
   private mutating func generationCue(_ snapshot: ReplySnapshot) -> [ConversationCommand] {
-    guard snapshot.inputDeliveryId == cueInput, !snapshot.isTerminal,
+    guard snapshot.inputDeliveryId == cueInput,
       cueResponse == nil || cueResponse == snapshot.responseId else { return [] }
     cueResponse = snapshot.responseId
+    if snapshot.state == .failed, snapshot.error?.code != .cancelled, cueStage < 3 {
+      cueStage = 3
+      return [.generationCue(snapshot.inputDeliveryId, snapshot.responseId, .failed)]
+    }
+    guard !snapshot.isTerminal else { return [] }
+    if snapshot.retry != nil, snapshot.sequence > cueRetrySequence {
+      cueRetrySequence = snapshot.sequence
+      cueStage = max(cueStage, 1)
+      return [.generationCue(snapshot.inputDeliveryId, snapshot.responseId, .retrying)]
+    }
     if snapshot.generationCompleted, cueStage < 2 {
       cueStage = 2
       return [.generationCue(snapshot.inputDeliveryId, snapshot.responseId, .textReady)]
