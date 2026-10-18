@@ -273,7 +273,14 @@
             self?.received(participant, publication: publication)
           }
         })
-      let candidate = Room(delegate: callback, connectOptions: ConnectOptions(autoSubscribe: false))
+      // Keep AEC and noise suppression on one processing path after failed platform qualification.
+      let candidate = Room(
+        delegate: callback, connectOptions: ConnectOptions(autoSubscribe: false),
+        roomOptions: RoomOptions(
+          defaultAudioCaptureOptions: AudioCaptureOptions(
+            echoCancellation: true, autoGainControl: true, noiseSuppression: true,
+            echoCancellationMode: .software, autoGainControlMode: .software,
+            noiseSuppressionMode: .software)))
       room = candidate
       delegate = callback
       do {
