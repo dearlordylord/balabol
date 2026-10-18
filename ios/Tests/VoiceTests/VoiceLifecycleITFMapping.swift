@@ -126,6 +126,9 @@ struct VoiceLifecycleITFMapping {
             sessionId: origin.sessionId, backendIncarnationId: origin.backendIncarnationId)))
     case "ReadyResult": return try .ready(.success(page(payload, state: state)))
     case "InterruptedResult": return try .interrupted(.success(page(payload, state: state)))
+    case "SealRejected":
+      try unit(payload)
+      return .sealed(.failure(.invalidResponse))
     case "Failed":
       try unit(payload)
       return try failure(state.execution.operations[request]?.kind)

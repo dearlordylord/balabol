@@ -4,6 +4,44 @@ import XCTest
 @testable import Voice
 
 @MainActor final class VoiceViewModelTests: XCTestCase {
+  func testBackendRestartDuringAnswerRetriesUnavailableSealAndReconnectsWithoutResume() async throws {
+    let control = FixtureControl()
+    let media = FixtureMedia(allowed: true)
+    media.holdOutput = false
+    let clock = FixtureRetryClock()
+    let model = VoiceViewModel(control: control, media: media, retryClock: clock) { _ in
+      XCTFail("Reconnection must not fabricate or resubmit an input")
+    }
+    model.start()
+    await settle { model.state.capture == .listening }
+    let session = await control.identity()
+    await control.append(try event(session: session, sequence: 1, kind: "Output", fields: [
+      "output": outputValue(session: session, input: UUID(), response: UUID(), epoch: UUID())
+    ]))
+    await settle { media.preparedOutputs == 1 }
+    await control.failSeals(2)
+    media.failure?()
+    await settle { model.state.capture == .paused || model.state.capture == .hostUnavailable }
+    for _ in 0..<200 {
+      if await control.sealCalls() == 1 { break }
+      await Task.yield()
+    }
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertEqual(model.state.capture, .hostUnavailable, "An offline cleanup request must not demand Resume")
+    guard model.state.capture == .hostUnavailable else { await model.shutdown(); return }
+    await clock.advance()
+    await settle { model.state.capture == .hostUnavailable && model.state.retryStep == 2 }
+    await control.removeProducer()
+    await clock.advance()
+    await settle { model.state.capture == .listening }
+    XCTAssertFalse(model.output.closed)
+    let seals = await control.sealCalls()
+    XCTAssertEqual(seals, 3, "Reconnect requires closure evidence for the retired producer")
+    let freshSession = await control.identity()
+    XCTAssertNotEqual(freshSession, session)
+    await model.shutdown()
+  }
+
   func testGenerationCueUsesMediaPortOnlyForLiveEligibleOwner() async {
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)
@@ -2069,6 +2107,8 @@ private actor FixtureControl: VoiceControl {
   private var session = UUID()
   private var opened = 0
   private var ended = false
+  private var sealFailures = 0
+  func failSeals(_ count: Int) { sealFailures = count }
   private var sealCount = 0
   func sealCalls() -> Int { sealCount }
   private var producerMissing = false
@@ -2161,6 +2201,7 @@ private actor FixtureControl: VoiceControl {
   }
   func seal(sessionId: UUID) async throws -> VoiceSealResult {
     sealCount += 1
+    if sealFailures > 0 { sealFailures -= 1; throw VoiceFailure.connection }
     if let producerClosure {
       return .producerUnavailable(
         sessionId: producerClosure.session, backendIncarnationId: producerClosure.incarnation)

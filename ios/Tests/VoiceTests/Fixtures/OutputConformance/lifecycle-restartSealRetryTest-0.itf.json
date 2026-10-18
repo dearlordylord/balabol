@@ -1,0 +1,1315 @@
+{
+  "#meta": {
+    "format": "ITF",
+    "format-description": "https://apalache-mc.org/docs/adr/015adr-trace.html",
+    "source": "quint-specs/VoiceLifecycleTest.qnt",
+    "status": "ok",
+    "description": "Created by Quint on Sun Oct 18 2026 18:03:16 GMT-0400 (Eastern Daylight Time)",
+    "timestamp": 1792360996814
+  },
+  "vars": ["commands", "event", "previous", "state"],
+  "states": [
+    {
+      "#meta": { "index": 0 },
+      "commands": [],
+      "event": { "tag": "None", "value": { "#tup": [] } },
+      "previous": {
+        "activeCapture": { "tag": "Some", "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "5" } } },
+        "bootstrapKnown": true,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Listening", "value": { "#tup": [] } },
+        "drainingOrigin": { "tag": "None", "value": { "#tup": [] } },
+        "generation": { "#bigint": "1" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "None", "value": { "#tup": [] } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "8" },
+        "operations": [
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "6" } },
+            "work": {
+              "tag": "Snapshot",
+              "value": {
+                "after": { "#bigint": "0" },
+                "origin": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "Some", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": false,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "-1" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "0" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "1" } }
+      },
+      "state": {
+        "activeCapture": { "tag": "Some", "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "5" } } },
+        "bootstrapKnown": true,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Listening", "value": { "#tup": [] } },
+        "drainingOrigin": { "tag": "None", "value": { "#tup": [] } },
+        "generation": { "#bigint": "1" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "None", "value": { "#tup": [] } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "8" },
+        "operations": [
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "6" } },
+            "work": {
+              "tag": "Snapshot",
+              "value": {
+                "after": { "#bigint": "0" },
+                "origin": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "Some", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": false,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "-1" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "0" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "1" } }
+      }
+    },
+    {
+      "#meta": { "index": 1 },
+      "commands": [
+        {
+          "tag": "Run",
+          "value": {
+            "after": [],
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "tag": "Run",
+          "value": {
+            "after": [],
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          }
+        }
+      ],
+      "event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Complete",
+          "value": {
+            "proposal": { "#bigint": "2" },
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "6" } },
+            "result": {
+              "tag": "SnapshotResult",
+              "value": {
+                "ended": false,
+                "firstSequence": { "#bigint": "0" },
+                "origin": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } },
+                "output": {
+                  "tag": "Some",
+                  "value": {
+                    "identity": {
+                      "epoch": { "#bigint": "1" },
+                      "input": { "#bigint": "1" },
+                      "response": { "#bigint": "1" }
+                    },
+                    "manifest": true,
+                    "session": { "#bigint": "1" },
+                    "status": { "tag": "Playing", "value": { "#tup": [] } }
+                  }
+                },
+                "sequence": { "#bigint": "0" }
+              }
+            }
+          }
+        }
+      },
+      "previous": {
+        "activeCapture": { "tag": "Some", "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "5" } } },
+        "bootstrapKnown": true,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Listening", "value": { "#tup": [] } },
+        "drainingOrigin": { "tag": "None", "value": { "#tup": [] } },
+        "generation": { "#bigint": "1" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "None", "value": { "#tup": [] } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "8" },
+        "operations": [
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "6" } },
+            "work": {
+              "tag": "Snapshot",
+              "value": {
+                "after": { "#bigint": "0" },
+                "origin": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "Some", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": false,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "-1" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "0" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "1" } }
+      },
+      "state": {
+        "activeCapture": { "tag": "Some", "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "5" } } },
+        "bootstrapKnown": true,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Listening", "value": { "#tup": [] } },
+        "drainingOrigin": { "tag": "None", "value": { "#tup": [] } },
+        "generation": { "#bigint": "1" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "None", "value": { "#tup": [] } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "10" },
+        "operations": [
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "Some", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": false,
+          "current": {
+            "tag": "Some",
+            "value": {
+              "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+              "manifest": true,
+              "session": { "#bigint": "1" },
+              "status": { "tag": "Playing", "value": { "#tup": [] } }
+            }
+          },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": {
+            "tag": "Some",
+            "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+          },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "0" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "0" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "1" } }
+      }
+    },
+    {
+      "#meta": { "index": 2 },
+      "commands": [
+        {
+          "tag": "Cancel",
+          "value": [
+            { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } }
+          ]
+        },
+        {
+          "tag": "Run",
+          "value": {
+            "after": [],
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "tag": "Run",
+          "value": {
+            "after": [{ "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } }],
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          }
+        },
+        {
+          "tag": "Run",
+          "value": {
+            "after": [{ "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } }],
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "12" } },
+            "work": { "tag": "Seal", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } }
+          }
+        },
+        {
+          "tag": "Run",
+          "value": {
+            "after": [],
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "13" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "500" },
+                "purpose": { "tag": "CaptureRetry", "value": { "#tup": [] } }
+              }
+            }
+          }
+        }
+      ],
+      "event": {
+        "tag": "Some",
+        "value": {
+          "tag": "CaptureFailed",
+          "value": {
+            "proposal": { "#bigint": "2" },
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "5" } }
+          }
+        }
+      },
+      "previous": {
+        "activeCapture": { "tag": "Some", "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "5" } } },
+        "bootstrapKnown": true,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Listening", "value": { "#tup": [] } },
+        "drainingOrigin": { "tag": "None", "value": { "#tup": [] } },
+        "generation": { "#bigint": "1" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "None", "value": { "#tup": [] } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "10" },
+        "operations": [
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "Some", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": false,
+          "current": {
+            "tag": "Some",
+            "value": {
+              "identity": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } },
+              "manifest": true,
+              "session": { "#bigint": "1" },
+              "status": { "tag": "Playing", "value": { "#tup": [] } }
+            }
+          },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": {
+            "tag": "Some",
+            "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+          },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "0" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "0" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "1" } }
+      },
+      "state": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "HostUnavailable", "value": { "#tup": [] } },
+        "drainingOrigin": {
+          "tag": "Some",
+          "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+        },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "14" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "12" } },
+            "work": { "tag": "Seal", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "13" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "500" },
+                "purpose": { "tag": "CaptureRetry", "value": { "#tup": [] } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      }
+    },
+    {
+      "#meta": { "index": 3 },
+      "commands": [],
+      "event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Complete",
+          "value": {
+            "proposal": { "#bigint": "2" },
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "12" } },
+            "result": { "tag": "Failed", "value": { "#tup": [] } }
+          }
+        }
+      },
+      "previous": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "HostUnavailable", "value": { "#tup": [] } },
+        "drainingOrigin": {
+          "tag": "Some",
+          "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+        },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "14" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "12" } },
+            "work": { "tag": "Seal", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "13" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "500" },
+                "purpose": { "tag": "CaptureRetry", "value": { "#tup": [] } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      },
+      "state": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "HostUnavailable", "value": { "#tup": [] } },
+        "drainingOrigin": {
+          "tag": "Some",
+          "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+        },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "14" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "13" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "500" },
+                "purpose": { "tag": "CaptureRetry", "value": { "#tup": [] } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      }
+    },
+    {
+      "#meta": { "index": 4 },
+      "commands": [
+        {
+          "tag": "Run",
+          "value": {
+            "after": [
+              { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+              { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+              { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } }
+            ],
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "14" } },
+            "work": { "tag": "Seal", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } }
+          }
+        }
+      ],
+      "event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Complete",
+          "value": {
+            "proposal": { "#bigint": "2" },
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "13" } },
+            "result": { "tag": "Elapsed", "value": { "#tup": [] } }
+          }
+        }
+      },
+      "previous": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "HostUnavailable", "value": { "#tup": [] } },
+        "drainingOrigin": {
+          "tag": "Some",
+          "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+        },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "14" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "13" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "500" },
+                "purpose": { "tag": "CaptureRetry", "value": { "#tup": [] } }
+              }
+            }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      },
+      "state": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Reconnecting", "value": { "#tup": [] } },
+        "drainingOrigin": {
+          "tag": "Some",
+          "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+        },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "15" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "14" } },
+            "work": { "tag": "Seal", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      }
+    },
+    {
+      "#meta": { "index": 5 },
+      "commands": [],
+      "event": {
+        "tag": "Some",
+        "value": {
+          "tag": "Complete",
+          "value": {
+            "proposal": { "#bigint": "2" },
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "14" } },
+            "result": {
+              "tag": "ProducerUnavailable",
+              "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+            }
+          }
+        }
+      },
+      "previous": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Reconnecting", "value": { "#tup": [] } },
+        "drainingOrigin": {
+          "tag": "Some",
+          "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+        },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "15" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "14" } },
+            "work": { "tag": "Seal", "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } } }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      },
+      "state": {
+        "activeCapture": { "tag": "None", "value": { "#tup": [] } },
+        "bootstrapKnown": false,
+        "bootstrapReleases": [],
+        "capture": { "tag": "Reconnecting", "value": { "#tup": [] } },
+        "drainingOrigin": { "tag": "None", "value": { "#tup": [] } },
+        "generation": { "#bigint": "2" },
+        "intent": { "tag": "Listen", "value": false },
+        "localStop": { "tag": "Some", "value": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } } },
+        "muteInFlight": false,
+        "nextRequest": { "#bigint": "15" },
+        "operations": [
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "8" } },
+            "work": {
+              "tag": "Sleep",
+              "value": {
+                "milliseconds": { "#bigint": "250" },
+                "purpose": {
+                  "tag": "Observation",
+                  "value": { "incarnation": { "#bigint": "1" }, "session": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": true,
+            "request": { "generation": { "#bigint": "1" }, "id": { "#bigint": "9" } },
+            "work": {
+              "tag": "Prepare",
+              "value": {
+                "identity": {
+                  "epoch": { "#bigint": "1" },
+                  "input": { "#bigint": "1" },
+                  "response": { "#bigint": "1" }
+                },
+                "manifest": true,
+                "session": { "#bigint": "1" },
+                "status": { "tag": "AwaitingReady", "value": { "#tup": [] } }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "10" } },
+            "work": {
+              "tag": "Stop",
+              "value": {
+                "capture": true,
+                "output": true,
+                "session": { "tag": "None", "value": { "#tup": [] } },
+                "target": {
+                  "tag": "Some",
+                  "value": { "epoch": { "#bigint": "1" }, "input": { "#bigint": "1" }, "response": { "#bigint": "1" } }
+                }
+              }
+            }
+          },
+          {
+            "cancelling": false,
+            "request": { "generation": { "#bigint": "2" }, "id": { "#bigint": "11" } },
+            "work": { "tag": "Disconnect", "value": { "#tup": [] } }
+          }
+        ],
+        "origin": { "tag": "None", "value": { "#tup": [] } },
+        "output": {
+          "allowedInput": { "tag": "None", "value": { "#tup": [] } },
+          "closed": true,
+          "current": { "tag": "None", "value": { "#tup": [] } },
+          "cutAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutInput": { "tag": "None", "value": { "#tup": [] } },
+          "cutPendingInputs": [],
+          "gated": false,
+          "interrupted": { "tag": "None", "value": { "#tup": [] } },
+          "lastAcceptedInput": { "tag": "None", "value": { "#tup": [] } },
+          "locallyInterrupted": false,
+          "prepared": { "tag": "None", "value": { "#tup": [] } },
+          "receivedAudio": false,
+          "sequence": { "#bigint": "0" },
+          "unavailable": false
+        },
+        "platformObservation": {
+          "tag": "Some",
+          "value": { "generation": { "#bigint": "1" }, "id": { "#bigint": "1" } }
+        },
+        "preparedOutput": { "tag": "None", "value": { "#tup": [] } },
+        "resumeProbe": false,
+        "retired": false,
+        "retryStep": { "#bigint": "1" },
+        "sequence": { "#bigint": "0" },
+        "shuttingDown": false,
+        "snapshotSequence": { "#bigint": "-1" },
+        "startMuted": false,
+        "startProposal": { "tag": "Some", "value": { "#bigint": "2" } }
+      }
+    }
+  ]
+}

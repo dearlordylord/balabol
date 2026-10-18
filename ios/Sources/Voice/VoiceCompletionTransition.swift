@@ -155,7 +155,13 @@ private func voiceSealCompleted(_ state: VoiceState, origin: VoiceOrigin,
   guard state.captureModel.drainingOrigin == origin else { return unchangedVoice(state) }
   switch result {
   case .success(let value): return voiceSealed(state, origin: origin, result: value, proposedId: proposedId)
-  case .failure:
+  case .failure(let error):
+    // Offline producer closure remains an obligation, not a platform interruption.
+    if state.wantsListening, state.capture != .paused, !state.resumeProbe,
+      voiceTransportRetryable(error) {
+      return hasVoiceOperation(state, where: { if case .sleep(_, .captureRetry) = $0 { true } else { false } })
+        ? unchangedVoice(state) : failVoiceTransport(state, error, proposedId: proposedId)
+    }
     return unchangedVoice(state.replacing(capture: state.wantsListening ? state.captureModel.replacing(capture: .paused, resumeProbe: false) : state.captureModel))
   }
 }
@@ -177,7 +183,10 @@ private func voiceTimerCompleted(_ state: VoiceState, request: VoiceRequest, pur
   case .captureRetry:
     guard request.generation == state.generation, state.wantsListening,
       [.hostUnavailable, .reconnecting].contains(state.capture) else { return unchangedVoice(state) }
-    return unchangedVoice(state.replacing(capture: state.captureModel.replacing(capture: .reconnecting)))
+    let retrying = state.replacing(capture: state.captureModel.replacing(capture: .reconnecting))
+    guard let origin = retrying.drainingOrigin else { return unchangedVoice(retrying) }
+    return hasVoiceOperation(retrying, where: { $0 == .seal(origin) }) ? unchangedVoice(retrying)
+      : reserveVoice(retrying, .seal(origin), after: physicalVoiceRequests(retrying))
   case .observation(let origin):
     // A reserved poll can contain speech handed before End but not yet known
     // locally. Consume it once; continuation requires intent or pending input.

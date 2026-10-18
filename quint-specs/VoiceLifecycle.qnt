@@ -38,7 +38,7 @@ module VoiceLifecycleCore {
     | Connected | LocalMuted | RemoteMuted | SnapshotResult(Page) | Sealed(Page)
     | ProducerUnavailable(Origin) | OutputPrepared | ReadyResult(Page) | InterruptedResult(Page)
     | BootstrapEnded | Stopped | Disconnected | PlatformObserved | PlatformRetired | Elapsed
-    | Failed | Cancelled
+    | Failed | SealRejected | Cancelled
   type Event = Speech(Request) | SpeechIntent | InputIntent(int) | PlatformPause(Request)
     | Resume(int) | End | Shutdown | CaptureFailed({request: Request, proposal: int})
     | AudioReceived({request: Request, identity: O::Identity})
@@ -317,7 +317,13 @@ module VoiceLifecycleCore {
             reserve({...refreshed.state, muteInFlight: true}, LocalMute(muted(s)), List())) else refreshed
         }
       | Seal(origin) => if (s.drainingOrigin != Some(origin)) unchanged(s)
-        else if (result == Failed) unchanged(if (wants(s)) {...s, capture: Paused, resumeProbe: false} else s)
+        else if (result == Failed and wants(s) and s.capture != Paused and not(s.resumeProbe)) {
+          val waiting = s.operations.foldl(false, (found, entry) => found or (match entry.work {
+            | Sleep(v) => v.purpose == CaptureRetry | _ => false
+          }))
+          if (waiting) unchanged(s) else failTransport(s, proposal)
+        } else if (result == Failed or result == SealRejected)
+          unchanged(if (wants(s)) {...s, capture: Paused, resumeProbe: false} else s)
         else match result {
           | ProducerUnavailable(returned) => if (returned == origin) unchanged({...s, drainingOrigin: None}) else unchanged(s)
           | Sealed(page) => if (page.origin != origin) unchanged(s) else if (page.ended) unchanged({...s, drainingOrigin: None})
@@ -328,7 +334,14 @@ module VoiceLifecycleCore {
       | Sleep(v) => match v.purpose {
           | BootstrapCleanup(origin) => retryRelease(s, origin)
           | CaptureRetry => if (op.request.generation == s.generation and not(s.retired)
-              and wants(s) and Set(HostUnavailable, Reconnecting).contains(s.capture)) unchanged({...s, capture: Reconnecting}) else unchanged(s)
+              and wants(s) and Set(HostUnavailable, Reconnecting).contains(s.capture)) {
+                val retrying = {...s, capture: Reconnecting}
+                match s.drainingOrigin {
+                  | None => unchanged(retrying)
+                  | Some(origin) => if (s.operations.foldl(false, (found, entry) => found or entry.work == Seal(origin))) unchanged(retrying)
+                    else reserve(retrying, Seal(origin), physicalRequests(retrying))
+                }
+              } else unchanged(s)
           | Observation(origin) => if (op.request.generation == s.generation and not(s.retired) and s.origin == Some(origin))
               reserve(s, Snapshot({origin: origin, after: s.sequence}), List()) else unchanged(s)
         }
@@ -351,7 +364,7 @@ module VoiceLifecycleCore {
       | LocalMute(_) => result == LocalMuted
       | RemoteMute(_) => result == RemoteMuted
       | Snapshot(_) => match result { | SnapshotResult(_) => true | Failed => true | _ => false }
-      | Seal(_) => match result { | Sealed(_) => true | ProducerUnavailable(_) => true | Failed => true | _ => false }
+      | Seal(_) => match result { | Sealed(_) => true | ProducerUnavailable(_) => true | Failed => true | SealRejected => true | _ => false }
       | EndBootstrap(_) => result == BootstrapEnded or result == Failed
       | Stop(_) => result == Stopped
       | Disconnect => result == Disconnected

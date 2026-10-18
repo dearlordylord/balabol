@@ -20,6 +20,18 @@ module VoiceLifecycleTest {
     val entries = state.operations.select(op => not(op.cancelling) and (match op.work { | Snapshot(_) => true | _ => false }))
     all {entries.length() > 0, deliver(Complete({request: entries.head().request, result: SnapshotResult(page), proposal: 2}))}
   }
+  run restartSealRetryTest = init.then(snapshot(page(0, O::X, O::Playing)))
+    .then(deliver(CaptureFailed({request: {generation: 1, id: 5}, proposal: 2})))
+    .then(finishWork(Seal(FIRST_ORIGIN), Failed))
+    .expect(state.capture == HostUnavailable and state.drainingOrigin == Some(FIRST_ORIGIN))
+    .then(finishWork(Sleep({milliseconds: 500, purpose: CaptureRetry}), Elapsed))
+    .expect(state.capture == Reconnecting and state.drainingOrigin == Some(FIRST_ORIGIN))
+    .then(finishWork(Seal(FIRST_ORIGIN), ProducerUnavailable(FIRST_ORIGIN)))
+    .expect(state.drainingOrigin == None and state.capture != Paused)
+  run rejectedSealRequiresResumeTest = init
+    .then(deliver(CaptureFailed({request: {generation: 1, id: 5}, proposal: 2})))
+    .then(finishWork(Seal(FIRST_ORIGIN), SealRejected))
+    .expect(state.capture == Paused and state.drainingOrigin == Some(FIRST_ORIGIN))
   run interruptedObservationTest = init
     .then(finish(6, SnapshotResult(page(0, O::X, O::Playing))))
     .then(deliver(Speech({generation: 1, id: 5})))
