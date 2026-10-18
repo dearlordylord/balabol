@@ -1,3 +1,4 @@
+import { borrowedUsageLayer, usageRoutes } from "../usage/index.ts"
 import { createServer } from "node:http"
 import { mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -298,23 +299,35 @@ const selectedSpeechActivity = (config: ServerConfig) => {
       })
     : fakeSpeechActivityLayer
 }
+const usageKey = (config: ServerConfig) =>
+  config.recognition?.provider === "soniox"
+    ? config.recognition.apiKey
+    : config.synthesis?.provider === "soniox"
+      ? config.synthesis.apiKey
+      : undefined
 export const serverLayer = (config: ServerConfig) => {
-  const conversation = conversationLayer(
-    config.database,
+  const storage = sqliteStorageLayer(config.database)
+  const conversation = configuredConversationLayer(
     config.reply,
     config.memory,
     config.fakeSummary,
     config.subscriptionDirectory,
     config.dictionaryPath
-  )
+  ).pipe(Layer.provide(durableMemoryLayer), Layer.provide(storage))
   const http = NodeHttpServer.layer(createServer, { host: config.host, port: config.port })
+  const accounting = Layer.unwrap(
+    Effect.gen(function* () {
+      const resource = yield* SqliteMemoryStorage
+      return borrowedUsageLayer(resource.storage.database)
+    })
+  ).pipe(Layer.provide(storage))
+  const billing = usageRoutes(usageKey(config))
   if (config.voice === undefined)
     return HttpRouter.serve(
-      trustedControlRoutes(Layer.merge(conversationRoutes, welcomeRoutes), config.tailnetOwner)
-    ).pipe(Layer.provide(conversation), Layer.provideMerge(http))
-  const routes = Layer.mergeAll(conversationRoutes, welcomeRoutes, voiceRoutes)
-  // One scoped writer lease protects both memory and speech-admission facts.
-  const storage = sqliteStorageLayer(config.database)
+      trustedControlRoutes(Layer.mergeAll(conversationRoutes, welcomeRoutes, billing), config.tailnetOwner)
+    ).pipe(Layer.provideMerge(conversation.pipe(Layer.provideMerge(accounting))), Layer.provideMerge(http))
+  const routes = Layer.mergeAll(conversationRoutes, welcomeRoutes, voiceRoutes, billing)
+  // One scoped writer lease protects memory, admission and accounting facts.
   const sharedConversation = configuredConversationLayer(
     config.reply,
     config.memory,
@@ -348,7 +361,8 @@ export const serverLayer = (config: ServerConfig) => {
     Layer.provide(liveKitLayer(config.voice)),
     Layer.provide(admissions),
     Layer.provideMerge(sharedConversation),
-    Layer.provide(storage)
+    Layer.provide(storage),
+    Layer.provideMerge(accounting)
   )
   return HttpRouter.serve(trustedControlRoutes(routes, config.tailnetOwner)).pipe(
     Layer.provide(application),

@@ -47,6 +47,9 @@ export const AuditSpanName = Schema.Literals([
   "conversation.classify",
   "conversation.append",
   "conversation.verify",
+  "usage.record",
+  "usage.read",
+  "usage.billing",
   "backend.configure",
   "backend.runtime"
 ])

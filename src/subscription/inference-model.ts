@@ -1,3 +1,4 @@
+import { TokenUsage } from "../usage/index.ts"
 import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import type { Stream } from "effect"
 import { Context, Schema } from "effect"
@@ -11,7 +12,7 @@ export const InferenceRequest = Schema.Struct({
 export type InferenceRequest = typeof InferenceRequest.Type
 export const InferenceEvent = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("Delta"), text: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("Completed") })
+  Schema.Struct({ kind: Schema.Literal("Completed"), usage: Schema.optionalKey(TokenUsage) })
 ])
 export type InferenceEvent = typeof InferenceEvent.Type
 export class InferenceFailed extends Schema.TaggedError<InferenceFailed>()("InferenceFailed", {

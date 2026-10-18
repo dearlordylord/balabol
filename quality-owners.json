@@ -34,7 +34,8 @@
         "personal-knowledge",
         "dictionary",
         "operation-audit",
-        "failure-diagnostic"
+        "failure-diagnostic",
+        "usage"
       ]
     },
     {
@@ -73,7 +74,7 @@
       "name": "subscription",
       "root": "src/subscription",
       "entry": "index.ts",
-      "dependencies": ["operation-audit", "failure-diagnostic"]
+      "dependencies": ["operation-audit", "failure-diagnostic", "usage"]
     },
     {
       "name": "bootstrap",
@@ -91,7 +92,8 @@
         "subscription",
         "personal-knowledge",
         "operation-audit",
-        "dictionary"
+        "dictionary",
+        "usage"
       ]
     },
     {
@@ -117,6 +119,12 @@
       "root": "src/failure-diagnostic",
       "entry": "index.ts",
       "dependencies": []
+    },
+    {
+      "name": "usage",
+      "root": "src/usage",
+      "entry": "index.ts",
+      "dependencies": ["operation-audit", "failure-diagnostic"]
     }
   ]
 }

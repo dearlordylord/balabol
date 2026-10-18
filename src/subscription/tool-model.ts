@@ -1,3 +1,4 @@
+import { TokenUsage } from "../usage/index.ts"
 import { Context, Schema } from "effect"
 import type { Stream } from "effect"
 import type { InferenceFailed } from "./inference-model.ts"
@@ -65,6 +66,7 @@ export const ToolInferenceEvent = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("Completed"),
     finishReason: Schema.Literals(["stop", "tool_calls"]),
+    usage: Schema.optionalKey(TokenUsage),
     replay: Schema.optionalKey(ToolReplay)
   })
 ])

@@ -1,5 +1,6 @@
+import { UsageLedger } from "../usage/index.ts"
 import { inferenceFailed } from "./inference-model.ts"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Option, Schema, Stream } from "effect"
 import type { Redacted } from "effect"
 import { Subscription } from "./service.ts"
 import { inferenceStream, responsesHttpTransport, safeFailure } from "./inference.ts"
@@ -36,6 +37,7 @@ export const subscriptionToolInferenceLayer = (transport: ToolInferenceTransport
     SubscriptionToolInference,
     Effect.gen(function* () {
       const subscription = yield* Subscription
+      const ledger = Option.getOrUndefined(yield* Effect.serviceOption(UsageLedger))
       return SubscriptionToolInference.of({
         generate: (raw) =>
           Stream.unwrap(
@@ -49,7 +51,8 @@ export const subscriptionToolInferenceLayer = (transport: ToolInferenceTransport
                   ToolInferenceRequest,
                   transport,
                   subscription,
-                  () => new ToolResponseParser(request)
+                  () => new ToolResponseParser(request),
+                  ledger
                 )
               )
             )

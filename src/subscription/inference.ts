@@ -1,5 +1,6 @@
+import { trackInferenceUsage, UsageLedger, type TokenUsage, type UsageAttempt } from "../usage/index.ts"
 import { withAuditSpan, withAuditStreamSpan } from "../operation-audit/index.ts"
-import { Effect, Layer, Redacted, Schema, Stream } from "effect"
+import { Effect, Layer, Option, Redacted, Schema, Stream } from "effect"
 import type { Context } from "effect"
 import { Subscription } from "./service.ts"
 import { InferenceRequest, InferenceFailed, SubscriptionInference, inferenceFailed } from "./inference-model.ts"
@@ -111,16 +112,22 @@ function httpFailure(status: number): InferenceFailed["reason"] {
   return status === tooManyRequests ? "Quota" : "Failed"
 }
 export interface InferenceParser<Event> {
+  readonly usage?: TokenUsage | undefined
   push(chunk: Uint8Array): readonly Event[]
   finish(): void
 }
 /** Shared credential acquisition, request cancellation, reader cleanup and total deadline. */
-export const inferenceStream = <Request, Event extends { readonly kind: string }>(
+export const inferenceStream = <
+  Request extends { readonly model: InferenceRequest["model"] },
+  Event extends { readonly kind: string }
+>(
   raw: Request,
   schema: Schema.Codec<Request>,
   transport: (request: Request, token: Redacted.Redacted<string>, signal: AbortSignal) => Promise<Response>,
   subscription: Context.Service.Shape<typeof Subscription>,
-  makeParser: () => InferenceParser<Event>
+  makeParser: () => InferenceParser<Event>,
+  ledger?: UsageLedger["Service"],
+  category: UsageAttempt["category"] = "chat"
 ) =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -143,16 +150,22 @@ export const inferenceStream = <Request, Event extends { readonly kind: string }
                 })
             )
           )
-          const response = yield* Effect.tryPromise({
-            try: (signal) => transport(request, token, AbortSignal.any([signal, controller.signal])),
-            catch: () => inferenceFailed("Transport")
-          })
-          if (!response.ok)
-            yield* Effect.tryPromise({
-              try: () => response.body?.cancel() ?? Promise.resolve(),
-              catch: () => inferenceFailed("Transport")
-            }).pipe(withAuditSpan("subscription.release"), Effect.ignore)
-          return consume(response, controller, makeParser())
+          const parser = makeParser()
+          const transportStream = Stream.unwrap(
+            Effect.gen(function* () {
+              const response = yield* Effect.tryPromise({
+                try: (signal) => transport(request, token, AbortSignal.any([signal, controller.signal])),
+                catch: () => inferenceFailed("Transport")
+              })
+              if (!response.ok)
+                yield* Effect.tryPromise({
+                  try: () => response.body?.cancel() ?? Promise.resolve(),
+                  catch: () => inferenceFailed("Transport")
+                }).pipe(withAuditSpan("subscription.release"), Effect.ignore)
+              return consume(response, controller, parser)
+            })
+          )
+          return trackInferenceUsage(transportStream, request.model, ledger, category, () => parser.usage)
         })
       ).pipe(
         Stream.interruptWhen(
@@ -163,13 +176,18 @@ export const inferenceStream = <Request, Event extends { readonly kind: string }
     })
   )
 /** One layer can serve simultaneous answers and independent memory jobs using the same rotating credential owner. */
-export const subscriptionInferenceLayer = (transport: InferenceTransport = inferenceHttpTransport()) =>
+export const subscriptionInferenceLayer = (
+  transport: InferenceTransport = inferenceHttpTransport(),
+  category: UsageAttempt["category"] = "memory"
+) =>
   Layer.effect(
     SubscriptionInference,
     Effect.gen(function* () {
       const subscription = yield* Subscription
+      const ledger = Option.getOrUndefined(yield* Effect.serviceOption(UsageLedger))
       return SubscriptionInference.of({
-        generate: (raw) => inferenceStream(raw, InferenceRequest, transport, subscription, () => new ResponseParser())
+        generate: (raw) =>
+          inferenceStream(raw, InferenceRequest, transport, subscription, () => new ResponseParser(), ledger, category)
       })
     })
   )

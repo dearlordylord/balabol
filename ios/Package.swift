@@ -7,6 +7,7 @@ let package = Package(
   products: [
     .library(name: "Conversation", targets: ["Conversation"]),
     .library(name: "Voice", targets: ["Voice"]),
+    .library(name: "Usage", targets: ["Usage"]),
   ],
   dependencies: [
     .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.17.0"),
@@ -15,6 +16,8 @@ let package = Package(
   ],
   targets: [
     .target(name: "Conversation"),
+    .target(name: "Usage"),
+    .testTarget(name: "UsageTests", dependencies: ["Usage"]),
     .target(
       name: "Voice",
       dependencies: [

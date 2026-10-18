@@ -1,3 +1,4 @@
+import { reportedTokens, responseTokens, type TokenUsage } from "../usage/index.ts"
 import { InferenceFrames } from "./inference-frames.ts"
 import { Schema } from "effect"
 import { providerFailure } from "./inference-errors.ts"
@@ -8,12 +9,17 @@ const Event = Schema.Struct({ type: Schema.String })
 const Delta = Schema.Struct({ delta: Schema.String })
 const OutputItem = Schema.Struct({ type: Schema.Literals(["message", "reasoning"]) })
 const Completed = Schema.Struct({
-  response: Schema.Struct({ status: Schema.Literal("completed"), output: Schema.optionalKey(Schema.Array(OutputItem)) })
+  response: Schema.Struct({
+    status: Schema.Literal("completed"),
+    output: Schema.optionalKey(Schema.Array(OutputItem)),
+    usage: Schema.optionalKey(Schema.Unknown)
+  })
 })
 const Item = Schema.Struct({ item: Schema.Struct({ type: Schema.Literals(["message", "reasoning"]) }) })
 const decode = Schema.decodeUnknownSync
 /** Per-request parser state; no retained context or text survives into another request. */
 export class ResponseParser {
+  usage: TokenUsage | undefined
   private characters = 0
   private visible = false
   completed = false
@@ -30,11 +36,13 @@ export class ResponseParser {
   private event(raw: unknown): readonly InferenceEvent[] {
     const event = decode(Event)(raw)
     if (event.type === "response.output_text.delta") return this.delta(decode(Delta)(raw).delta)
+    if (["response.completed", "response.failed", "response.incomplete"].includes(event.type))
+      this.usage = responseTokens(raw)
     if (event.type === "response.completed") {
-      decode(Completed)(raw)
+      const usage = reportedTokens(decode(Completed)(raw).response.usage)
       if (!this.visible) throw inferenceFailed("Protocol")
       this.completed = true
-      return [{ kind: "Completed" }]
+      return [{ kind: "Completed", ...(usage === undefined ? {} : { usage }) }]
     }
     return this.other(event.type, raw)
   }

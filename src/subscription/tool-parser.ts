@@ -1,3 +1,4 @@
+import { reportedTokens, responseTokens, type TokenUsage } from "../usage/index.ts"
 import { Schema } from "effect"
 import { InferenceFrames } from "./inference-frames.ts"
 import { inferenceFailed } from "./inference-model.ts"
@@ -24,10 +25,15 @@ const ItemEvent = Schema.Struct({ item: Schema.Unknown })
 const Argument = Schema.Struct({ item_id: Schema.String, arguments: Schema.String })
 const ArgumentDelta = Schema.Struct({ item_id: Schema.String, delta: Schema.String })
 const Completed = Schema.Struct({
-  response: Schema.Struct({ status: Schema.Literal("completed"), output: Schema.Array(Schema.Unknown) })
+  response: Schema.Struct({
+    status: Schema.Literal("completed"),
+    output: Schema.Array(Schema.Unknown),
+    usage: Schema.optionalKey(Schema.Unknown)
+  })
 })
 /** Calls stay private until the provider commits an identical completed output. */
 export class ToolResponseParser {
+  usage: TokenUsage | undefined
   private completed = false
   private characters = 0
   private visible = false
@@ -54,7 +60,15 @@ export class ToolResponseParser {
     const { type } = decode(Event)(raw)
     if (type === "response.output_text.delta")
       return this.delta(decode(Schema.Struct({ delta: Schema.String }))(raw).delta)
-    if (type === "response.completed") return this.complete(decode(Completed)(raw).response.output)
+    if (["response.completed", "response.failed", "response.incomplete"].includes(type))
+      this.usage = responseTokens(raw)
+    if (type === "response.completed") {
+      const response = decode(Completed)(raw).response
+      const usage = reportedTokens(response.usage)
+      return this.complete(response.output).map((event) =>
+        event.kind === "Completed" && usage !== undefined ? { ...event, usage } : event
+      )
+    }
     if (type === "response.failed" || type === "error") throw inferenceFailed(providerFailure(raw, type))
     if (type === "response.incomplete") throw inferenceFailed("Incomplete")
     return this.other(type, raw)

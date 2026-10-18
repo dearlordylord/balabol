@@ -20,6 +20,12 @@ An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MV
 - [Engineering standards](docs/engineering/standards.md)
 - [Deferred real-model qualification](.scratch/followups/issues/01-create-real-model-check-task.md)
 
+## Usage
+
+Open **Usage** in the iPhone conversation toolbar for separate chat, memory-summary, recognition and synthesis counters. Chat and memory show provider-reported subscription input/output/cache tokens collected from this installation onward, not additional dollar charges. The private SQLite usage ledger in the conversation database survives backend restarts; missing observations remain unavailable and partial totals are labeled. Interrupted requests are counted without retrying them.
+
+Speech shows actual API cost, tokens and audio duration for the configured Soniox project over the trailing 30-day UTC window, obtained from [Soniox usage summary](https://soniox.com/docs/guides/usage-summary). These project totals can include traffic outside Balabol. Refresh failures retain prior values only within the same credential scope. No billing credential is sent to the iPhone.
+
 ## Local operation audit
 
 The backend exports sanitized Effect spans to `~/.local/share/balabol/diagnostics/operations.jsonl` (private permissions; rotation retains the current and previous file, up to 4 MiB each). No telemetry server is required. Spans record operation, parent/trace identity, hashed response identity, duration, outcome and typed failure reason; conversation text, credentials, raw exceptions and audio are excluded. Queue overflow and write failures are counted and reported to stderr. Shutdown drains pending writes for up to three seconds; this is operational diagnostics, not a crash-durable transaction log.

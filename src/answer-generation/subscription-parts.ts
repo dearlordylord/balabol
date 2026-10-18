@@ -1,3 +1,4 @@
+import type { TokenUsage } from "../usage/index.ts"
 import { Schema } from "effect"
 import type { Response } from "effect/ai"
 import { ReasoningItem, ToolReplay, type ToolInferenceEvent } from "../subscription/index.ts"
@@ -32,7 +33,7 @@ export class SubscriptionParts {
     parts.push(...committed, {
       type: "finish",
       reason: event.finishReason === "stop" ? "stop" : "tool-calls",
-      usage: { inputTokens: {}, outputTokens: {} }
+      usage: effectUsage(event.usage)
     })
     return parts
   }
@@ -118,5 +119,12 @@ export class SubscriptionParts {
       params: Schema.decodeUnknownSync(Schema.JsonObject)(JSON.parse(event.arguments)),
       providerExecuted: false
     })
+  }
+}
+
+function effectUsage(usage: TokenUsage | undefined) {
+  return {
+    inputTokens: { total: usage?.input, cacheRead: usage?.cachedInput },
+    outputTokens: { total: usage?.output, reasoning: usage?.reasoningOutput }
   }
 }

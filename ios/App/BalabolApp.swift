@@ -66,6 +66,8 @@ private struct ConversationRoot: View {
   @State private var voice: VoiceViewModel?
   @State private var session: URLSession?
   @State private var configurationError: String?
+  @State private var showingUsage = false
+  @State private var usage: UsageViewModel?
   @State private var showingServer = false
   @State private var switchingServer = false
   private let localState: ClientLocalState
@@ -94,6 +96,8 @@ private struct ConversationRoot: View {
       .disabled(switchingServer)
       .toolbar {
         if model != nil {
+          Button("Usage", systemImage: "chart.bar") { showingUsage = true }
+            .disabled(usage == nil)
           Button {
             urlInput = configuredURL
             configurationError = nil
@@ -107,6 +111,9 @@ private struct ConversationRoot: View {
       }
     }
     .tint(Color(uiColor: .systemIndigo))
+    .sheet(isPresented: $showingUsage) {
+      if let usage { UsageView(model: usage).presentationDetents([.medium, .large]) }
+    }
     .sheet(isPresented: $showingServer) {
       NavigationStack {
         serverForm
@@ -219,6 +226,7 @@ private struct ConversationRoot: View {
     await current.shutdown()
     session?.invalidateAndCancel()
     session = nil
+    usage = nil
     model = nil
     connect()
     switchingServer = false
@@ -273,6 +281,7 @@ private struct ConversationRoot: View {
       }
       inputRelay.voice = voice
       model = conversation
+      usage = UsageViewModel(client: HTTPUsageClient(baseURL: url, session: candidate))
       session = candidate
       configuredURL = urlInput
       configurationError = nil
