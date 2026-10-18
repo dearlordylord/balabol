@@ -1,22 +1,47 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { AudioFrame, AudioSource, LocalAudioTrack, TrackPublishOptions, TrackSource } from "@livekit/rtc-node"
 import type { LocalTrack } from "@livekit/rtc-node"
-import { Effect, Scope, Exit, Schema } from "effect"
+import { Cause, Effect, Scope, Exit, Schema } from "effect"
 import { SynthesisAudio } from "../speech-synthesis/index.ts"
-import { failed } from "./contracts.ts"
+import { failed, VoiceFailed } from "./contracts.ts"
 import type { ReplyDeliveryAuthorization } from "../conversation/index.ts"
-import type { AudioPublication, VoiceFailed } from "./contracts.ts"
+import type { AudioPublication } from "./contracts.ts"
 const sampleRate = 24000
 const queueMillis = 100
 const captureMillis = 1000
 const publicationMillis = 5000
 const sampleBytes = 2
-const io = <A>(run: () => Promise<A>) =>
-  Effect.tryPromise({ try: run, catch: () => failed("AudioUnavailable", "Reply audio transport failed") })
+const io = <A>(run: () => Promise<A>, reason: "Transport" | "TrackRelease" | "SourceRelease" = "Transport") =>
+  Effect.tryPromise({
+    try: run,
+    catch: () =>
+      new VoiceFailed({
+        code: "AudioUnavailable",
+        message: "Reply audio transport failed",
+        diagnostic: { category: "Media", reason, provider: "livekit" }
+      })
+  })
 /** Narrow RTC publication port; native source/track lifetimes remain owned here. */
 export type ReplyPublisher = {
   publishTrack: (track: LocalTrack, options: TrackPublishOptions) => Promise<{ readonly sid: string | undefined }>
   unpublishTrack: (sid: string, stopOnUnpublish?: boolean) => Promise<void>
 }
+/** Both native owners must release even when the track rejects its close. */
+export const closeLiveKitAudio = (
+  track: { close: (stop: boolean) => Promise<void> },
+  source: { readonly closed: boolean; close: () => Promise<void> }
+) =>
+  Effect.gen(function* () {
+    const trackExit = yield* io(() => track.close(false), "TrackRelease").pipe(Effect.exit)
+    const sourceExit = yield* Effect.suspend(() =>
+      source.closed ? Effect.void : io(() => source.close(), "SourceRelease")
+    ).pipe(Effect.exit)
+    if (Exit.isFailure(trackExit) && Exit.isFailure(sourceExit))
+      return yield* Effect.failCause(Cause.combine(trackExit.cause, sourceExit.cause))
+    if (Exit.isFailure(trackExit)) return yield* Effect.failCause(trackExit.cause)
+    if (Exit.isFailure(sourceExit)) return yield* Effect.failCause(sourceExit.cause)
+  })
+
 const decodeAudioFrame = (audio: SynthesisAudio) => {
   const data = new Int16Array(audio.sampleFrames)
   const view = new DataView(audio.bytes.buffer, audio.bytes.byteOffset, audio.bytes.byteLength)
@@ -36,6 +61,8 @@ export const openLiveKitOutput = (
       return yield* failed("AudioUnavailable", "Reply publication authorization was revoked")
     const scope = yield* Scope.fork(parent)
     return yield* Effect.gen(function* () {
+      const context = yield* Effect.context<never>()
+      const releaseSpan = withAuditSpan("voice.release", undefined, { epoch: auditIdentity(outputEpoch) })
       const source = new AudioSource(sampleRate, 1, queueMillis)
       const track = LocalAudioTrack.createAudioTrack(`balabol.reply.${outputEpoch}`, source)
       let valid = true
@@ -45,16 +72,19 @@ export const openLiveKitOutput = (
       const acquisition: { pending?: Promise<{ readonly sid: string | undefined }> } = {}
       let acquired = false
       let released = false
-      const releaseNative = async () => {
-        if (released) return
-        released = true
-        await track.close(false)
-        if (!source.closed) await source.close()
-      }
+      const releaseNative = () =>
+        Effect.suspend(() => {
+          if (released) return Effect.void
+          released = true
+          return closeLiveKitAudio(track, source)
+        })
       const releaseLate = () => {
         // SDK unpublish uses SID, not Source/Track handles; publication has already settled here.
-        if (identity.sid !== "") void local.unpublishTrack(identity.sid, false).catch(() => undefined)
-        void releaseNative().catch(() => undefined)
+        if (identity.sid !== "")
+          void Effect.runPromiseWith(context)(
+            io(() => local.unpublishTrack(identity.sid, false)).pipe(releaseSpan, Effect.ignore)
+          )
+        void Effect.runPromiseWith(context)(releaseNative().pipe(releaseSpan, Effect.ignore))
       }
       const clear = () => {
         if (!closing && !source.closed) source.clearQueue()
@@ -78,13 +108,18 @@ export const openLiveKitOutput = (
             return
           }
           if (pending !== undefined)
-            yield* io(() => pending ?? Promise.resolve()).pipe(Effect.timeout(captureMillis), Effect.ignore)
+            yield* io(() => pending ?? Promise.resolve()).pipe(
+              Effect.timeout(captureMillis),
+              releaseSpan,
+              Effect.ignore
+            )
           if (identity.sid !== "")
             yield* io(() => local.unpublishTrack(identity.sid, false)).pipe(
               Effect.timeout(captureMillis),
+              releaseSpan,
               Effect.ignore
             )
-          yield* io(releaseNative).pipe(Effect.timeout(captureMillis), Effect.ignore)
+          yield* releaseNative().pipe(Effect.timeout(captureMillis), releaseSpan, Effect.ignore)
         })
       )
       if (!authorized()) return yield* failed("AudioUnavailable", "The reply publication scope is closed")

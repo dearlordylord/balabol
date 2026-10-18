@@ -1,41 +1,39 @@
 import { createHash } from "node:crypto"
-import { appendFile, chmod, mkdir, rename, stat } from "node:fs/promises"
-import { dirname } from "node:path"
-import { Clock, Context, Effect, Exit, Fiber, Layer, Option, Queue, Tracer } from "effect"
+import { Clock, Context, Effect, Exit, Fiber, Layer, Option, Queue, Stream, Tracer } from "effect"
 import { auditRecord } from "./projection.ts"
-const maximumBytes = 4194304
+import type { AuditStorage } from "./file.ts"
+import type { AuditSpanName } from "./contracts.ts"
+export { AuditSpanName } from "./contracts.ts"
+export { auditFile, type AuditStorage } from "./file.ts"
 const maximumPending = 512
 const correlationLength = 32
-const privateFileMode = 0o600
+const maximumRecordBytes = 16384
 const flushPollMillis = 10
 export const auditIdentity = (value: string) =>
   createHash("sha256").update(value.toLowerCase()).digest("hex").slice(0, correlationLength)
-export interface AuditStorage {
-  readonly write: (line: string) => Promise<void>
-}
-export const auditFile = (path: string): AuditStorage => ({
-  async write(line) {
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-    const size = await stat(path).then(
-      (file) => file.size,
-      () => 0
-    )
-    if (size + Buffer.byteLength(line) > maximumBytes) await rename(path, `${path}.previous`)
-    await appendFile(path, line, { mode: privateFileMode })
-    await chmod(path, privateFileMode)
-  }
-})
 export class OperationAudit extends Context.Service<
   OperationAudit,
   {
     readonly tracer: Tracer.Tracer
     readonly flush: Effect.Effect<void>
+    readonly health: Effect.Effect<{
+      readonly pending: number
+      readonly dropped: number
+      readonly writeFailures: number
+      readonly projectionFailures: number
+      readonly reportFailures: number
+    }>
     readonly parent: (identity: string) => Effect.Effect<Tracer.Span>
     readonly finish: (identity: string, exit: Exit.Exit<unknown, unknown>) => void
   }
 >()("balabol/operation-audit") {}
 /** Completed spans are sanitized before entering the bounded export queue. */
-export const operationAuditLayer = (storage: AuditStorage) =>
+export const operationAuditLayer = (
+  storage: AuditStorage,
+  report: (message: string) => void = (message) => {
+    process.stderr.write(message)
+  }
+) =>
   Layer.effect(
     OperationAudit,
     Effect.gen(function* () {
@@ -45,6 +43,24 @@ export const operationAuditLayer = (storage: AuditStorage) =>
       let dropped = 0
       let writeFailures = 0
       let pending = 0
+      let projectionFailures = 0
+      let reportFailures = 0
+      const reportSafely = (message: string) => {
+        try {
+          report(message)
+        } catch {
+          reportFailures++
+        }
+      }
+      const dropRecord = (message: string) => {
+        dropped++
+        if (dropped === 1) reportSafely(message)
+      }
+      const enqueue = (line: string) => {
+        if (Buffer.byteLength(line) > maximumRecordBytes) dropRecord("Operation audit record too large\n")
+        else if (Queue.offerUnsafe(queue, line)) pending++
+        else dropRecord("Operation audit queue overflow\n")
+      }
       const writer = yield* Effect.gen(function* () {
         while (true) {
           const line = yield* Queue.take(queue)
@@ -52,7 +68,7 @@ export const operationAuditLayer = (storage: AuditStorage) =>
             Effect.catch(() =>
               Effect.sync(() => {
                 writeFailures++
-                process.stderr.write("Operation audit write failed\n")
+                if (writeFailures === 1) reportSafely("Operation audit write failed\n")
               })
             ),
             Effect.ensuring(
@@ -76,7 +92,7 @@ export const operationAuditLayer = (storage: AuditStorage) =>
           Effect.tap((result) =>
             Effect.sync(() => {
               if (result._tag === "None")
-                process.stderr.write(`Operation audit shutdown deadline exceeded; pending=${pending}\n`)
+                reportSafely(`Operation audit shutdown deadline exceeded; pending=${pending}\n`)
             })
           ),
           Effect.andThen(Fiber.interrupt(writer)),
@@ -90,12 +106,15 @@ export const operationAuditLayer = (storage: AuditStorage) =>
           span.end = (time, exit) => {
             if (span.status._tag === "Ended") return
             end(time, exit)
-            const record = auditRecord(span, time, exit, clock.currentTimeMillisUnsafe())
-            if (record === undefined) return
-            if (Queue.offerUnsafe(queue, JSON.stringify({ ...record, dropped, writeFailures }) + "\n")) pending++
-            else {
-              dropped++
-              process.stderr.write("Operation audit queue overflow\n")
+            try {
+              const record = auditRecord(span, time, exit, clock.currentTimeMillisUnsafe())
+              if (record === undefined) return
+              const line =
+                JSON.stringify({ ...record, dropped, writeFailures, projectionFailures, reportFailures }) + "\n"
+              enqueue(line)
+            } catch {
+              projectionFailures++
+              if (projectionFailures === 1) reportSafely("Operation audit projection failed\n")
             }
           }
           return span
@@ -127,22 +146,50 @@ export const operationAuditLayer = (storage: AuditStorage) =>
             )
           )
         })
-      return { tracer, flush, parent, finish }
+      const health = Effect.sync(() => ({ pending, dropped, writeFailures, projectionFailures, reportFailures }))
+      return { tracer, flush, health, parent, finish }
     })
   )
 
 /** Mailbox work restores its response carrier here, outside pure state. */
-export function withAuditSpan(name: string, responseId?: string) {
+export function withAuditSpan(
+  name: AuditSpanName,
+  responseId?: string,
+  attributes: Readonly<Record<string, unknown>> = {}
+) {
   return function traceResponseWork<A, E, R>(work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
     return Effect.gen(function* restoreResponseCarrier() {
       const audit = yield* Effect.serviceOption(OperationAudit)
-      if (Option.isNone(audit) || responseId === undefined) return yield* work.pipe(Effect.withSpan(name))
-      const parent = yield* audit.value.parent(responseId)
+      if (Option.isNone(audit)) return yield* work.pipe(Effect.withSpan(name, { attributes }))
+      const parent = responseId === undefined ? undefined : yield* audit.value.parent(responseId)
+      const correlated = responseId === undefined ? attributes : { ...attributes, response: auditIdentity(responseId) }
       return yield* work.pipe(
-        Effect.withSpan(name, { attributes: { response: auditIdentity(responseId) } }),
-        Effect.withParentSpan(parent)
+        Effect.withSpan(name, { attributes: correlated, parent }),
+        Effect.withTracer(audit.value.tracer)
       )
     })
+  }
+}
+/** Stream scope and its terminal Exit share the same audit carrier as ordinary effects. */
+export function withAuditStreamSpan(
+  name: AuditSpanName,
+  responseId?: string,
+  attributes: Readonly<Record<string, unknown>> = {}
+) {
+  return function traceResponseStream<A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> {
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const audit = yield* Effect.serviceOption(OperationAudit)
+        if (Option.isNone(audit)) return stream.pipe(Stream.withSpan(name, { attributes }))
+        const parent = responseId === undefined ? undefined : yield* audit.value.parent(responseId)
+        const correlated =
+          responseId === undefined ? attributes : { ...attributes, response: auditIdentity(responseId) }
+        return stream.pipe(
+          Stream.withSpan(name, { attributes: correlated, parent }),
+          Stream.provideService(Tracer.Tracer, audit.value.tracer)
+        )
+      })
+    )
   }
 }
 export const finishAudit = (responseId: string, exit: Exit.Exit<unknown, unknown>) =>

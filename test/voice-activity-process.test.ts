@@ -53,6 +53,8 @@ for await (const line of createInterface({input:process.stdin})) {
           yield* stream.push(audio())
           const failure = yield* stream.push(audio()).pipe(Effect.result)
           expect(failure._tag).toBe("Failure")
+          if (failure._tag === "Failure")
+            expect(failure.failure.diagnostic).toEqual({ category: "Media", provider: "silero", reason: "Deadline" })
           const firstPid = Number((yield* Effect.promise(() => readFile(`${marker}.pids`, "utf8"))).trim())
           expect(() => process.kill(firstPid, 0)).toThrow()
           expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(3000)
@@ -97,6 +99,31 @@ for await (const line of createInterface({input:process.stdin})) {
     expect((await Effect.runPromise(Clock.currentTimeMillis)) - closeStarted).toBeLessThan(1500)
     const pids = (await readFile(`${marker}.pids`, "utf8")).trim().split("\n").map(Number)
     for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it.each([
+  ["protocol", "console.log('private malformed response');setInterval(()=>{},1000)", "ProcessProtocol"],
+  ["exit", "process.exit(7)", "ProcessExit"],
+  ["overflow", "process.stdout.write('x'.repeat(70000));setInterval(()=>{},1000)", "ProcessOutputLimit"]
+])("preserves the native worker %s stage without exporting its output", async (_name, source, reason) => {
+  const directory = await mkdtemp(join(tmpdir(), "balabol-activity-stage-"))
+  try {
+    const worker = join(directory, "worker.mjs")
+    await writeFile(worker, source)
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const error = yield* activityProcessRuntime(pathToFileURL(worker))
+            .open("private model path")
+            .pipe(Effect.flip)
+          expect(error.diagnostic).toEqual({ category: "Media", provider: "silero", reason })
+          expect(error.message).not.toContain("private")
+        })
+      )
+    )
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

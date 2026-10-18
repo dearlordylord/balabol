@@ -36,7 +36,7 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
         const socket = yield* Effect.acquireRelease(
           Effect.try({
             try: () => factory(endpoint, ["soniox-api-key", Redacted.value(settings.apiKey)]),
-            catch: () => sonioxFailure("Soniox connection could not be created")
+            catch: () => sonioxFailure("Soniox connection could not be created", "Transport")
           }),
           (connection) =>
             Effect.sync(() => {
@@ -56,7 +56,7 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
           Queue.failCauseUnsafe(queue, Cause.fail(error))
         }
         yield* Effect.sleep(requestDeadlineMillis).pipe(
-          Effect.andThen(Effect.sync(() => fail(sonioxFailure("Soniox recognition deadline exceeded")))),
+          Effect.andThen(Effect.sync(() => fail(sonioxFailure("Soniox recognition deadline exceeded", "Deadline")))),
           Effect.forkScoped
         )
         socket.onopen = () => {
@@ -77,11 +77,11 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
             socket.send(request.audio.bytes)
             socket.send("")
           } catch {
-            fail(sonioxFailure("Soniox audio submission failed"))
+            fail(sonioxFailure("Soniox audio submission failed", "Transport"))
           }
         }
         const publish = (event: RecognitionEvent) => {
-          if (!Queue.offerUnsafe(queue, event)) fail(sonioxFailure("Soniox event capacity exceeded"))
+          if (!Queue.offerUnsafe(queue, event)) fail(sonioxFailure("Soniox event capacity exceeded", "Limit"))
           if (finished) {
             terminal = true
             Queue.endUnsafe(queue)
@@ -102,9 +102,9 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
             fail(error instanceof RecognitionFailed ? error : sonioxFailure("Invalid Soniox response"))
           }
         }
-        socket.onerror = () => fail(sonioxFailure("Soniox network connection failed"))
+        socket.onerror = () => fail(sonioxFailure("Soniox network connection failed", "Transport"))
         socket.onclose = () => {
-          if (!finished) fail(sonioxFailure("Soniox closed before recognition finished"))
+          if (!finished) fail(sonioxFailure("Soniox closed before recognition finished", "Incomplete"))
         }
       }),
     { bufferSize: 64 }
@@ -114,7 +114,7 @@ export const sonioxRecognitionLayer = (settings: SonioxSettings, factory: Soniox
     SpeechRecognition,
     Effect.gen(function* () {
       const config = yield* Schema.decodeUnknownEffect(SonioxSettings)(settings).pipe(
-        Effect.mapError(() => sonioxFailure("Soniox requires a nonempty SONIOX_API_KEY"))
+        Effect.mapError(() => sonioxFailure("Soniox requires a nonempty SONIOX_API_KEY", "Authentication"))
       )
       return SpeechRecognition.of({
         capabilities: {
@@ -128,7 +128,7 @@ export const sonioxRecognitionLayer = (settings: SonioxSettings, factory: Soniox
         recognize: (raw) =>
           Stream.unwrap(
             Schema.decodeUnknownEffect(RecognitionRequest)(raw).pipe(
-              Effect.mapError(() => sonioxFailure("Invalid Soniox recognition request")),
+              Effect.mapError(() => sonioxFailure("Invalid Soniox recognition request", "InvalidRequest")),
               Effect.map((request) => transcribe(request, config, factory))
             )
           )

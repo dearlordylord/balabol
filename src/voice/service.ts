@@ -1,3 +1,4 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { Context, Effect, Layer, Schema, Option } from "effect"
 import { Conversation } from "../conversation/index.ts"
 import { SpeechRecognition } from "../speech-recognition/index.ts"
@@ -96,6 +97,10 @@ export class Voice extends Context.Service<
                               }
                         )
                       )
+                  }),
+                  withAuditSpan("voice.resolve", undefined, {
+                    session: auditIdentity(association.sessionId),
+                    input: auditIdentity(association.deliveryId)
                   }),
                   Effect.catch(() => Effect.succeed({ ...association, status: "Unknown" as const, receipt: null }))
                 )

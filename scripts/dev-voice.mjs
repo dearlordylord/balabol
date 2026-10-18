@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { backendDiagnostics, backendExitDiagnostic } from "./backend-diagnostics.mjs";
 import { defaultModelPath } from "./prepare-vad.mjs";
 
 const image = "livekit/livekit-server@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154";
@@ -249,7 +250,7 @@ export const main = async (args) => {
             backend.kill("SIGKILL");
             resolveExit();
           }, 5000);
-          backend.once("exit", () => {
+          backend.once("close", () => {
             clearTimeout(deadline);
             resolveExit();
           });
@@ -313,7 +314,7 @@ export const main = async (args) => {
     ensureRunning();
     backend = spawn(process.execPath, ["dist/bootstrap/main.js"], {
       cwd: root,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       env: {
         ...environment,
         BALABOL_HOST: "127.0.0.1",
@@ -326,11 +327,15 @@ export const main = async (args) => {
         BALABOL_LIVEKIT_API_SECRET: secret,
       },
     });
+    const diagnostics = backendDiagnostics((message) => console.error(message));
+    backend.stderr.on("data", (chunk) => diagnostics.write(chunk));
+    backend.stderr.once("end", () => diagnostics.finish());
     backend.once("error", () => {
       if (!stopping) console.error("Could not start the voice backend.");
       requestStop(1);
     });
-    backend.once("exit", () => {
+    backend.once("exit", (code, signal) => {
+      console.error(backendExitDiagnostic(code, signal));
       if (!stopping) {
         process.exitCode = 1;
         console.error("Voice backend stopped. Check the database writer and configuration.");

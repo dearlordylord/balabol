@@ -91,12 +91,14 @@ public struct HTTPConversationTransport: ConversationTransport {
     let diagnosticsEnabled = diagnosticsEnabled
     let reader = Task {
       var stage = "headers"
+      var httpStatus: Int?
       do {
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse else {
           throw ConversationFailure.invalidResponse
         }
+        httpStatus = http.statusCode
         if http.statusCode != 200 {
           var data = Data()
           for try await byte in bytes {
@@ -160,13 +162,13 @@ public struct HTTPConversationTransport: ConversationTransport {
       } catch let error as ConversationFailure {
         if diagnosticsEnabled {
           ReplyObservationDiagnostics.record(
-            input: inputDeliveryId, stage: "stream", failure: error)
+            input: inputDeliveryId, stage: stage, failure: error, httpStatus: httpStatus)
         }
         stream.continuation.finish(throwing: error)
       } catch {
         if diagnosticsEnabled, !Task.isCancelled {
           ReplyObservationDiagnostics.record(
-            input: inputDeliveryId, stage: "network",
+            input: inputDeliveryId, stage: stage, failure: .unavailable, httpStatus: httpStatus,
             networkCode: (error as? URLError)?.code.rawValue)
         }
         stream.continuation.finish(throwing: ConversationFailure.unavailable)
@@ -216,26 +218,43 @@ public struct HTTPConversationTransport: ConversationTransport {
   private func execute<Value: Decodable>(_ request: URLRequest, as type: Value.Type) async throws
     -> Value
   {
-    let (data, response) = try await session.data(for: request)
-    guard let http = response as? HTTPURLResponse, data.count <= 8_388_608 else {
-      throw ConversationFailure.invalidResponse
-    }
-    guard http.statusCode == 200 else {
-      guard let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data) else {
+    var stage = "request-headers"
+    var httpStatus: Int?
+    do {
+      let (data, response) = try await session.data(for: request)
+      guard let http = response as? HTTPURLResponse, data.count <= 8_388_608 else {
         throw ConversationFailure.invalidResponse
       }
-      guard !envelope.error.code.isEmpty,
-        envelope.error.code != "InvalidInput" || http.statusCode == 400,
-        envelope.error.code != "DeliveryConflict" || http.statusCode == 409
-      else {
+      httpStatus = http.statusCode
+      stage = "request-status"
+      guard http.statusCode == 200 else {
+        guard let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data) else {
+          throw ConversationFailure.invalidResponse
+        }
+        guard !envelope.error.code.isEmpty,
+          envelope.error.code != "InvalidInput" || http.statusCode == 400,
+          envelope.error.code != "DeliveryConflict" || http.statusCode == 409
+        else {
+          throw ConversationFailure.invalidResponse
+        }
+        throw ConversationFailure.rejected(
+          code: envelope.error.code, message: envelope.error.message)
+      }
+      stage = "request-decode"
+      do { return try JSONDecoder().decode(type, from: data) } catch {
         throw ConversationFailure.invalidResponse
       }
-      throw ConversationFailure.rejected(code: envelope.error.code, message: envelope.error.message)
-    }
-    do { return try JSONDecoder().decode(type, from: data) } catch {
-      throw ConversationFailure.invalidResponse
+    } catch {
+      if diagnosticsEnabled, !Task.isCancelled {
+        ReplyObservationDiagnostics.record(
+          input: nil, stage: stage,
+          failure: (error as? ConversationFailure) ?? .unavailable, httpStatus: httpStatus,
+          networkCode: (error as? URLError)?.code.rawValue)
+      }
+      throw error
     }
   }
+
   private struct ErrorEnvelope: Decodable {
     let error: ServerFailure
   }
@@ -247,19 +266,31 @@ public struct HTTPConversationTransport: ConversationTransport {
 
 /// Bounded technical evidence only: no transcript, URL, server message or raw error.
 internal actor ReplyObservationDiagnostics {
-  private struct Entry: Codable {
+  internal struct Entry: Codable {
     let at: Date
-    let input: String
+    let input: String?
     let stage: String
     let kind: String
     let networkCode: Int?
+    let httpStatus: Int?
+    let backendCode: String?
   }
   private static let shared = ReplyObservationDiagnostics()
   private var entries: [Entry] = []
+  private var reportedFailure = false
   nonisolated static func record(
-    input: UUID, stage: String,
-    failure: ConversationFailure? = nil, networkCode: Int? = nil
+    input: UUID?, stage: String,
+    failure: ConversationFailure? = nil, httpStatus: Int? = nil, networkCode: Int? = nil
   ) {
+    let entry = makeEntry(
+      input: input, stage: stage, failure: failure,
+      httpStatus: httpStatus, networkCode: networkCode)
+    Task { await shared.append(entry) }
+  }
+  nonisolated static func makeEntry(
+    input: UUID?, stage: String, failure: ConversationFailure? = nil,
+    httpStatus: Int? = nil, networkCode: Int? = nil
+  ) -> Entry {
     let kind: String
     switch failure {
     case .invalidResponse: kind = "InvalidResponse"
@@ -267,12 +298,23 @@ internal actor ReplyObservationDiagnostics {
     case .some: kind = "Unavailable"
     case nil: kind = networkCode == nil ? "Observed" : "Network"
     }
-    let hashed = SHA256.hash(data: Data(input.uuidString.lowercased().utf8))
-      .map { String(format: "%02x", $0) }.joined().prefix(12).description
-    let entry = Entry(
+    let backendCode: String?
+    if case .rejected(let code, _) = failure {
+      backendCode =
+        [
+          "Unauthorized", "InvalidInput", "DeliveryConflict", "Unavailable", "StorageUnavailable",
+          "ProviderFailed",
+        ].contains(code) ? code : "OtherBackendCode"
+    } else {
+      backendCode = nil
+    }
+    let hashed = input.map { value in
+      SHA256.hash(data: Data(value.uuidString.lowercased().utf8))
+        .map { String(format: "%02x", $0) }.joined().prefix(32).description
+    }
+    return Entry(
       at: Date(), input: hashed, stage: stage, kind: kind,
-      networkCode: networkCode)
-    Task { await shared.append(entry) }
+      networkCode: networkCode, httpStatus: httpStatus, backendCode: backendCode)
   }
   nonisolated static func record(
     input: UUID, stage: String,
@@ -302,7 +344,10 @@ internal actor ReplyObservationDiagnostics {
       #endif
     } catch {
       // Never print the underlying error, which may contain a private filesystem path.
-      NSLog("Balabol reply observation diagnostics could not be persisted")
+      if !reportedFailure {
+        reportedFailure = true
+        NSLog("Balabol reply observation diagnostics could not be persisted")
+      }
     }
   }
 }

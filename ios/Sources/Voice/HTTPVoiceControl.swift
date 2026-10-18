@@ -227,9 +227,21 @@ public actor HTTPVoiceControl: VoiceControl {
     let data: Data
     let response: URLResponse
     do { (data, response) = try await session.data(for: request) } catch {
+      #if DEBUG
+        if !Task.isCancelled {
+          VoiceTransitionTrace.shared.record(
+            .transportFailed, status: "voice-http-network", failure: .connection,
+            session: sessionId, networkCode: (error as? URLError)?.code.rawValue)
+        }
+      #endif
       throw VoiceFailure.connection
     }
     guard let http = response as? HTTPURLResponse, data.count <= 1_048_576 else {
+      #if DEBUG
+        VoiceTransitionTrace.shared.record(
+          .transportFailed, status: "voice-http-envelope", failure: .invalidResponse,
+          session: sessionId, httpStatus: (response as? HTTPURLResponse)?.statusCode)
+      #endif
       throw VoiceFailure.invalidResponse
     }
     guard (200..<300).contains(http.statusCode) else {
@@ -242,8 +254,19 @@ public actor HTTPVoiceControl: VoiceControl {
       if let failure = try? JSONDecoder().decode(FailureBody.self, from: data),
         !failure.error.code.isEmpty, !failure.error.message.isEmpty
       {
+        #if DEBUG
+          VoiceTransitionTrace.shared.record(
+            .transportFailed, status: "voice-http-status",
+            failure: .backend(code: failure.error.code, message: ""), session: sessionId,
+            httpStatus: http.statusCode)
+        #endif
         throw VoiceFailure.backend(code: failure.error.code, message: failure.error.message)
       }
+      #if DEBUG
+        VoiceTransitionTrace.shared.record(
+          .transportFailed, status: "voice-http-status",
+          failure: .connection, session: sessionId, httpStatus: http.statusCode)
+      #endif
       throw VoiceFailure.connection
     }
     return data

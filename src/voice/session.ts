@@ -1,3 +1,4 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { Clock, Effect, Exit, Fiber, Redacted, Scope } from "effect"
 import { failed } from "./contracts.ts"
@@ -20,7 +21,16 @@ export function createVoiceSession(deps: SessionDependencies): SessionFactory {
               deps.conversation
                 .openInputSource()
                 .pipe(Effect.mapError((error) => failed("InvalidInput", error.message))),
-              (capability) => deps.conversation.closeInputSource(capability).pipe(Effect.ignore)
+              (capability) =>
+                deps.conversation
+                  .closeInputSource(capability)
+                  .pipe(
+                    withAuditSpan("voice.release", undefined, {
+                      resource: "source",
+                      session: auditIdentity(identity.sessionId)
+                    }),
+                    Effect.ignore
+                  )
             ).pipe(Scope.provide(sourceScope))
           )
         ).pipe(Effect.onError(() => sourceRelease.pipe(Effect.andThen(Scope.close(captureScope, Exit.void)))))
@@ -38,7 +48,14 @@ export function createVoiceSession(deps: SessionDependencies): SessionFactory {
           sourceRelease,
           retention
         )
-        const expire = (now: number) => runtime.post({ kind: "Expire", now }).pipe(Effect.asVoid, Effect.ignore)
+        const expire = (now: number) =>
+          runtime
+            .post({ kind: "Expire", now })
+            .pipe(
+              withAuditSpan("voice.eventDelivery", undefined, { session: auditIdentity(identity.sessionId) }),
+              Effect.asVoid,
+              Effect.ignore
+            )
         const renew = () =>
           Clock.currentTimeMillis.pipe(
             Effect.flatMap((now) => runtime.post({ kind: "Renew", now })),

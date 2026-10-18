@@ -1,12 +1,14 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { AudioStream, Room, RoomEvent, TrackSource } from "@livekit/rtc-node"
 import { AccessToken, TrackSource as GrantSource } from "livekit-server-sdk"
 import { Effect, Layer, Redacted, Schema, Scope, Clock, Exit } from "effect"
 import { openLiveKitOutput } from "./livekit-output.ts"
-import { VoiceTransport, failed } from "./contracts.ts"
+import { cancelLiveKitReader, drainLiveKitInput } from "./livekit-input.ts"
+import { VoiceTransport, VoiceFailed, failed } from "./contracts.ts"
 import type { ReplyDeliveryAuthorization } from "../conversation/index.ts"
 import type { AudioFrame } from "@livekit/rtc-node"
-import type { VoiceEvent, VoiceFailed } from "./contracts.ts"
+import type { VoiceEvent } from "./contracts.ts"
 const secretMinimum = 32
 const datagramLimitBytes = 15360
 const tokenLifetimeMillis = 120000
@@ -28,7 +30,15 @@ export const LiveKitSettings = Schema.Struct({
 })
 export type LiveKitSettings = typeof LiveKitSettings.Type
 const io = <A>(operation: () => Promise<A>) =>
-  Effect.tryPromise({ try: operation, catch: () => failed("TransportUnavailable", "LiveKit operation failed") })
+  Effect.tryPromise({
+    try: operation,
+    catch: () =>
+      new VoiceFailed({
+        code: "TransportUnavailable",
+        message: "LiveKit operation failed",
+        diagnostic: { category: "Media", reason: "Transport", provider: "livekit" }
+      })
+  })
 const encodeEvent = (event: VoiceEvent): Effect.Effect<Uint8Array, VoiceFailed> => {
   const bytes = new TextEncoder().encode(JSON.stringify(event))
   return bytes.length <= datagramLimitBytes
@@ -71,16 +81,23 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
               let generation = 0
               let trackSid: string | undefined
               let reader: ReadableStreamDefaultReader<AudioFrame> | undefined
+              const context = yield* Effect.context<never>()
               const stopTrack = () => {
                 generation += 1
-                void reader?.cancel().catch(() => undefined)
+                const currentReader = reader
+                if (currentReader !== undefined)
+                  void Effect.runPromiseWith(context)(cancelLiveKitReader(currentReader, identity.sessionId))
                 reader = undefined
               }
               const disconnect = Effect.gen(function* () {
                 if (closed) return
                 closed = true
                 stopTrack()
-                yield* io(() => room.disconnect()).pipe(Effect.timeout(disconnectMillis), Effect.ignore)
+                yield* io(() => room.disconnect()).pipe(
+                  Effect.timeout(disconnectMillis),
+                  withAuditSpan("voice.disconnect", undefined, { session: auditIdentity(identity.sessionId) }),
+                  Effect.ignore
+                )
               })
               yield* Scope.addFinalizer(roomScope, disconnect)
               const close = Effect.sync(() => {
@@ -89,6 +106,7 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
               room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
                 if (
                   closed ||
+                  closingRoom ||
                   participant.identity !== identity.participantIdentity ||
                   publication.source !== TrackSource.SOURCE_MICROPHONE
                 )
@@ -99,21 +117,24 @@ export const liveKitLayer = (settings: LiveKitSettings) =>
                 const stream = new AudioStream(track, { sampleRate: 16000, numChannels: 1, frameSizeMs: 20 })
                 const selected = stream.getReader()
                 reader = selected
-                const drain = async () => {
-                  try {
-                    while (current === generation) {
-                      const next = await selected.read()
-                      if (next.done) return
-                      if (current === generation) frame(publication.sid ?? "", next.value)
-                    }
-                  } catch {
-                    if (current === generation) disconnected()
-                  } finally {
-                    await selected.cancel().catch(() => undefined)
-                    selected.releaseLock()
-                  }
-                }
-                void drain()
+                void Effect.runPromiseWith(context)(
+                  drainLiveKitInput({
+                    reader: selected,
+                    sessionId: identity.sessionId,
+                    generation: current,
+                    current: () => current === generation,
+                    frame: (audio) => frame(publication.sid ?? "", audio),
+                    disconnected
+                  }).pipe(
+                    Effect.ensuring(
+                      Effect.sync(() => {
+                        if (reader === selected) reader = undefined
+                      })
+                    ),
+                    Effect.forkIn(roomScope),
+                    Effect.asVoid
+                  )
+                )
               })
               room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
                 if (participant.identity === identity.participantIdentity && publication.sid === trackSid) stopTrack()

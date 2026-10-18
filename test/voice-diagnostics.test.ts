@@ -64,7 +64,7 @@ it("keeps a bounded latest snapshot while a writer is blocked and aborts without
       expect(latest.events.at(-1)?.sequence).toBe(601)
       expect(latest.dropped).toBe(345)
       expect(Buffer.byteLength(snapshots[1] ?? "")).toBeLessThanOrEqual(131072)
-      expect(latest.events[0]?.session).toBe(createHash("sha256").update(identity).digest("hex").slice(0, 12))
+      expect(latest.events[0]?.session).toBe(createHash("sha256").update(identity).digest("hex").slice(0, 32))
       expect(snapshots.join("")).not.toContain(identity)
     }).pipe(
       Effect.provide(

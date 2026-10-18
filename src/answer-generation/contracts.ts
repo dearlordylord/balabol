@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import type { Stream } from "effect"
 import { Context, Schema } from "effect"
 import { LanguageTag, LanguageTags, LanguageSpans, validLanguageSpans } from "../language/index.ts"
@@ -27,7 +28,10 @@ export const AnswerEvent = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("Completed") })
 ])
 export type AnswerEvent = typeof AnswerEvent.Type
-export class AnswerFailed extends Schema.TaggedError<AnswerFailed>()("AnswerFailed", { message: Schema.String }) {}
+export class AnswerFailed extends Schema.TaggedError<AnswerFailed>()("AnswerFailed", {
+  diagnostic: Schema.optionalKey(FailureDiagnostic),
+  message: Schema.String
+}) {}
 export class AnswerGeneration extends Context.Service<
   AnswerGeneration,
   { capabilities: AnswerCapabilities; generate: (request: AnswerRequest) => Stream.Stream<AnswerEvent, AnswerFailed> }

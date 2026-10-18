@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { Context, Schema } from "effect"
 import type { Effect } from "effect"
 const SUMMARY_REQUEST_TEXT_LIMIT = 1000000
@@ -28,6 +29,7 @@ export const SummaryRequest = Schema.Struct({
 })
 export type SummaryRequest = typeof SummaryRequest.Type
 export class SummaryFailed extends Schema.TaggedError<SummaryFailed>()("SummaryFailed", {
+  diagnostic: Schema.optionalKey(FailureDiagnostic),
   message: Schema.String,
   retryable: Schema.optionalKey(Schema.Boolean)
 }) {}

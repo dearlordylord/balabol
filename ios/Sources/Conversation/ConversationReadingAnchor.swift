@@ -83,6 +83,7 @@
       }
     }
     private var events: [Snapshot] = []
+    private var reportedFailure = false
     private func append(_ snapshot: Snapshot) {
       events.append(snapshot)
       if events.count > 128 { events.removeFirst(events.count - 128) }
@@ -101,7 +102,10 @@
             options: .atomic)
         #endif
       } catch {
-        NSLog("Balabol conversation viewport diagnostics could not be persisted")
+        if !reportedFailure {
+          reportedFailure = true
+          NSLog("Balabol conversation viewport diagnostics could not be persisted")
+        }
       }
     }
   }

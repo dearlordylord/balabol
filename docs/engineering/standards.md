@@ -54,6 +54,14 @@ Source authority: sibling hulymcp CLAUDE.md, review rules and its Effect referen
 
 The complete TS harness is wired; see [quality harness](quality-harness.md) for pins, commands and executable self-checks and [ownership](ownership.md) for the initial domain map. Husky scans secrets before formatting/type/test work. Pre-commit runs compiler/Effect diagnostics and product behavior checks; check-all runs the full gate. Empty-source results must never be reported as product validation. Swift needs strict concurrency, behavioral ViewModel tests, XCTest/UI checks and physical audio evidence; TS numeric tooling thresholds are not mechanically imposed on Swift.
 
-## Evidence
+## Operation diagnostics
+
+Instrument an external operation before catching its failure, converting it to a mailbox event, returning a tool error to the model, or verifying a recovered write. Use `withAuditSpan` or `withAuditStreamSpan` from Operation audit; these install the configured tracer and restore response correlation. Independent summary jobs use hashed job/attempt identities, and input/recognition work uses hashed input/session/utterance identities before a response exists. Keep tracing resources outside pure state.
+
+Expected failures carry bounded `FailureDiagnostic` metadata across owner boundaries. The exporter validates diagnostic fields, preserves bounded individual Effect causes, and distinguishes failure, defect and intended cancellation. Never derive diagnostic categories from arbitrary provider messages or export exception text, tool arguments/results, conversation text, credentials, audio or local paths. Yielded's pinned local policy templates are an explicitly tested compatibility boundary because its streamed event omits the typed policy limit.
+
+Tests must assert records actually written through the configured audit Layer, including failure followed by successful recovery and privacy exclusion. Testing an error message or an in-memory diagnostic projection alone does not qualify durable telemetry. Successful high-frequency audio and polling spans are suppressed; their failures remain visible. Audit storage is bounded and best effort, with inspectable health counters and bounded sanitized stderr fallback; it is not a transactional recovery log. Swift detailed journals retain their documented debug/opt-in scope.
+
+## Acceptance evidence
 
 Highest useful behavioral interface is the sole conversation application interface, composed with the real unii core and durable storage and fake providers. Adapter contract tests verify parsing, streaming, terminal outcomes and cancellation; Swift tests cover projected state/intents and platform integration. Source/documentation-backed interface validation is distinct from actual inference latency, voice quality and locked-screen reliability.

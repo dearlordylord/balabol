@@ -1,3 +1,6 @@
+import { it as clockIt } from "@effect/vitest"
+import { TestClock } from "effect/testing"
+import { OperationAudit, operationAuditLayer } from "../src/operation-audit/index.ts"
 import { Deferred, Effect, Fiber } from "effect"
 import { expect, it } from "vitest"
 import { subscriptionHttpRequest } from "../src/subscription/index.ts"
@@ -41,4 +44,39 @@ it("accepts an empty HTTP 200 only when the revocation protocol requests an empt
   expect(
     await Effect.runPromise(request("https://auth.openai.com/oauth/revoke", { ...requestInit, responseMode: "empty" }))
   ).toEqual({ status: 200, body: null })
+})
+
+clockIt.effect("bounds an uncooperative cancellation and persists its release deadline", () => {
+  const lines: string[] = []
+  return Effect.gen(function* () {
+    const cancelling = yield* Deferred.make<void>()
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => {
+        Effect.runSync(Deferred.succeed(cancelling, undefined))
+        return new Promise<void>(() => undefined)
+      }
+    })
+    const request = subscriptionHttpRequest(() => Promise.resolve(new Response(body, { status: 401 })))
+    const fiber = yield* request("https://api.openai.com/v1/models", requestInit).pipe(Effect.forkChild)
+    yield* Deferred.await(cancelling)
+    yield* TestClock.adjust(1001)
+    expect(yield* Fiber.join(fiber)).toEqual({ status: 401, body: null })
+    const audit = yield* OperationAudit
+    yield* audit.flush
+    expect(lines.map((line) => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        name: "subscription.release",
+        outcome: "Failed",
+        diagnostic: { category: "Subscription", provider: "subscription", reason: "Deadline" }
+      })
+    )
+  }).pipe(
+    Effect.provide(
+      operationAuditLayer({
+        write: async (line) => {
+          lines.push(line)
+        }
+      })
+    )
+  )
 })

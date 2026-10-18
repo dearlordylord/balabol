@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Subscription } from "./service.ts"
 import { Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
@@ -17,7 +18,14 @@ export type { SubscriptionPorts } from "./ports.ts"
 const make = (ports: SubscriptionPorts) =>
   Effect.gen(function* () {
     const state = yield* ports.load()
-    return Subscription.of(connection(state, ports))
+    const service = connection(state, ports)
+    return Subscription.of({
+      ...service,
+      begin: (redirect) => service.begin(redirect).pipe(withAuditSpan("subscription.begin")),
+      complete: (callback) => service.complete(callback).pipe(withAuditSpan("subscription.complete")),
+      models: () => service.models().pipe(withAuditSpan("subscription.models")),
+      disconnect: (mode) => service.disconnect(mode).pipe(withAuditSpan("subscription.disconnect"))
+    })
   })
 /** Fixture seam supplies storage, transport, identity validation and entropy; Effect Clock supplies time. */
 export const subscriptionLayerWith = (ports: SubscriptionPorts) => Layer.effect(Subscription, make(ports))

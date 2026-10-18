@@ -4,6 +4,7 @@ import { it } from "@effect/vitest"
 import { TestClock } from "effect/testing"
 import { SpeechSynthesis, sonioxSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { SonioxSynthesisSocket } from "./soniox-synthesis-fixture.ts"
+import { emptySonioxAudio, reduceSonioxAudio } from "../src/speech-synthesis/soniox-protocol.ts"
 const phrase = {
   responseId: "11111111-1111-4111-8111-111111111111",
   phraseId: "22222222-2222-4222-8222-222222222222",
@@ -20,6 +21,18 @@ const run = (socket: SonioxSynthesisSocket) =>
       return yield* Stream.runCollect(synthesis.synthesize(phrase))
     }).pipe(Effect.provide(sonioxSynthesisLayer(settings, socket.factory)))
   )
+it("rejects non-text and oversized packets before parsing or retaining their payload", () => {
+  for (const raw of [new Uint8Array(1), "x".repeat(3841025)])
+    expect(() => reduceSonioxAudio(emptySonioxAudio, raw, phrase.phraseId)).toThrow("Invalid Soniox synthesis packet")
+})
+it("sanitizes provider errors without a numeric status", async () => {
+  await expect(run(new SonioxSynthesisSocket([{ error_type: "private provider error" }]))).rejects.toThrow(
+    "Soniox synthesis failed"
+  )
+  await expect(run(new SonioxSynthesisSocket([{ error_type: "private provider error" }]))).rejects.not.toThrow(
+    "private provider error"
+  )
+})
 it("streams bounded contiguous PCM and completes only after audio_end then terminated", async () => {
   const socket = new SonioxSynthesisSocket([packet({ audio: pcm(), audio_end: true }), packet({ terminated: true })])
   const events = await run(socket)

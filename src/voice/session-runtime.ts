@@ -1,4 +1,4 @@
-import { withAuditSpan } from "../operation-audit/index.ts"
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { Deferred, Effect, Queue, Scope, Exit, Schema } from "effect"
 import type { Fiber } from "effect"
 import type { InputSource } from "../conversation/index.ts"
@@ -190,7 +190,13 @@ export const makeSessionRuntime = (
           return recognition.execute(command.command)
         case "Publish":
           return fork(
-            connection?.publish(command.event).pipe(Effect.timeout(datagramPublishMillis), Effect.ignore) ?? Effect.void
+            connection
+              ?.publish(command.event)
+              .pipe(
+                Effect.timeout(datagramPublishMillis),
+                withAuditSpan("voice.publish", undefined, { session: auditIdentity(identity.sessionId) }),
+                Effect.ignore
+              ) ?? Effect.void
           )
         case "BeginAdmission":
           return admission.begin(command.input, command.sourceSequence)
@@ -199,6 +205,10 @@ export const makeSessionRuntime = (
         case "Release":
           return fork(
             releaseResource(command.resource).pipe(
+              withAuditSpan("voice.release", undefined, {
+                resource: command.resource,
+                session: auditIdentity(identity.sessionId)
+              }),
               Effect.andThen(post({ kind: "Released", resource: command.resource })),
               Effect.asVoid,
               Effect.ignore
@@ -213,6 +223,11 @@ export const makeSessionRuntime = (
         deps.conversation
           .fenceSpeech({ capability: source, sequence: command.sequence, fenceId: command.fenceId })
           .pipe(
+            withAuditSpan("conversation.admission", undefined, {
+              operation: "fence",
+              session: auditIdentity(identity.sessionId),
+              generation: command.generation
+            }),
             Effect.flatMap((ack) =>
               post({
                 kind: "FenceApplied",
@@ -289,6 +304,7 @@ export const makeSessionRuntime = (
         yield* Effect.suspend(() =>
           state.classification?.operation === operation ? activity.push(value.frame) : Effect.succeed([])
         ).pipe(
+          withAuditSpan("voice.activity", undefined, { session: auditIdentity(identity.sessionId), generation }),
           Effect.flatMap((windows) => recognition.classified(windows, generation)),
           Effect.catch((error) =>
             post({ kind: "CaptureFailed", generation, operation, code: error.code, message: error.message }).pipe(
@@ -333,7 +349,13 @@ export const makeSessionRuntime = (
     const dispose = () =>
       Effect.gen(function* () {
         if (retired) return
-        yield* close().pipe(Effect.ignore)
+        yield* close().pipe(
+          withAuditSpan("voice.release", undefined, {
+            resource: "session",
+            session: auditIdentity(identity.sessionId)
+          }),
+          Effect.ignore
+        )
         yield* idle
         retired = true
         yield* Effect.forEach(

@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { spawn } from "node:child_process"
 import { Effect, Option, Schema } from "effect"
 import { FailureReason } from "../delivery-failure/index.ts"
@@ -6,7 +7,11 @@ import { SpeechSynthesisFailed } from "./provider.ts"
 const maximumOutputBytes = 1024 * 1024
 const terminationGraceMillis = 250
 const killAcknowledgementMillis = 1000
-const failed = () => new SpeechSynthesisFailed({ message: "Local synthesis process failed" })
+const failed = () =>
+  new SpeechSynthesisFailed({
+    message: "Local synthesis process failed",
+    diagnostic: { category: "Synthesis", reason: "ProcessStart", provider: "apple" }
+  })
 const nativeFailureMessages: Partial<Record<typeof FailureReason.Type, string>> = {
   UnsupportedLanguage: "Apple speech detected a language without a configured voice",
   UncertainLanguage: "Apple speech could not determine the language of a foreign-script phrase",
@@ -21,12 +26,17 @@ const processFailure = (text: string) => {
     if (Option.isSome(receipt))
       return new SpeechSynthesisFailed({
         reason: receipt.value.reason,
-        message: nativeFailureMessages[receipt.value.reason] ?? "Local speech synthesis failed"
+        message: nativeFailureMessages[receipt.value.reason] ?? "Local speech synthesis failed",
+        diagnostic: { category: "Synthesis", reason: receipt.value.reason, provider: "apple" }
       })
   } catch {
     /* Unstructured process output is never published or logged. */
   }
-  return new SpeechSynthesisFailed({ message: "Local synthesis process failed", reason: "NativeProcessFailed" })
+  return new SpeechSynthesisFailed({
+    message: "Local synthesis process failed",
+    reason: "NativeProcessFailed",
+    diagnostic: { category: "Synthesis", reason: "ProcessExit", provider: "apple" }
+  })
 }
 // Internal process handle: Node owns this in-memory lifecycle, not a serialized boundary.
 const start = (executable: string, args: readonly string[], input: string) => {
@@ -35,6 +45,7 @@ const start = (executable: string, args: readonly string[], input: string) => {
   child.stdin.end(input)
   let bytes = 0
   let overflow = false
+  let startFailure = false
   const output: Buffer[] = []
   const collect = (chunk: Buffer) => {
     bytes += chunk.byteLength
@@ -52,14 +63,22 @@ const start = (executable: string, args: readonly string[], input: string) => {
     }
   })
   const closed = new Promise<number | null>((resolve) => {
-    child.once("error", () => resolve(null))
+    child.once("error", () => {
+      startFailure = true
+      resolve(null)
+    })
     child.once("close", resolve)
   })
   const exited = new Promise<void>((resolve) => {
     child.once("error", () => resolve())
     child.once("exit", () => resolve())
   })
-  return { child, closed, exited, result: () => ({ overflow, text: Buffer.concat(output).toString("utf8") }) }
+  return {
+    child,
+    closed,
+    exited,
+    result: () => ({ overflow, startFailure, text: Buffer.concat(output).toString("utf8") })
+  }
 }
 const stop = (handle: ReturnType<typeof start>) =>
   Effect.gen(function* () {
@@ -81,6 +100,12 @@ export const runAppleProcess = (executable: string, args: readonly string[], inp
     )
     const code = yield* Effect.promise(() => handle.closed)
     const result = handle.result()
-    if (code !== 0 || result.overflow) return yield* processFailure(result.text)
+    if (result.startFailure) return yield* failed()
+    if (result.overflow)
+      return yield* new SpeechSynthesisFailed({
+        message: "Local synthesis process failed",
+        diagnostic: { category: "Synthesis", reason: "ProcessOutputLimit", provider: "apple" }
+      })
+    if (code !== 0) return yield* processFailure(result.text)
     return result.text
-  }).pipe(Effect.scoped)
+  }).pipe(Effect.scoped, withAuditSpan("speech.process", undefined, { provider: "apple" }))

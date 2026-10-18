@@ -1,3 +1,4 @@
+import { withAuditSpan, withAuditStreamSpan } from "../operation-audit/index.ts"
 import { Effect, Layer, Redacted, Schema, Stream } from "effect"
 import type { Context } from "effect"
 import { Subscription } from "./service.ts"
@@ -52,7 +53,18 @@ function consume<Event extends { readonly kind: string }>(
   controller: AbortController,
   parser: InferenceParser<Event>
 ) {
-  if (!response.ok) return Stream.fail(inferenceFailed(httpFailure(response.status)))
+  if (!response.ok)
+    return Stream.fail(
+      new InferenceFailed({
+        reason: httpFailure(response.status),
+        diagnostic: {
+          category: "Subscription",
+          reason: httpFailure(response.status),
+          provider: "subscription",
+          status: response.status
+        }
+      })
+    )
   const body = response.body
   if (body === null) return Stream.fail(inferenceFailed("Protocol"))
   return Stream.unwrap(
@@ -62,8 +74,16 @@ function consume<Event extends { readonly kind: string }>(
         (reader) =>
           Effect.gen(function* () {
             controller.abort()
-            yield* Effect.tryPromise(() => reader.cancel()).pipe(Effect.timeout(cleanupMillis), Effect.ignore)
-            yield* Effect.try(() => reader.releaseLock()).pipe(Effect.ignore)
+            yield* Effect.tryPromise({ try: () => reader.cancel(), catch: () => inferenceFailed("Transport") }).pipe(
+              Effect.timeout(cleanupMillis),
+              Effect.mapError((error) => (error instanceof InferenceFailed ? error : inferenceFailed("Deadline"))),
+              withAuditSpan("subscription.release"),
+              Effect.ignore
+            )
+            yield* Effect.try({ try: () => reader.releaseLock(), catch: () => inferenceFailed("Protocol") }).pipe(
+              withAuditSpan("subscription.release"),
+              Effect.ignore
+            )
           })
       )
       const chunks = Stream.unfold(undefined, () =>
@@ -113,19 +133,32 @@ export const inferenceStream = <Request, Event extends { readonly kind: string }
       )
       return Stream.unwrap(
         Effect.gen(function* () {
-          const token = yield* subscription.accessToken().pipe(Effect.mapError(() => inferenceFailed("Authentication")))
+          const token = yield* subscription.accessToken().pipe(
+            withAuditSpan("subscription.credentials", undefined, { provider: "subscription" }),
+            Effect.mapError(
+              (error) =>
+                new InferenceFailed({
+                  reason: Schema.is(InferenceFailed.fields.reason)(error.kind) ? error.kind : "Failed",
+                  diagnostic: { category: "Subscription", reason: error.kind, provider: "subscription" }
+                })
+            )
+          )
           const response = yield* Effect.tryPromise({
             try: (signal) => transport(request, token, AbortSignal.any([signal, controller.signal])),
             catch: () => inferenceFailed("Transport")
           })
           if (!response.ok)
-            yield* Effect.promise(() => response.body?.cancel().catch(() => undefined) ?? Promise.resolve())
+            yield* Effect.tryPromise({
+              try: () => response.body?.cancel() ?? Promise.resolve(),
+              catch: () => inferenceFailed("Transport")
+            }).pipe(withAuditSpan("subscription.release"), Effect.ignore)
           return consume(response, controller, makeParser())
         })
       ).pipe(
         Stream.interruptWhen(
           Effect.sleep(deadlineMillis).pipe(Effect.andThen(Effect.fail(inferenceFailed("Deadline"))))
-        )
+        ),
+        withAuditStreamSpan("subscription.inference", undefined, { provider: "subscription" })
       )
     })
   )

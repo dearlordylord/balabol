@@ -1,6 +1,7 @@
+import { preserveActivityFailure } from "./activity-failure.ts"
 import { Effect, Layer, Schema } from "effect"
 import { SpeechActivity, type ActivityStream, type ActivityWindow } from "./activity.ts"
-import { VoiceFrame, failed } from "./contracts.ts"
+import { VoiceFrame, VoiceFailed, failed } from "./contracts.ts"
 import { activityLayout } from "./activity-protocol.ts"
 import { sileroRuntime, speechActivityModel } from "./activity-runtime.ts"
 import type { ActivityModelRunner, ActivityRuntime } from "./activity-runtime.ts"
@@ -13,6 +14,12 @@ const Result = Schema.Struct({
   state: State
 })
 const maximumInferenceMillis = 12000
+const inferenceFailed = (reason: "ProviderFailure" | "Deadline" | "InvalidOutput", message: string) =>
+  new VoiceFailed({
+    code: "ActivityUnavailable",
+    message,
+    diagnostic: { category: "Media", provider: "silero", reason }
+  })
 const stream = (runner: ActivityModelRunner) =>
   Effect.gen(function* () {
     let busy = false
@@ -57,12 +64,19 @@ const stream = (runner: ActivityModelRunner) =>
               input[speechActivityModel.contextSamples + index] = (audio[index] ?? 0) / activityLayout.pcmScale
             const result = yield* Effect.tryPromise({
               try: (signal) => runner.run(input, state, signal),
-              catch: () => failed("ActivityUnavailable", "Speech activity inference failed")
+              catch: preserveActivityFailure
             }).pipe(
               Effect.timeout(maximumInferenceMillis),
-              Effect.mapError(() => failed("ActivityUnavailable", "Speech activity inference failed or timed out")),
-              Effect.flatMap(Schema.decodeUnknownEffect(Result)),
-              Effect.mapError(() => failed("ActivityUnavailable", "Invalid speech activity inference result"))
+              Effect.mapError((error) =>
+                error instanceof VoiceFailed
+                  ? error
+                  : inferenceFailed("Deadline", "Speech activity inference timed out")
+              ),
+              Effect.flatMap((value) =>
+                Schema.decodeUnknownEffect(Result)(value).pipe(
+                  Effect.mapError(() => inferenceFailed("InvalidOutput", "Invalid speech activity inference result"))
+                )
+              )
             )
             if (generation !== current) return []
             state = result.state

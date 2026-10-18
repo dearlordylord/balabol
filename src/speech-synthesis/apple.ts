@@ -13,7 +13,8 @@ const deadlineMillis = 60000
 const maximumFrames = 1440000
 const chunkFrames = 1200
 const bytesPerFrame = 2
-const failed = (message: string) => new SpeechSynthesisFailed({ message })
+const failed = (message: string) =>
+  new SpeechSynthesisFailed({ message, diagnostic: { category: "Synthesis", reason: "Protocol", provider: "apple" } })
 const json = (text: string) =>
   Effect.try({ try: (): unknown => JSON.parse(text), catch: () => failed("Invalid Apple synthesis JSON") })
 const parseVoices = (text: string) =>

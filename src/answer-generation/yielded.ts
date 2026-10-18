@@ -1,4 +1,6 @@
-import { answerRuntimeFailureMessage } from "./subscription-failure.ts"
+import { auditRuntimeEvent } from "./runtime-audit.ts"
+import { withAuditStreamSpan } from "../operation-audit/index.ts"
+import { answerRuntimeDiagnostic, answerRuntimeFailureMessage } from "./subscription-failure.ts"
 import * as Agent from "@yielded/agent/agent"
 import { AgentPolicy } from "@yielded/agent/agent-policy"
 import * as AgentRuntime from "@yielded/agent/agent-runtime"
@@ -42,14 +44,17 @@ Explain results naturally and concisely, including unavailable knowledge. Keep t
     toolResultBounds: { maxBytes: knowledgeLimits.stateBytes }
   })
 })
-const failed = (message: string) => new AnswerFailed({ message })
+const failed = (
+  message: string,
+  reason: "InvalidRequest" | "InvalidOutput" | "Incomplete" | "Limit" | "Unavailable" = "InvalidRequest"
+) => new AnswerFailed({ message, diagnostic: { category: "Agent", reason } })
 const runtimeFailure = (event: RunEvent): event is Extract<RunEvent, { _tag: "RunFailed" | "ToolCallFailed" }> =>
   event._tag === "RunFailed" ||
   (event._tag === "ToolCallFailed" &&
     (event.failureHandling !== "returned-to-model" || event.errorTag === "KnowledgeUnavailable"))
 const completion = (event: RunCompleted): Effect.Effect<readonly AnswerEvent[], AnswerFailed> =>
   event.finishReason !== "model-stop" || typeof event.output !== "string" || event.output.trim().length === 0
-    ? Effect.fail(failed("Answer did not complete normally"))
+    ? Effect.fail(failed("Answer did not complete normally", "InvalidOutput"))
     : Effect.succeed([{ kind: "Completed" }])
 
 /** Each answer owns disposable tool history; canonical conversation memory remains in unii. */
@@ -76,11 +81,15 @@ export const yieldedAnswerLayer = (
               if (request.model !== "gpt-6.1-sol" || !supported.includes(request.responseLanguage))
                 return Stream.fail(failed("Unsupported answer model or language"))
               const acceptedOperations = yield* acceptedKnowledgeOperations(knowledge, request).pipe(
-                Effect.mapError(() => failed("Accepted knowledge operations are unavailable"))
+                Effect.mapError(() => failed("Accepted knowledge operations are unavailable", "Unavailable"))
               )
-              const handlers = Layer.merge(knowledgeHandlers(knowledge, request), dictionaryHandlers(dictionary))
+              const handlers = Layer.merge(
+                knowledgeHandlers(knowledge, request),
+                dictionaryHandlers(dictionary, request.responseId)
+              )
               let length = 0
               let completed = false
+              let toolCalls = 0
               return AgentRuntime.stream(
                 Agent.withModel(definition, model),
                 JSON.stringify({
@@ -90,11 +99,15 @@ export const yieldedAnswerLayer = (
                   acceptedKnowledgeOperations: acceptedOperations
                 })
               ).pipe(
+                Stream.tap((event) => {
+                  if (event._tag === "ToolCallStarted") toolCalls++
+                  return auditRuntimeEvent(event, request.responseId, toolCalls)
+                }),
                 Stream.mapEffect((event): Effect.Effect<readonly AnswerEvent[], AnswerFailed> => {
                   if (event._tag === "TextDelta") {
                     length += event.text.length
                     return length > maximumOutputCharacters
-                      ? Effect.fail(failed("Answer output limit exceeded"))
+                      ? Effect.fail(failed("Answer output limit exceeded", "Limit"))
                       : Effect.succeed(
                           event.text.length ? [{ kind: "Delta", text: event.text, languageSpans: [] }] : []
                         )
@@ -104,19 +117,34 @@ export const yieldedAnswerLayer = (
                     return completion(event)
                   }
                   if (runtimeFailure(event))
-                    return Effect.fail(failed(answerRuntimeFailureMessage(event.errorTag, event.message)))
+                    return Effect.fail(
+                      new AnswerFailed({
+                        message: answerRuntimeFailureMessage(event.errorTag, event.message),
+                        diagnostic: answerRuntimeDiagnostic(event.errorTag, event.message)
+                      })
+                    )
                   return Effect.succeed([])
                 }),
                 Stream.flatMap(Stream.fromIterable),
                 Stream.concat(
                   Stream.unwrap(
                     Effect.sync(() =>
-                      completed ? Stream.empty : Stream.fail(failed("Answer runtime ended without completion"))
+                      completed
+                        ? Stream.empty
+                        : Stream.fail(failed("Answer runtime ended without completion", "Incomplete"))
                     )
                   )
                 ),
                 Stream.provide(Layer.mergeAll(InMemory.layer, handlers)),
-                Stream.mapError((error) => (error instanceof AnswerFailed ? error : failed("Answer runtime failed")))
+                Stream.mapError((error) =>
+                  error instanceof AnswerFailed
+                    ? error
+                    : new AnswerFailed({
+                        message: "Answer runtime failed",
+                        diagnostic: { category: "Agent", reason: "RuntimeFailure" }
+                      })
+                ),
+                withAuditStreamSpan("agent.run", request.responseId, { provider: "subscription", model: "gpt-6.1-sol" })
               )
             })
           )

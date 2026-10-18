@@ -1,3 +1,4 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { Deferred, Effect } from "effect"
 import type { InputSource, InputReservation } from "../conversation/index.ts"
 import type { VoiceEvent, VoiceFailed, MediaConnection } from "./contracts.ts"
@@ -23,6 +24,11 @@ export const makeSessionAdmissions = (
   })
   const finish = (id: string) =>
     deps.admissions.seal(association(id)).pipe(
+      withAuditSpan("conversation.admission", undefined, {
+        operation: "seal",
+        session: auditIdentity(sessionId),
+        input: auditIdentity(id)
+      }),
       Effect.ignore,
       Effect.andThen(post({ kind: "AdmissionFinished", id })),
       Effect.andThen(
@@ -53,7 +59,14 @@ export const makeSessionAdmissions = (
           },
           source: { capability: source, sequence: sourceSequence }
         })
-        .pipe(Effect.ensuring(Deferred.succeed(registered, undefined)))
+        .pipe(
+          withAuditSpan("conversation.admission", undefined, {
+            operation: "register",
+            session: auditIdentity(sessionId),
+            input: auditIdentity(input.id)
+          }),
+          Effect.ensuring(Deferred.succeed(registered, undefined))
+        )
       reservations.set(input.id, reservation)
       yield* deps.admissions
         .begin({
@@ -62,7 +75,25 @@ export const makeSessionAdmissions = (
           languageSpans: input.languageSpans,
           detectedLanguage: input.detectedLanguage
         })
-        .pipe(Effect.onError(() => deps.conversation.abandonInput(reservation).pipe(Effect.ignore)))
+        .pipe(
+          withAuditSpan("conversation.admission", undefined, {
+            operation: "begin",
+            session: auditIdentity(sessionId),
+            input: auditIdentity(input.id)
+          }),
+          Effect.onError(() =>
+            deps.conversation
+              .abandonInput(reservation)
+              .pipe(
+                withAuditSpan("conversation.admission", undefined, {
+                  operation: "abandon",
+                  session: auditIdentity(sessionId),
+                  input: auditIdentity(input.id)
+                }),
+                Effect.ignore
+              )
+          )
+        )
       yield* post({ kind: "Prepared", input })
     }).pipe(Effect.catch((error) => admissionError(input.id, error, false).pipe(Effect.andThen(finish(input.id)))))
     return workflow.pipe(Effect.uninterruptible, Effect.forkIn(deps.hostScope), Effect.asVoid)
@@ -72,8 +103,24 @@ export const makeSessionAdmissions = (
       const reservation = reservations.get(id)
       if (reservation === undefined) return yield* Effect.die("Missing reserved voice admission")
       if (current().phase === "active")
-        yield* connection()?.publish(event).pipe(Effect.timeout(datagramPublishMillis), Effect.ignore) ?? Effect.void
+        yield* (
+          connection()
+            ?.publish(event)
+            .pipe(
+              Effect.timeout(datagramPublishMillis),
+              withAuditSpan("voice.publish", undefined, {
+                session: auditIdentity(sessionId),
+                input: auditIdentity(id)
+              }),
+              Effect.ignore
+            ) ?? Effect.void
+        )
       yield* deps.conversation.submitInput(reservation).pipe(
+        withAuditSpan("conversation.admission", undefined, {
+          operation: "submit",
+          session: auditIdentity(sessionId),
+          input: auditIdentity(id)
+        }),
         Effect.flatMap((receipt) => post({ kind: "Accepted", id, receipt })),
         Effect.catch((error) => admissionError(id, error, true)),
         Effect.ensuring(finish(id))
@@ -97,6 +144,10 @@ export const makeSessionAdmissions = (
             Effect.flatMap((receipt) =>
               receipt === null ? Effect.void : post({ kind: "Accepted", id: input.id, receipt })
             ),
+            withAuditSpan("voice.resolve", undefined, {
+              session: auditIdentity(sessionId),
+              input: auditIdentity(input.id)
+            }),
             Effect.ignore
           ),
         { discard: true }

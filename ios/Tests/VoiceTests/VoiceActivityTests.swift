@@ -1,4 +1,5 @@
 import XCTest
+import os
 
 @testable import Voice
 
@@ -105,7 +106,8 @@ extension VoiceActivityTests {
         UUID().uuidString)
       defer { try? FileManager.default.removeItem(at: directory) }
       let file = directory.appendingPathComponent("trace.json")
-      let trace = VoiceTransitionTrace()
+      let failures = OSAllocatedUnfairLock(initialState: 0)
+      let trace = VoiceTransitionTrace(reportFailure: { failures.withLock { $0 += 1 } })
       trace.configure(destination: file)
       let response = UUID()
       let target = VoiceOutputIdentity(
@@ -118,16 +120,21 @@ extension VoiceActivityTests {
       XCTAssertEqual(snapshot.dropped, 173)
       XCTAssertLessThanOrEqual(data.count, 131072)
       XCTAssertEqual(snapshot.events.last?.response, VoiceTransitionTrace.hash(response))
-      XCTAssertEqual(snapshot.events.last?.response?.count, 12)
+      XCTAssertEqual(snapshot.events.last?.response?.count, 32)
       XCTAssertFalse(String(decoding: data, as: UTF8.self).contains(response.uuidString))
       XCTAssertEqual(
         VoiceTransitionTrace.hash(
-          try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000000"))), "12b9377cbe7e")
+          try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000000"))),
+        "12b9377cbe7e5c94e8a70d9d23929523")
       // A non-directory destination exercises harmless disk failure, not audio failure.
       trace.configure(destination: file.appendingPathComponent("impossible"))
       trace.record(.speech)
       trace.flush()
       XCTAssertEqual(trace.snapshot.events.last?.cause, .speech)
+      trace.record(.speech)
+      trace.flush()
+      XCTAssertEqual(
+        failures.withLock { $0 }, 1, "Disk failures must be visible once without affecting voice")
     }
   }
 #endif

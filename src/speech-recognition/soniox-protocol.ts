@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { Schema } from "effect"
 import { LanguageTag, type LanguageSpan } from "../language/index.ts"
 import { RecognitionFailed } from "./provider.ts"
@@ -7,6 +8,11 @@ const maximumErrorType = 200
 const maximumSpans = 1000
 const lastOffset = -1
 const billingStatus = 402
+const unauthorized = 401
+const forbidden = 403
+const quotaExceeded = 429
+const minimumHttpStatus = 100
+const maximumHttpStatus = 599
 const Token = Schema.Struct({
   text: Schema.String.check(Schema.isMaxLength(maximumText)),
   is_final: Schema.Boolean,
@@ -23,7 +29,24 @@ export interface SonioxTranscript {
   readonly spans: readonly LanguageSpan[]
 }
 export const emptySonioxTranscript: SonioxTranscript = { text: "", spans: [] }
-export const sonioxFailure = (message: string) => new RecognitionFailed({ reason: "Result", message })
+export const sonioxFailure = (message: string, failure: FailureDiagnostic["reason"] = "Protocol", status?: number) =>
+  new RecognitionFailed({
+    reason: "Result",
+    message,
+    diagnostic: {
+      category: "Recognition",
+      reason: failure,
+      provider: "soniox",
+      ...(status !== undefined && Number.isInteger(status) && status >= minimumHttpStatus && status <= maximumHttpStatus
+        ? { status }
+        : {})
+    }
+  })
+const statusReason = (status: number): FailureDiagnostic["reason"] => {
+  if (status === unauthorized || status === forbidden) return "Authentication"
+  if (status === billingStatus) return "Billing"
+  return status === quotaExceeded ? "Quota" : "Provider"
+}
 const appendSpans = (state: SonioxTranscript, token: typeof Token.Type, text: string) => {
   if (token.language === undefined || token.text.length === 0) return state.spans
   const last = state.spans.at(lastOffset)
@@ -42,17 +65,24 @@ const append = (state: SonioxTranscript, token: typeof Token.Type, languages: re
   if (spans.length > maximumSpans) throw sonioxFailure("Soniox transcript exceeded its language-span limit")
   return { text, spans }
 }
+const rejectProviderError = (packet: typeof SonioxPacket.Type) => {
+  if (packet.error_code === undefined && packet.error_type !== undefined)
+    throw sonioxFailure("Soniox rejected recognition", "Provider")
+  if (packet.error_code !== undefined)
+    throw sonioxFailure(
+      packet.error_code === billingStatus
+        ? "Soniox billing unavailable: check balance and project or organization budget (HTTP 402)"
+        : `Soniox rejected recognition (HTTP ${packet.error_code})`,
+      statusReason(packet.error_code),
+      packet.error_code
+    )
+}
 /** Final tokens append once; non-final tokens replace the current hypothesis. */
 export const reduceSonioxPacket = (state: SonioxTranscript, raw: unknown, languages: readonly string[]) => {
   if (typeof raw !== "string" || Buffer.byteLength(raw) > 1024 * 1024)
     throw sonioxFailure("Invalid or oversized Soniox message")
   const packet = Schema.decodeUnknownSync(SonioxPacket)(JSON.parse(raw))
-  if (packet.error_code !== undefined)
-    throw sonioxFailure(
-      packet.error_code === billingStatus
-        ? "Soniox billing unavailable: check balance and project or organization budget (HTTP 402)"
-        : `Soniox rejected recognition (HTTP ${packet.error_code})`
-    )
+  rejectProviderError(packet)
   const tokens = packet.tokens ?? []
   const committed = tokens
     .filter((token) => token.is_final)

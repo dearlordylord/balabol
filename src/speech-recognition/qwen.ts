@@ -23,7 +23,7 @@ const QwenResult = Schema.Struct({
   language: Schema.NullOr(LanguageTag)
 })
 const failed = (message: string, reason: typeof RecognitionFailureReason.Type) =>
-  new RecognitionFailed({ message, reason })
+  new RecognitionFailed({ message, reason, diagnostic: { category: "Recognition", provider: "qwen", reason } })
 const headerBytes = 44
 const bytesPerSample = 2
 const sampleRateHz = 16000

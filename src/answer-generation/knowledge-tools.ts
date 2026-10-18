@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { createHash } from "node:crypto"
 import { Effect, Schema } from "effect"
 import { Tool, Toolkit } from "effect/ai"
@@ -90,7 +91,8 @@ export const knowledgeTools = Toolkit.make(
 /** Identical decoded changes within one accepted input are one operation, independent of provider call IDs. */
 export const knowledgeHandlers = (knowledge: typeof PersonalKnowledge.Service, request: AnswerRequest) =>
   knowledgeTools.toLayer({
-    inspect_knowledge: () => knowledge.inspect(),
+    inspect_knowledge: () =>
+      knowledge.inspect().pipe(withAuditSpan("agent.tool", request.responseId, { tool: "inspect_knowledge" })),
     apply_knowledge: (change) =>
       Effect.gen(function* () {
         const host = yield* Schema.decodeUnknownEffect(HostContext)({
@@ -107,12 +109,25 @@ export const knowledgeHandlers = (knowledge: typeof PersonalKnowledge.Service, r
           )
         )
         return yield* knowledge.apply(change, host)
-      }),
-    inspect_knowledge_history: (query) => knowledge.history(query),
-    inspect_knowledge_difference: (query) => knowledge.difference(query),
-    query_knowledge: (query) => knowledge.query(query),
-    query_knowledge_neighborhood: (query) => knowledge.neighborhood(query),
-    inspect_knowledge_operations: (query) => knowledge.receipts({ ...query, inputDeliveryId: request.inputDeliveryId })
+      }).pipe(withAuditSpan("agent.tool", request.responseId, { tool: "apply_knowledge" })),
+    inspect_knowledge_history: (query) =>
+      knowledge
+        .history(query)
+        .pipe(withAuditSpan("agent.tool", request.responseId, { tool: "inspect_knowledge_history" })),
+    inspect_knowledge_difference: (query) =>
+      knowledge
+        .difference(query)
+        .pipe(withAuditSpan("agent.tool", request.responseId, { tool: "inspect_knowledge_difference" })),
+    query_knowledge: (query) =>
+      knowledge.query(query).pipe(withAuditSpan("agent.tool", request.responseId, { tool: "query_knowledge" })),
+    query_knowledge_neighborhood: (query) =>
+      knowledge
+        .neighborhood(query)
+        .pipe(withAuditSpan("agent.tool", request.responseId, { tool: "query_knowledge_neighborhood" })),
+    inspect_knowledge_operations: (query) =>
+      knowledge
+        .receipts({ ...query, inputDeliveryId: request.inputDeliveryId })
+        .pipe(withAuditSpan("agent.tool", request.responseId, { tool: "inspect_knowledge_operations" }))
   })
 export const acceptedKnowledgeOperations = (knowledge: typeof PersonalKnowledge.Service, request: AnswerRequest) =>
   knowledge.receipts({ inputDeliveryId: request.inputDeliveryId, limit: knowledgeLimits.receiptCount })

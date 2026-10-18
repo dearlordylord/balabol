@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Schema } from "effect"
 import { Tool, Toolkit } from "effect/ai"
 import {
@@ -19,5 +20,8 @@ export const dictionaryTools = Toolkit.make(
   }).annotate(Tool.Strict, false)
 )
 
-export const dictionaryHandlers = (dictionary: typeof Dictionary.Service) =>
-  dictionaryTools.toLayer({ lookup_dictionary: (query) => dictionary.lookup(query) })
+export const dictionaryHandlers = (dictionary: typeof Dictionary.Service, responseId?: string) =>
+  dictionaryTools.toLayer({
+    lookup_dictionary: (query) =>
+      dictionary.lookup(query).pipe(withAuditSpan("agent.tool", responseId, { tool: "lookup_dictionary" }))
+  })

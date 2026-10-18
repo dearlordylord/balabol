@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { Schema } from "effect"
 import { SpeechSynthesisFailed } from "./provider.ts"
 const maximumBytes = 2880000
@@ -7,6 +8,8 @@ const unauthorized = 401
 const forbidden = 403
 const paymentRequired = 402
 const quotaExceeded = 429
+const minimumHttpStatus = 100
+const maximumHttpStatus = 599
 const base64Group = 4
 const pcmFrameBytes = 2
 const Packet = Schema.Struct({
@@ -18,7 +21,27 @@ const Packet = Schema.Struct({
   error_type: Schema.optionalKey(Schema.String),
   error_message: Schema.optionalKey(Schema.String)
 })
-export const sonioxSynthesisFailure = (message: string) => new SpeechSynthesisFailed({ message })
+export const sonioxSynthesisFailure = (
+  message: string,
+  failure: FailureDiagnostic["reason"] = "Protocol",
+  status?: number
+) =>
+  new SpeechSynthesisFailed({
+    message,
+    diagnostic: {
+      category: "Synthesis",
+      reason: failure,
+      provider: "soniox",
+      ...(status !== undefined && Number.isInteger(status) && status >= minimumHttpStatus && status <= maximumHttpStatus
+        ? { status }
+        : {})
+    }
+  })
+const statusReason = (status: number): FailureDiagnostic["reason"] => {
+  if (status === unauthorized || status === forbidden) return "Authentication"
+  if (status === paymentRequired) return "Billing"
+  return status === quotaExceeded ? "Quota" : "Provider"
+}
 export interface SonioxAudioState {
   readonly bytes: number
   readonly audioEnded: boolean
@@ -47,7 +70,11 @@ const parsePacket = (raw: unknown, identity: string) => {
     throw sonioxSynthesisFailure("Invalid Soniox synthesis packet")
   const packet = Schema.decodeUnknownSync(Packet)(JSON.parse(raw))
   if (packet.error_code !== undefined || packet.error_type !== undefined)
-    throw sonioxSynthesisFailure(providerFailure(packet.error_code ?? 0))
+    throw sonioxSynthesisFailure(
+      providerFailure(packet.error_code ?? 0),
+      statusReason(packet.error_code ?? 0),
+      packet.error_code
+    )
   if (packet.stream_id !== identity) throw sonioxSynthesisFailure("Unexpected Soniox synthesis identity")
   return packet
 }

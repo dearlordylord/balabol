@@ -1,5 +1,5 @@
 import { voiceAdmissionsFixture, startVoiceRequest } from "./voice-admission-fixture.ts"
-import { Effect, Layer, Queue } from "effect"
+import { Deferred, Effect, Layer, Queue, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   Voice,
@@ -156,24 +156,49 @@ describe("voice input uses the sole durable conversation", () => {
         }),
       script("   ")
     ))
-  it("mute and end cancel unfinalized recognition and fence late audio", () =>
-    runVoice(
+  it("mute preserves pending recognition; end cancels it and fences late audio", () => {
+    const finalWaiting = Deferred.makeUnsafe<void>()
+    const allowFinal = Deferred.makeUnsafe<void>()
+    const cancelled = Deferred.makeUnsafe<void>()
+    const provider = Layer.effect(
+      SpeechRecognition,
+      Effect.map(SpeechRecognition, (recognition) =>
+        SpeechRecognition.of({
+          ...recognition,
+          recognize: (request) =>
+            recognition.recognize(request).pipe(
+              Stream.tap((event) =>
+                event.kind === "Final"
+                  ? Deferred.succeed(finalWaiting, undefined).pipe(Effect.andThen(Deferred.await(allowFinal)))
+                  : Effect.void
+              ),
+              Stream.ensuring(Deferred.succeed(cancelled, undefined))
+            )
+        })
+      )
+    ).pipe(Layer.provide(script("Canceled")))
+    return runVoice(
       (fixture) =>
         Effect.gen(function* () {
           const voice = yield* Voice
           const conversation = yield* Conversation
           const joined = yield* voice.start(startVoiceRequest())
           yield* fixture.classifiedSegment
+          yield* Deferred.await(finalWaiting).pipe(Effect.timeout("2 seconds"))
           yield* voice.mute(joined.sessionId, true)
           yield* fixture.segment
+          expect(yield* Deferred.isDone(cancelled)).toBe(false)
           yield* voice.end(joined.sessionId)
-          yield* Effect.sleep(150)
+          yield* Deferred.await(cancelled).pipe(Effect.timeout("2 seconds"))
+          yield* Deferred.succeed(allowFinal, undefined)
+          yield* fixture.segment
           expect((yield* conversation.page({ limit: 100 })).messages).toEqual([])
           expect((yield* voice.snapshot(joined.sessionId, 0)).status).toBe("ended")
           expect((yield* Effect.flip(voice.snapshot("invalid", 0))).code).toBe("InvalidSession")
         }),
-      script("Canceled", 50)
-    ))
+      provider
+    )
+  })
 })
 it("queues recognition chunks without treating three pauses as overload and retains two recent session controls", () =>
   runVoice(

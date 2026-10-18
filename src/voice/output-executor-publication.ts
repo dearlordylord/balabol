@@ -1,4 +1,4 @@
-import { withAuditSpan } from "../operation-audit/index.ts"
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { Clock, Deferred, Effect, Fiber, Schema, Stream } from "effect"
 import { SynthesisCapabilities } from "../speech-synthesis/index.ts"
@@ -37,7 +37,11 @@ const register = (resources: OutputResources, command: Extract<Command, { kind: 
     "Register",
     command.operation,
     Effect.gen(function* () {
-      const exit = yield* acquire.pipe(Effect.interruptible, Effect.exit)
+      const exit = yield* acquire.pipe(
+        withAuditSpan("voice.registration", undefined, { session: auditIdentity(deps.sessionId) }),
+        Effect.interruptible,
+        Effect.exit
+      )
       if (exit._tag === "Failure") {
         const outcome = resources.outcome(exit)
         const error =
@@ -61,6 +65,7 @@ const register = (resources: OutputResources, command: Extract<Command, { kind: 
       entry.fiber = yield* Effect.gen(function* () {
         const observed = yield* subscription.updates.pipe(
           Stream.runForEach((update) => resources.post({ kind: "DeliveryUpdate", update, outputEpoch: randomUUID() })),
+          withAuditSpan("voice.subscription", undefined, { session: auditIdentity(deps.sessionId) }),
           Effect.interruptible,
           Effect.exit
         )
@@ -168,7 +173,13 @@ const close = (resources: OutputResources, command: Extract<Command, { kind: "Cl
     operation,
     Effect.gen(function* () {
       if (command.delayMillis > 0) yield* Effect.sleep(command.delayMillis)
-      const exit = yield* Effect.suspend(() => entry.handle?.close() ?? Effect.void).pipe(Effect.exit)
+      const exit = yield* Effect.suspend(() => entry.handle?.close() ?? Effect.void).pipe(
+        withAuditSpan("voice.release", entry.key.ticket.responseId, {
+          resource: "publication",
+          session: auditIdentity(resources.deps.sessionId)
+        }),
+        Effect.exit
+      )
       const outcome = resources.outcome(exit)
       if (outcome.kind !== "Success") {
         const error =

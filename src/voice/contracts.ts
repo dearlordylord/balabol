@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { FailureReason } from "../delivery-failure/index.ts"
 import { Context, Schema, SchemaGetter } from "effect"
 import type { SynthesisAudio } from "../speech-synthesis/index.ts"
@@ -201,7 +202,8 @@ export const VoiceErrorResponse = Schema.Struct({
 })
 export class VoiceFailed extends Schema.TaggedError<VoiceFailed>()("VoiceFailed", {
   code: Schema.String,
-  message: Schema.String
+  message: Schema.String,
+  diagnostic: Schema.optionalKey(FailureDiagnostic)
 }) {}
 export const failed = (code: string, message: string) => new VoiceFailed({ code, message })
 export const VoiceFrame = Schema.Struct({

@@ -78,6 +78,8 @@ import os
     let status: String?
     let failureKind: String?
     let backendCode: String?
+    let httpStatus: Int?
+    let networkCode: Int?
     let capturedAt: Double?
     let classifiedAt: Double?
   }
@@ -97,12 +99,19 @@ import os
       var destination: URL?
       var scheduled = false
       var revision = 0
+      var reportedFailure = false
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let writer = DispatchQueue(label: "balabol.voice.transition-trace", qos: .utility)
+    private let reportFailure: @Sendable () -> Void
+    init(
+      reportFailure: @escaping @Sendable () -> Void = {
+        NSLog("Balabol voice transition diagnostics could not be persisted")
+      }
+    ) { self.reportFailure = reportFailure }
     static func hash(_ value: UUID) -> String {
       SHA256.hash(data: Data(value.uuidString.lowercased().utf8))
-        .map { String(format: "%02x", $0) }.joined().prefix(12).description
+        .map { String(format: "%02x", $0) }.joined().prefix(32).description
     }
     func configure(destination: URL?) {
       state.withLock { $0.destination = destination }
@@ -112,7 +121,8 @@ import os
       _ cause: VoiceTraceCause, target: VoiceOutputIdentity? = nil,
       microphone: UUID? = nil, status: String? = nil,
       capturedAt: Double? = nil, classifiedAt: Double? = nil,
-      failure: VoiceFailure? = nil, session: UUID? = nil
+      failure: VoiceFailure? = nil, session: UUID? = nil,
+      httpStatus: Int? = nil, networkCode: Int? = nil
     ) {
       let event = VoiceTraceRecord(
         cause: cause, uptime: ProcessInfo.processInfo.systemUptime,
@@ -122,6 +132,7 @@ import os
         outputEpoch: target.map { Self.hash($0.outputEpoch) },
         microphoneEpoch: microphone.map(Self.hash), status: status.map { String($0.prefix(32)) },
         failureKind: failure?.traceKind, backendCode: failure?.traceBackendCode,
+        httpStatus: httpStatus, networkCode: networkCode,
         capturedAt: capturedAt, classifiedAt: classifiedAt)
       let schedule = state.withLock { value in
         guard value.destination != nil else { return false }
@@ -142,16 +153,29 @@ import os
         let (snapshot, destination, revision) = state.withLock {
           ($0.snapshot, $0.destination, $0.revision)
         }
-        if let destination, let data = try? JSONEncoder().encode(snapshot), data.count <= 131072 {
-          try? FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-          #if os(iOS)
-            try? data.write(
-              to: destination,
-              options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-          #else
-            try? data.write(to: destination, options: .atomic)
-          #endif
+        if let destination {
+          do {
+            let data = try JSONEncoder().encode(snapshot)
+            guard data.count <= 131072 else { throw CocoaError(.fileWriteOutOfSpace) }
+            try FileManager.default.createDirectory(
+              at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            #if os(iOS)
+              try data.write(
+                to: destination,
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            #else
+              try data.write(to: destination, options: .atomic)
+            #endif
+            try FileManager.default.setAttributes(
+              [.posixPermissions: 0o600], ofItemAtPath: destination.path)
+          } catch {
+            let report = state.withLock { value in
+              guard !value.reportedFailure else { return false }
+              value.reportedFailure = true
+              return true
+            }
+            if report { reportFailure() }
+          }
         }
         let done = state.withLock { value in
           guard value.revision == revision else { return false }

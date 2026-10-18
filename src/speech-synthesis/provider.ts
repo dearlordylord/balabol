@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { FailureReason } from "../delivery-failure/index.ts"
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { LanguageTag, LanguageTags } from "../language/index.ts"
@@ -51,6 +52,7 @@ export const SynthesisCapabilities = Schema.Struct({
 })
 export type SynthesisCapabilities = typeof SynthesisCapabilities.Type
 export class SpeechSynthesisFailed extends Schema.TaggedError<SpeechSynthesisFailed>()("SpeechSynthesisFailed", {
+  diagnostic: Schema.optionalKey(FailureDiagnostic),
   message: Schema.String,
   reason: Schema.optionalKey(FailureReason)
 }) {}

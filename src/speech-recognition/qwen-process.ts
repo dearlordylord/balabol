@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { spawn } from "node:child_process"
 import { Effect } from "effect"
 import { RecognitionFailed } from "./provider.ts"
@@ -5,12 +6,18 @@ import { RecognitionFailed } from "./provider.ts"
 const maximumOutputBytes = 1024 * 1024
 const terminationGraceMillis = 250
 const killAcknowledgementMillis = 1000
-const failed = () => new RecognitionFailed({ message: "Local recognition process failed", reason: "Process" })
+const failed = (stage: "ProcessStart" | "ProcessExit" | "ProcessOutputLimit") =>
+  new RecognitionFailed({
+    message: "Local recognition process failed",
+    reason: "Process",
+    diagnostic: { category: "Recognition", reason: stage, provider: "qwen" }
+  })
 // Internal process handle: Node owns this in-memory lifecycle, not a serialized boundary.
 const start = (executable: string, args: readonly string[]) => {
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], shell: false })
   let bytes = 0
   let overflow = false
+  let startFailure = false
   const output: Buffer[] = []
   const collect = (chunk: Buffer) => {
     bytes += chunk.byteLength
@@ -22,14 +29,22 @@ const start = (executable: string, args: readonly string[]) => {
   child.stdout.on("data", collect)
   child.stderr.on("data", collect)
   const closed = new Promise<number | null>((resolve) => {
-    child.once("error", () => resolve(null))
+    child.once("error", () => {
+      startFailure = true
+      resolve(null)
+    })
     child.once("close", resolve)
   })
   const exited = new Promise<void>((resolve) => {
     child.once("error", () => resolve())
     child.once("exit", () => resolve())
   })
-  return { child, closed, exited, result: () => ({ overflow, text: Buffer.concat(output).toString("utf8") }) }
+  return {
+    child,
+    closed,
+    exited,
+    result: () => ({ overflow, startFailure, text: Buffer.concat(output).toString("utf8") })
+  }
 }
 const stop = (handle: ReturnType<typeof start>) =>
   Effect.gen(function* () {
@@ -45,9 +60,13 @@ const stop = (handle: ReturnType<typeof start>) =>
   })
 export const runQwenProcess = (executable: string, args: readonly string[]) =>
   Effect.gen(function* () {
-    const handle = yield* Effect.acquireRelease(Effect.try({ try: () => start(executable, args), catch: failed }), stop)
+    const handle = yield* Effect.acquireRelease(
+      Effect.try({ try: () => start(executable, args), catch: () => failed("ProcessStart") }),
+      stop
+    )
     const code = yield* Effect.promise(() => handle.closed)
     const result = handle.result()
-    if (code !== 0 || result.overflow) return yield* failed()
+    if (result.startFailure) return yield* failed("ProcessStart")
+    if (code !== 0 || result.overflow) return yield* failed(result.overflow ? "ProcessOutputLimit" : "ProcessExit")
     return result.text
-  }).pipe(Effect.scoped)
+  }).pipe(Effect.scoped, withAuditSpan("recognition.process", undefined, { provider: "qwen" }))

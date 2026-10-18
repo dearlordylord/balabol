@@ -29,7 +29,7 @@ const synthesize = (
         const socket = yield* Effect.acquireRelease(
           Effect.try({
             try: () => factory(endpoint, ["soniox-api-key", Redacted.value(settings.apiKey)]),
-            catch: () => sonioxSynthesisFailure("Soniox synthesis connection could not be created")
+            catch: () => sonioxSynthesisFailure("Soniox synthesis connection could not be created", "Transport")
           }),
           (connection) =>
             Effect.sync(() => {
@@ -55,7 +55,9 @@ const synthesize = (
           }
         }
         yield* Effect.sleep(deadlineMillis).pipe(
-          Effect.andThen(Effect.sync(() => fail(sonioxSynthesisFailure("Soniox synthesis deadline exceeded")))),
+          Effect.andThen(
+            Effect.sync(() => fail(sonioxSynthesisFailure("Soniox synthesis deadline exceeded", "Deadline")))
+          ),
           Effect.forkScoped
         )
         socket.onopen = () => {
@@ -74,11 +76,12 @@ const synthesize = (
             )
             socket.send(JSON.stringify({ stream_id: request.phraseId, text: request.text, text_end: true }))
           } catch {
-            fail(sonioxSynthesisFailure("Soniox synthesis text submission failed"))
+            fail(sonioxSynthesisFailure("Soniox synthesis text submission failed", "Transport"))
           }
         }
         const publish = (event: SynthesisEvent) => {
-          if (!Queue.offerUnsafe(queue, event)) throw sonioxSynthesisFailure("Soniox synthesis event capacity exceeded")
+          if (!Queue.offerUnsafe(queue, event))
+            throw sonioxSynthesisFailure("Soniox synthesis event capacity exceeded", "Limit")
         }
         socket.onmessage = (message) => {
           if (terminal) return
@@ -117,8 +120,8 @@ const synthesize = (
             )
           }
         }
-        socket.onerror = () => fail(sonioxSynthesisFailure("Soniox synthesis network connection failed"))
-        socket.onclose = () => fail(sonioxSynthesisFailure("Soniox closed before synthesis finished"))
+        socket.onerror = () => fail(sonioxSynthesisFailure("Soniox synthesis network connection failed", "Transport"))
+        socket.onclose = () => fail(sonioxSynthesisFailure("Soniox closed before synthesis finished", "Incomplete"))
       }),
     { bufferSize: 1201 }
   )
@@ -130,7 +133,9 @@ export const sonioxSynthesisLayer = (
     SpeechSynthesis,
     Effect.gen(function* () {
       const config = yield* Schema.decodeUnknownEffect(SonioxSynthesisSettings)(settings).pipe(
-        Effect.mapError(() => sonioxSynthesisFailure("Soniox requires an API key and synthesis voice"))
+        Effect.mapError(() =>
+          sonioxSynthesisFailure("Soniox requires an API key and synthesis voice", "InvalidRequest")
+        )
       )
       return SpeechSynthesis.of({
         capabilities: {
@@ -146,11 +151,11 @@ export const sonioxSynthesisLayer = (
         synthesize: (raw) =>
           Stream.unwrap(
             Schema.decodeUnknownEffect(SynthesisRequest)(raw).pipe(
-              Effect.mapError(() => sonioxSynthesisFailure("Invalid Soniox synthesis request")),
+              Effect.mapError(() => sonioxSynthesisFailure("Invalid Soniox synthesis request", "InvalidRequest")),
               Effect.flatMap((request) =>
                 ["ru", "fr", "en", "ja"].includes(request.language)
                   ? Effect.succeed(synthesize(request, config, factory))
-                  : Effect.fail(sonioxSynthesisFailure("Unsupported Soniox synthesis language"))
+                  : Effect.fail(sonioxSynthesisFailure("Unsupported Soniox synthesis language", "UnsupportedLanguage"))
               )
             )
           )

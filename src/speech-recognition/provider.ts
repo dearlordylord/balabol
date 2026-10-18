@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { LanguageTag, LanguageTags, LanguageSpans, validLanguageSpans } from "../language/index.ts"
 
@@ -62,6 +63,7 @@ export const RecognitionFailureReason = Schema.Literals([
   "Other"
 ])
 export class RecognitionFailed extends Schema.TaggedError<RecognitionFailed>()("RecognitionFailed", {
+  diagnostic: Schema.optionalKey(FailureDiagnostic),
   reason: Schema.optionalKey(RecognitionFailureReason),
   message: Schema.String
 }) {}

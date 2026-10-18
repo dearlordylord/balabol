@@ -16,37 +16,44 @@
       "name": "conversation",
       "root": "src/conversation",
       "entry": "index.ts",
-      "dependencies": ["memory", "answer-generation", "language", "operation-audit"]
+      "dependencies": ["memory", "answer-generation", "language", "operation-audit", "failure-diagnostic"]
     },
     {
       "name": "memory",
       "root": "src/memory",
       "entry": "index.ts",
-      "dependencies": ["summary-generation", "language", "delivery-failure"]
+      "dependencies": ["summary-generation", "language", "delivery-failure", "operation-audit"]
     },
     {
       "name": "answer-generation",
       "root": "src/answer-generation",
       "entry": "index.ts",
-      "dependencies": ["language", "subscription", "personal-knowledge", "dictionary"]
+      "dependencies": [
+        "language",
+        "subscription",
+        "personal-knowledge",
+        "dictionary",
+        "operation-audit",
+        "failure-diagnostic"
+      ]
     },
     {
       "name": "summary-generation",
       "root": "src/summary-generation",
       "entry": "index.ts",
-      "dependencies": ["subscription"]
+      "dependencies": ["subscription", "failure-diagnostic"]
     },
     {
       "name": "speech-recognition",
       "root": "src/speech-recognition",
       "entry": "index.ts",
-      "dependencies": ["language"]
+      "dependencies": ["language", "failure-diagnostic", "operation-audit"]
     },
     {
       "name": "speech-synthesis",
       "root": "src/speech-synthesis",
       "entry": "index.ts",
-      "dependencies": ["language", "delivery-failure"]
+      "dependencies": ["language", "delivery-failure", "failure-diagnostic", "operation-audit"]
     },
     {
       "name": "voice",
@@ -58,14 +65,15 @@
         "speech-synthesis",
         "language",
         "delivery-failure",
-        "operation-audit"
+        "operation-audit",
+        "failure-diagnostic"
       ]
     },
     {
       "name": "subscription",
       "root": "src/subscription",
       "entry": "index.ts",
-      "dependencies": []
+      "dependencies": ["operation-audit", "failure-diagnostic"]
     },
     {
       "name": "bootstrap",
@@ -90,17 +98,23 @@
       "name": "delivery-failure",
       "root": "src/delivery-failure",
       "entry": "index.ts",
-      "dependencies": []
+      "dependencies": ["failure-diagnostic"]
     },
     {
       "name": "operation-audit",
       "root": "src/operation-audit",
       "entry": "index.ts",
-      "dependencies": ["delivery-failure"]
+      "dependencies": ["delivery-failure", "failure-diagnostic"]
     },
     {
       "name": "dictionary",
       "root": "src/dictionary",
+      "entry": "index.ts",
+      "dependencies": []
+    },
+    {
+      "name": "failure-diagnostic",
+      "root": "src/failure-diagnostic",
       "entry": "index.ts",
       "dependencies": []
     }

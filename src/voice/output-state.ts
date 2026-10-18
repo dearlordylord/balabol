@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import type { DeliveryFailure } from "../delivery-failure/index.ts"
 import type { DeliveryTicket, ResponseTarget } from "../conversation/index.ts"
 import type { AudioManifest, VoiceOutput } from "./contracts.ts"
@@ -7,6 +8,7 @@ export interface OutputKey {
   readonly outputEpoch: string
 }
 export interface OutputError {
+  readonly diagnostic?: FailureDiagnostic
   readonly code: string
   readonly message: string
   readonly reason?: NonNullable<DeliveryFailure["reason"]>

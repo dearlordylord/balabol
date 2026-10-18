@@ -19,13 +19,28 @@ export const subscriptionSummaryLayer = Layer.effect(
       summarize: (raw) =>
         Effect.gen(function* () {
           const request = yield* Schema.decodeUnknownEffect(SummaryRequest)(raw).pipe(
-            Effect.mapError(() => new SummaryFailed({ retryable: false, message: "Invalid summary request" }))
+            Effect.mapError(
+              () =>
+                new SummaryFailed({
+                  retryable: false,
+                  message: "Invalid summary request",
+                  diagnostic: { category: "Memory", reason: "InvalidRequest" }
+                })
+            )
           )
           if (request.model !== "gpt-6-luna")
-            return yield* new SummaryFailed({ retryable: false, message: "Unsupported subscription summary model" })
+            return yield* new SummaryFailed({
+              retryable: false,
+              message: "Unsupported subscription summary model",
+              diagnostic: { category: "Memory", reason: "InvalidRequest" }
+            })
           const sourceKinds = request.sourceKinds
           if (sourceKinds === undefined)
-            return yield* new SummaryFailed({ retryable: false, message: "Trusted source provenance is required" })
+            return yield* new SummaryFailed({
+              retryable: false,
+              message: "Trusted source provenance is required",
+              diagnostic: { category: "Memory", reason: "InvalidRequest" }
+            })
           let text = ""
           let completed = false
           yield* inference
@@ -48,7 +63,11 @@ export const subscriptionSummaryLayer = Layer.effect(
               Stream.runForEach((event) =>
                 Effect.gen(function* () {
                   if (completed)
-                    return yield* new SummaryFailed({ retryable: false, message: "Summary emitted after completion" })
+                    return yield* new SummaryFailed({
+                      retryable: false,
+                      message: "Summary emitted after completion",
+                      diagnostic: { category: "Memory", reason: "Protocol" }
+                    })
                   if (event.kind === "Completed") completed = true
                   else text += event.text
                 })
@@ -57,14 +76,30 @@ export const subscriptionSummaryLayer = Layer.effect(
                 (error) =>
                   new SummaryFailed({
                     retryable: false,
-                    message: `Subscription summary ${"reason" in error ? error.reason : "Protocol"}`
+                    message: `Subscription summary ${"reason" in error ? error.reason : "Protocol"}`,
+                    diagnostic: error.diagnostic ?? {
+                      category: "Subscription",
+                      reason: "Protocol",
+                      provider: "subscription"
+                    }
                   })
               )
             )
           if (!completed || !text.trim())
-            return yield* new SummaryFailed({ retryable: false, message: "Summary did not complete with text" })
+            return yield* new SummaryFailed({
+              retryable: false,
+              message: "Summary did not complete with text",
+              diagnostic: { category: "Memory", reason: "Incomplete" }
+            })
           return yield* Schema.encodeEffect(SummaryText)(completedText(sourceKinds, text.trim())).pipe(
-            Effect.mapError(() => new SummaryFailed({ retryable: false, message: "Invalid completed summary" }))
+            Effect.mapError(
+              () =>
+                new SummaryFailed({
+                  retryable: false,
+                  message: "Invalid completed summary",
+                  diagnostic: { category: "Memory", reason: "InvalidOutput" }
+                })
+            )
           )
         })
     })

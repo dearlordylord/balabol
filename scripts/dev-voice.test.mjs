@@ -148,3 +148,81 @@ test("Soniox synthesis requires a key and no installed Apple voices or helper", 
   assert.doesNotThrow(() => checkLocalResources({ ...environment, SONIOX_API_KEY: "fixture-only" }));
   assert.deepEqual(localRequirements(environment), []);
 });
+
+test("backend stderr preserves audit health and suppresses secrets across chunks and huge lines", async () => {
+  const { backendDiagnostics, backendExitDiagnostic } = await import("./backend-diagnostics.mjs");
+  const messages = [];
+  const sink = backendDiagnostics((message) => messages.push(message));
+  for (const part of [
+    "Operation audit wri",
+    "te failed\n",
+    "secret-token\n",
+    "x".repeat(100000),
+    "\n",
+    "Operation audit queue overflow\n",
+  ])
+    sink.write(Buffer.from(part));
+  sink.finish();
+  assert.deepEqual(messages, [
+    "Operation audit write failed",
+    "Voice backend emitted an unclassified diagnostic; raw contents suppressed.",
+    "Operation audit queue overflow",
+  ]);
+  assert.equal(backendExitDiagnostic(null, "SIGKILL"), "Voice backend exited: code=none, signal=SIGKILL.");
+  assert.equal(backendExitDiagnostic(1, "private-value"), "Voice backend exited: code=1, signal=other.");
+});
+
+test("backend diagnostics are bounded and retain final shutdown and bootstrap categories", async () => {
+  const { backendDiagnostics } = await import("./backend-diagnostics.mjs");
+  const messages = [];
+  const sink = backendDiagnostics((message) => messages.push(message));
+  sink.write(
+    Buffer.from(
+      "Balabol backend configuration failed\nBalabol backend runtime failed\nOperation audit record too large\nOperation audit shutdown deadline exceeded; pending=7",
+    ),
+  );
+  sink.finish();
+  assert.deepEqual(messages, [
+    "Balabol backend configuration failed",
+    "Balabol backend runtime failed",
+    "Operation audit record too large",
+    "Operation audit shutdown deadline exceeded; pending=7",
+  ]);
+  for (let index = 0; index < 1000; index += 1) sink.write(Buffer.from("Operation audit write failed\n"));
+  assert.equal(messages.length, 129);
+  assert.equal(messages.at(-1), "Voice backend diagnostics suppressed after 128 records.");
+});
+
+test("backend pipe retains shutdown evidence before process close without exposing raw stderr", async () => {
+  const { spawn } = await import("node:child_process");
+  const { once } = await import("node:events");
+  const { backendDiagnostics, backendExitDiagnostic } = await import("./backend-diagnostics.mjs");
+  const messages = [];
+  const sink = backendDiagnostics((message) => messages.push(message));
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.stderr.write('private-secret\\nOperation audit write failed\\n'); process.exitCode = 7"],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  child.stderr.on("data", (data) => sink.write(data));
+  child.stderr.once("end", () => sink.finish());
+  const [code, signal] = await once(child, "close");
+  assert.deepEqual(messages, [
+    "Voice backend emitted an unclassified diagnostic; raw contents suppressed.",
+    "Operation audit write failed",
+  ]);
+  assert.equal(backendExitDiagnostic(code, signal), "Voice backend exited: code=7, signal=none.");
+});
+
+test("a throwing diagnostics reporter cannot crash or prevent draining child stderr", async () => {
+  const { backendDiagnostics } = await import("./backend-diagnostics.mjs");
+  let attempts = 0;
+  const sink = backendDiagnostics(() => {
+    attempts += 1;
+    throw new Error("reporter unavailable");
+  });
+  assert.doesNotThrow(() => sink.write(Buffer.from("Operation audit write failed\n")));
+  assert.doesNotThrow(() => sink.write(Buffer.from("Balabol backend runtime failed")));
+  assert.doesNotThrow(() => sink.finish());
+  assert.equal(attempts, 2);
+});

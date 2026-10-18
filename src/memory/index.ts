@@ -1,6 +1,7 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import type { CompressionRequest } from "@firfi/unii"
 import { Clock, Context, Effect, Layer, Schema, Semaphore } from "effect"
-import { SummaryGeneration, SummaryRequest, fakeSummaryLayer } from "../summary-generation/index.ts"
+import { SummaryGeneration, SummaryRequest, SummaryFailed, fakeSummaryLayer } from "../summary-generation/index.ts"
 import {
   StorageUnavailable,
   defaultMemorySettings,
@@ -43,7 +44,18 @@ export const configuredUniiLayer = (settings: MemorySettings = defaultMemorySett
       const backend = (request: CompressionRequest, signal: AbortSignal) =>
         Effect.runPromiseWith(context)(
           Schema.decodeUnknownEffect(SummaryRequest)({ ...request, model: settings.summaryModel }).pipe(
+            Effect.mapError(
+              () =>
+                new SummaryFailed({
+                  message: "Invalid memory compression request",
+                  diagnostic: { category: "Memory", reason: "InvalidRequest" }
+                })
+            ),
             Effect.flatMap(summary.summarize),
+            withAuditSpan("memory.summary", undefined, {
+              job: auditIdentity(request.jobId),
+              attempt: auditIdentity(request.attemptId)
+            }),
             Effect.result
           ),
           { signal }
@@ -68,6 +80,7 @@ export const configuredUniiLayer = (settings: MemorySettings = defaultMemorySett
           // Background ticks never reopen a failed store in an unbounded retry loop.
           Effect.tryPromise({ try: () => host.pump(), catch: unavailable }).pipe(
             semaphore.withPermits(1),
+            withAuditSpan("memory.pump"),
             Effect.catch(() => Effect.void),
             Effect.andThen(Effect.sleep(pumpIntervalMillis))
           )

@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { chmod, mkdtemp, open, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -25,7 +26,11 @@ export const AppleReceipt = Schema.Struct({
   completed: Schema.Literal(true)
 }).check(Schema.makeFilter((receipt) => receipt.frames / receipt.sampleRate <= maximumDurationSeconds))
 const maximumBytes = 2880000
-const failed = () => new SpeechSynthesisFailed({ message: "Apple synthesis file operation failed" })
+const failed = () =>
+  new SpeechSynthesisFailed({
+    message: "Apple synthesis file operation failed",
+    diagnostic: { category: "Synthesis", reason: "File", provider: "apple" }
+  })
 const io = <A>(operation: () => Promise<A>) => Effect.tryPromise({ try: operation, catch: failed })
 // Resource port; serialized native JSON and PCM are parsed in the provider.
 export interface AppleNative {
@@ -63,10 +68,18 @@ export const appleNative: AppleNative = {
     ).pipe(
       Effect.mapError((error) =>
         error.reason === undefined || error.reason === "NativeProcessFailed"
-          ? new SpeechSynthesisFailed({ message: "Apple pronunciation planning failed", reason: "SynthesisPlanFailed" })
+          ? new SpeechSynthesisFailed({
+              message: "Apple pronunciation planning failed",
+              reason: "SynthesisPlanFailed",
+              diagnostic: error.diagnostic ?? {
+                category: "Synthesis",
+                reason: "SynthesisPlanFailed",
+                provider: "apple"
+              }
+            })
           : error
       ),
-      Effect.withSpan("speech.plan")
+      withAuditSpan("speech.plan")
     ),
   render: (settings, text, voice) =>
     Effect.gen(function* () {
@@ -86,10 +99,18 @@ export const appleNative: AppleNative = {
       ).pipe(
         Effect.mapError((error) =>
           error.reason === undefined || error.reason === "NativeProcessFailed"
-            ? new SpeechSynthesisFailed({ message: "Apple speech rendering failed", reason: "SynthesisRenderFailed" })
+            ? new SpeechSynthesisFailed({
+                message: "Apple speech rendering failed",
+                reason: "SynthesisRenderFailed",
+                diagnostic: error.diagnostic ?? {
+                  category: "Synthesis",
+                  reason: "SynthesisRenderFailed",
+                  provider: "apple"
+                }
+              })
             : error
         ),
-        Effect.withSpan("speech.render")
+        withAuditSpan("speech.render")
       )
       yield* runAppleProcess(settings.ffmpegExecutable, [
         "-nostdin",
@@ -107,9 +128,18 @@ export const appleNative: AppleNative = {
         pcm
       ]).pipe(
         Effect.mapError(
-          () => new SpeechSynthesisFailed({ message: "Apple audio conversion failed", reason: "AudioConversionFailed" })
+          (error) =>
+            new SpeechSynthesisFailed({
+              message: "Apple audio conversion failed",
+              reason: "AudioConversionFailed",
+              diagnostic: error.diagnostic ?? {
+                category: "Synthesis",
+                reason: "AudioConversionFailed",
+                provider: "apple"
+              }
+            })
         ),
-        Effect.withSpan("speech.convert")
+        withAuditSpan("speech.convert")
       )
       return { receipt, pcm: yield* readPcm(pcm) }
     })

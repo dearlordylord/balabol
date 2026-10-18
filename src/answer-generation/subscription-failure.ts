@@ -1,3 +1,5 @@
+import { Schema } from "effect"
+import type { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { AiError } from "effect/ai"
 import { InferenceFailed } from "../subscription/index.ts"
 const descriptions = {
@@ -41,3 +43,27 @@ export const answerRuntimeFailureMessage = (tag: string, message: string) =>
   Object.values(descriptions).find((description) => message.includes(description)) ??
   policyFailureMessage(tag, message) ??
   `Answer runtime or knowledge tool failed (${tag})`
+
+/** SDK strips typed policy errors; only exact pinned local templates recover classification. */
+export const answerRuntimeDiagnostic = (tag: string, message: string): FailureDiagnostic => {
+  if (tag === "AgentPolicyError") return policyDiagnostic(message)
+  if (tag === "KnowledgeUnavailable") return { category: "Knowledge", reason: "Unavailable" }
+  if (tag === "DictionaryUnavailable") return { category: "Dictionary", reason: "Unavailable" }
+  const subscription = Object.entries(descriptions).find(([, description]) => message.includes(description))
+  if (subscription !== undefined) return subscriptionDiagnostic(subscription[0])
+  return { category: "Agent", reason: tag === "ToolCallError" ? "ToolFailure" : "RuntimeFailure" }
+}
+const subscriptionDiagnostic = (key: string): FailureDiagnostic => ({
+  category: "Subscription",
+  provider: "subscription",
+  reason: Schema.is(InferenceFailed.fields.reason)(key) ? key : "Provider"
+})
+const durationPolicyIndex = 2
+const policyReasons = ["Turns", "ToolCalls", "Duration", "RepeatedToolFailures", "Tokens", "Cost"] as const
+const policyDiagnostic = (message: string): FailureDiagnostic => {
+  const index = policyDescriptions.findIndex(([pattern]) => pattern.test(message))
+  const reason = policyReasons[index] ?? "UnknownPolicy"
+  // Duration has units; do not misrepresent its textual number as a unitless limit.
+  const number = index < 0 || index === durationPolicyIndex ? undefined : message.match(/\b\d+\b/u)?.[0]
+  return { category: "Agent", reason, ...(number === undefined ? {} : { limit: Number(number) }) }
+}

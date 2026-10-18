@@ -1,3 +1,4 @@
+import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { Cause, Deferred, Effect, Exit, Option, Schema, Stream } from "effect"
 import type { Fiber, Scope } from "effect"
@@ -75,7 +76,14 @@ export const makeRecognitionExecutor = (
     })
   const run = (job: RecognitionJob, execution: Execution) =>
     Effect.gen(function* () {
-      const exit = yield* recognize(job).pipe(Effect.withSpan("voice.recognition"), Effect.interruptible, Effect.exit)
+      const exit = yield* recognize(job).pipe(
+        withAuditSpan("voice.recognition", undefined, {
+          utterance: auditIdentity(job.requestId),
+          generation: job.generation
+        }),
+        Effect.interruptible,
+        Effect.exit
+      )
       yield* post({
         kind: "Settled",
         operation: job.operation,

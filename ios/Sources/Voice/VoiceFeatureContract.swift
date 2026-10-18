@@ -99,7 +99,8 @@ internal enum VoiceEffectCommand: Sendable {
   case cancelGenerationCue
   case interruptConversation([UUID], after: VoiceRequest)
   #if DEBUG
-    case trace(VoiceTraceCause, target: VoiceOutputIdentity?, status: String?,
+    case trace(
+      VoiceTraceCause, target: VoiceOutputIdentity?, status: String?,
       failure: VoiceFailure?, session: UUID?)
   #endif
 }
@@ -111,7 +112,9 @@ internal struct VoiceTransition: Sendable {
 
 internal enum VoiceTraceCause: String, Codable, Sendable {
   case enabled, speech, input, platform, lifecycle, captureFailure, cut, end, shutdown
-  case output, localStop, localStopped, interruptDispatch, interruptReturned, interruptFailed
+  // Cleanup task completion is not proof of SDK success or physical silence.
+  case output, localStop, cleanupAttemptFinished, mediaCleanupFailed
+  case interruptDispatch, interruptReturned, interruptFailed
   case failure, observationFailed, wireError, transportFailed
   case onset, onsetAccepted, onsetRejected, audioReceived, playoutPrepared
 }

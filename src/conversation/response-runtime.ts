@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { withAuditSpan, finishAudit } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
 import { type Cause, Exit, Clock, Deferred, Effect, Fiber, Queue, Stream, Match, type Scope } from "effect"
@@ -57,14 +58,19 @@ function* responseResources(
         yield* Fiber.interrupt(task).pipe(Effect.forkIn(scope))
     })
   const failWork = (attempt: bigint, operation: bigint) => {
-    function reportWorkFailure(error: { readonly _tag: string; readonly message: string }) {
+    function reportWorkFailure(error: {
+      readonly _tag: string
+      readonly message: string
+      readonly diagnostic?: FailureDiagnostic
+    }) {
       return post({
         kind: "WorkFailed",
         attempt,
         operation,
         error: {
           code: error._tag === "StorageUnavailable" ? "StorageUnavailable" : "ProviderFailed",
-          message: error.message
+          message: error.message,
+          ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic })
         }
       })
     }

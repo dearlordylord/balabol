@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import type { Stream } from "effect"
 import { Context, Schema } from "effect"
 const maximumRequestCharacters = 1100000
@@ -14,6 +15,7 @@ export const InferenceEvent = Schema.Union([
 ])
 export type InferenceEvent = typeof InferenceEvent.Type
 export class InferenceFailed extends Schema.TaggedError<InferenceFailed>()("InferenceFailed", {
+  diagnostic: Schema.optionalKey(FailureDiagnostic),
   reason: Schema.Literals([
     "Authentication",
     "Quota",
@@ -30,4 +32,5 @@ export class SubscriptionInference extends Context.Service<
   SubscriptionInference,
   { readonly generate: (request: InferenceRequest) => Stream.Stream<InferenceEvent, InferenceFailed> }
 >()("balabol/subscription-inference") {}
-export const inferenceFailed = (reason: InferenceFailed["reason"]) => new InferenceFailed({ reason })
+export const inferenceFailed = (reason: InferenceFailed["reason"]) =>
+  new InferenceFailed({ reason, diagnostic: { category: "Subscription", reason, provider: "subscription" } })

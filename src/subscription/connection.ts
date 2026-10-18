@@ -1,3 +1,4 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Clock, Effect, Redacted, Schema, Semaphore } from "effect"
 import type { SubscriptionPorts } from "./ports.ts"
 import type { ConnectionStatus, Credential, DisconnectMode, PersistentState, SubscriptionFailed } from "./model.ts"
@@ -79,7 +80,7 @@ export const connection = (initial: PersistentState, ports: SubscriptionPorts) =
             yield* save({ ...state, credential: next })
           }
           return next
-        })
+        }).pipe(withAuditSpan("subscription.refresh"))
       )
     })
   const status = (): ConnectionStatus =>

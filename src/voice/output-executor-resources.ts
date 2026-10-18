@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { withAuditSpan } from "../operation-audit/index.ts"
 import { Cause, Deferred, Effect, Exit, Option } from "effect"
 import type { Fiber, Scope } from "effect"
@@ -42,10 +43,12 @@ export interface OutputSubscription {
 export const outputError = (error: {
   readonly message: string
   readonly reason?: NonNullable<DeliveryFailure["reason"]>
+  readonly diagnostic?: FailureDiagnostic
 }): OutputError => ({
   code: "AudioUnavailable",
   message: error.message,
-  ...(error.reason === undefined ? {} : { reason: error.reason })
+  ...(error.reason === undefined ? {} : { reason: error.reason }),
+  ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic })
 })
 export const makeOutputResources = (deps: OutputExecutorDependencies) => {
   const work = new Map<string, WorkEntry>()
@@ -104,7 +107,7 @@ export const makeOutputResources = (deps: OutputExecutorDependencies) => {
     Unregister: "voice.unregister",
     ReadReply: "voice.reply",
     ReadyTimer: "voice.readyWait"
-  }
+  } as const
   const run = (
     label: keyof typeof spanNames,
     operation: number,

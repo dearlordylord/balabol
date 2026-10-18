@@ -117,7 +117,7 @@ import Foundation
       await outputStopped?.value
       #if DEBUG
         if output {
-          VoiceTransitionTrace.shared.record(.localStopped, target: target, session: session)
+          VoiceTransitionTrace.shared.record(.cleanupAttemptFinished, target: target, session: session)
         }
       #endif
     }

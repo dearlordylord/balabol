@@ -229,10 +229,20 @@
       if let captureStopTask { return captureStopTask }
       let candidate = room
       let task = Task {
-        if let candidate { _ = try? await candidate.localParticipant.setMicrophone(enabled: false) }
+        if let candidate { await disableMicrophone(candidate) }
       }
       captureStopTask = task
       return task
+    }
+    private func disableMicrophone(_ candidate: Room) async {
+      do { _ = try await candidate.localParticipant.setMicrophone(enabled: false) } catch {
+        audioDiagnostic("microphone-stop-failed")
+        #if DEBUG
+          VoiceTransitionTrace.shared.record(.mediaCleanupFailed, status: "microphone-stop-failed")
+        #endif
+        os.Logger(subsystem: "app.balabol.voice", category: "capture").error(
+          "Microphone stop failed; session disconnect retains cleanup ownership")
+      }
     }
     public func requestPermission() async -> Bool {
       switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -458,7 +468,7 @@
       room = nil
       delegate = nil
       if let candidate {
-        _ = try? await candidate.localParticipant.setMicrophone(enabled: false)
+        await disableMicrophone(candidate)
         await candidate.disconnect()
       }
       await task?.value
@@ -494,8 +504,7 @@
             guard wanted == manifest,
               expected == generation, !Task.isCancelled
             else {
-              try? await track.stop()
-              try? await publication.set(subscribed: false)
+              await suppress(track, publication: publication)
               throw CancellationError()
             }
             if outputTrack !== track {
@@ -561,24 +570,59 @@
         if let track {
           do {
             try await track.stop()
-            audioDiagnostic("playout-stopped")
+            audioDiagnostic("playout-stop-returned")
             #if DEBUG
               if recordStop, let manifest, track.trackState == .stopped {
                 let logger = os.Logger(
                   subsystem: "app.balabol.voice.evidence", category: "playback")
                 logger.notice(
-                  "local SDK stop response=\(manifest.responseId.uuidString, privacy: .public) epoch=\(manifest.outputEpoch.uuidString, privacy: .public) sid=\(manifest.trackSid, privacy: .public) trackState=stopped"
+                  "local SDK stop response=\(VoiceTransitionTrace.hash(manifest.responseId), privacy: .public) epoch=\(VoiceTransitionTrace.hash(manifest.outputEpoch), privacy: .public) trackState=stopped"
                 )
               }
             #endif
           } catch {
-            // Session disconnect remains the cleanup owner if the SDK stop fails.
+            audioDiagnostic("playout-stop-failed")
+            #if DEBUG
+              VoiceTransitionTrace.shared.record(.mediaCleanupFailed, status: "playout-stop-failed")
+            #endif
+            os.Logger(subsystem: "app.balabol.voice", category: "playback").error(
+              "Local audio stop failed; session disconnect retains cleanup ownership")
           }
         }
-        if let publication { try? await publication.set(subscribed: false) }
+        if let publication {
+          do { try await publication.set(subscribed: false) } catch {
+            audioDiagnostic("playout-unsubscribe-failed")
+            #if DEBUG
+              VoiceTransitionTrace.shared.record(
+                .mediaCleanupFailed, status: "playout-unsubscribe-failed")
+            #endif
+            os.Logger(subsystem: "app.balabol.voice", category: "playback").error(
+              "Audio unsubscribe failed; session disconnect retains cleanup ownership")
+          }
+        }
       }
       suppressionTask = task
       return task
+    }
+    private func suppress(_ track: RemoteAudioTrack, publication: RemoteTrackPublication) async {
+      do { try await track.stop() } catch {
+        audioDiagnostic("rejected-track-stop-failed")
+        #if DEBUG
+          VoiceTransitionTrace.shared.record(
+            .mediaCleanupFailed, status: "rejected-track-stop-failed")
+        #endif
+        os.Logger(subsystem: "app.balabol.voice", category: "playback").error(
+          "Rejected audio stop failed")
+      }
+      do { try await publication.set(subscribed: false) } catch {
+        audioDiagnostic("rejected-track-unsubscribe-failed")
+        #if DEBUG
+          VoiceTransitionTrace.shared.record(
+            .mediaCleanupFailed, status: "rejected-track-unsubscribe-failed")
+        #endif
+        os.Logger(subsystem: "app.balabol.voice", category: "playback").error(
+          "Rejected audio unsubscribe failed")
+      }
     }
     private func received(_ participant: RemoteParticipant, publication: RemoteTrackPublication) {
       let sid = publication.sid.stringValue
@@ -590,8 +634,7 @@
           rejectedTrackTask = Task {
             await previous?.value
             guard !Task.isCancelled else { return }
-            try? await track.stop()
-            try? await publication.set(subscribed: false)
+            await suppress(track, publication: publication)
           }
         }
         return
@@ -888,7 +931,7 @@
         let pair = stats.iceCandidatePair.first(where: { $0.id == selected }),
         let local = stats.localIceCandidate, let remote = stats.remoteIceCandidate,
         local.id == pair.localCandidateId, remote.id == pair.remoteCandidateId,
-        let localAddress = address(local.address), let remoteAddress = address(remote.address),
+        address(local.address) != nil, address(remote.address) != nil,
         let localPort = local.port, let remotePort = remote.port,
         (1...65535).contains(localPort), (1...65535).contains(remotePort),
         let protocolName = remote.protocol, ["udp", "tcp"].contains(protocolName)
@@ -897,7 +940,7 @@
         return
       }
       logger.notice(
-        "selected ICE local=\(localAddress, privacy: .public):\(localPort, privacy: .public) remote=\(remoteAddress, privacy: .public):\(remotePort, privacy: .public) protocol=\(protocolName, privacy: .public)"
+        "selected ICE candidates validated protocol=\(protocolName, privacy: .public)"
       )
     }
     private static func address(_ value: String?) -> String? {

@@ -1,3 +1,4 @@
+import { FailureDiagnostic } from "../failure-diagnostic/index.ts"
 import { Schema } from "effect"
 const maximumTokenLength = 32768
 const maximumTokenLifetimeSeconds = 86400
@@ -10,6 +11,7 @@ export const ConnectionStatus = Schema.Union([
 ])
 export type ConnectionStatus = typeof ConnectionStatus.Type
 export class SubscriptionFailed extends Schema.TaggedError<SubscriptionFailed>()("SubscriptionFailed", {
+  diagnostic: Schema.optionalKey(FailureDiagnostic),
   kind: Schema.Literals(["Authentication", "Quota", "Provider", "Storage", "InvalidCallback"]),
   message: Schema.String
 }) {}

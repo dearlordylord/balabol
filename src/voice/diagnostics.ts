@@ -7,7 +7,7 @@ import { RecognitionFailureReason } from "../speech-recognition/index.ts"
 const maximumRecognitionSamples = 240000
 const maximumEvents = 256
 const maximumBytes = 131072
-const correlationLength = 12
+const correlationLength = 32
 const nanosPerMilli = 1000000
 export const VoiceDiagnosticCause = Schema.Literals([
   "backendSpeech",
@@ -127,7 +127,12 @@ export const voiceDiagnosticFile = (path: string): VoiceDiagnosticStorage => ({
     }
   }
 })
-export const voiceDiagnosticsLayer = (storage: VoiceDiagnosticStorage) =>
+export const voiceDiagnosticsLayer = (
+  storage: VoiceDiagnosticStorage,
+  reportWriteFailure: () => void = () => {
+    process.stderr.write("Voice diagnostics write failed\n")
+  }
+) =>
   Layer.effect(
     VoiceDiagnostics,
     Effect.gen(function* () {
@@ -152,6 +157,13 @@ export const voiceDiagnosticsLayer = (storage: VoiceDiagnosticStorage) =>
             await storage.write(snapshot, controller.signal)
           } catch {
             writeFailures += 1
+            if (writeFailures === 1 && !closed) {
+              try {
+                reportWriteFailure()
+              } catch {
+                /* Fallback reporting cannot affect voice state. */
+              }
+            }
           }
         }
         writing = false

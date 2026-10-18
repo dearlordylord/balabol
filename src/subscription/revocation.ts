@@ -1,6 +1,7 @@
+import { withAuditSpan } from "../operation-audit/index.ts"
 import { Effect, Redacted, Schema } from "effect"
 import type { Credential, DisconnectOutcome } from "./model.ts"
-import { failed, issuer } from "./model.ts"
+import { failed, issuer, SubscriptionFailed } from "./model.ts"
 import type { SubscriptionPorts } from "./ports.ts"
 const retryDelayMillis = 250
 const successStatus = 200
@@ -23,12 +24,41 @@ export const revoke = (
   ports: SubscriptionPorts
 ): Effect.Effect<DisconnectOutcome> => {
   if (credential === undefined) return Effect.succeed({ revocation: "NotNeeded" })
+  const request: SubscriptionPorts["request"] = (url, init) =>
+    ports.request(url, init).pipe(
+      Effect.tap((response) =>
+        response.status === successStatus
+          ? Effect.void
+          : Effect.fail(
+              new SubscriptionFailed({
+                kind: "Provider",
+                message: "Subscription revocation request failed",
+                diagnostic: {
+                  category: "Subscription",
+                  provider: "subscription",
+                  reason: "Provider",
+                  status: response.status
+                }
+              })
+            ).pipe(withAuditSpan("subscription.revoke"), Effect.ignore)
+      ),
+      withAuditSpan("subscription.revoke")
+    )
   return Effect.gen(function* revokeSession() {
-    const discovery = yield* ports.request(`${issuer}/.well-known/openid-configuration`, { method: "GET", headers: {} })
+    const discovery = yield* request(`${issuer}/.well-known/openid-configuration`, { method: "GET", headers: {} })
     if (discovery.status !== successStatus) return { revocation: "Unconfirmed" as const }
-    const metadata = yield* Schema.decodeUnknownEffect(Metadata)(discovery.body)
+    const metadata = yield* Schema.decodeUnknownEffect(Metadata)(discovery.body).pipe(
+      Effect.mapError(
+        () =>
+          new SubscriptionFailed({
+            kind: "Provider",
+            message: "Invalid subscription revocation metadata",
+            diagnostic: { category: "Subscription", provider: "subscription", reason: "Protocol" }
+          })
+      )
+    )
     const endpoint = yield* trustedEndpoint(metadata.revocation_endpoint)
-    const request = ports.request(endpoint, {
+    const revocationRequest = request(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Balabol" },
       body: new URLSearchParams({
@@ -38,12 +68,15 @@ export const revoke = (
       }).toString(),
       responseMode: "empty"
     })
-    const first = yield* Effect.result(request)
+    const first = yield* Effect.result(revocationRequest)
     if (first._tag === "Success" && first.success.status === successStatus) return { revocation: "Confirmed" as const }
     const retry = first._tag === "Failure" || first.success.status >= serverErrorStatus
     if (!retry) return { revocation: "Unconfirmed" as const }
     yield* Effect.sleep(retryDelayMillis)
-    const second = yield* request
+    const second = yield* revocationRequest
     return { revocation: second.status === successStatus ? ("Confirmed" as const) : ("Unconfirmed" as const) }
-  }).pipe(Effect.catch(() => Effect.succeed({ revocation: "Unconfirmed" as const })))
+  }).pipe(
+    withAuditSpan("subscription.revoke"),
+    Effect.catch(() => Effect.succeed({ revocation: "Unconfirmed" as const }))
+  )
 }
