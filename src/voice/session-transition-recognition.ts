@@ -50,7 +50,7 @@ export const composeRecognition = (before: SessionTransition, input: Recognition
   )
 }
 export const transitionRecognitionInput = (state: SessionState, input: RecognitionInput): SessionTransition =>
-  input.kind === "Window" && (state.phase !== "active" || state.muted)
+  input.kind === "Window" && (state.phase !== "active" || state.muted || input.generation !== state.generation)
     ? {
         state,
         commands: [{ kind: "RecognitionWork", command: { kind: "ReleaseFragment", fragmentId: input.fragmentId } }]
@@ -70,8 +70,17 @@ export const settleRecognition = (before: SessionTransition): SessionTransition 
       turnId: ready.turnId,
       error: { code: "RecognitionFailed", message: "Speech admission capacity exceeded; repeat this utterance" }
     })
-  const fence = state.speechFences.find((item) => item.fenceId === ready.fenceId)
-  if (fence?.status !== "Applied" || fence.generation !== ready.generation) return before
+  const fence = state.speechFences.find(
+    (item) => item.fenceId === ready.fenceId && item.generation === ready.generation
+  )
+  if (fence?.status === "Rejected")
+    return composeRecognition(before, {
+      kind: "RejectTurn",
+      generation: ready.generation,
+      turnId: ready.turnId,
+      error: { code: "InvalidInput", message: fence.message }
+    })
+  if (fence?.status !== "Applied") return before
   const handed = composeRecognition(before, { kind: "Handed", generation: ready.generation, turnId: ready.turnId })
   return {
     ...handed,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { Clock, Effect, Exit, Fiber, Redacted, Scope } from "effect"
 import { failed } from "./contracts.ts"
 import type { SessionDependencies, SessionFactory, SessionHandle } from "./session-port.ts"
@@ -55,7 +56,7 @@ export function createVoiceSession(deps: SessionDependencies): SessionFactory {
             ),
           mute: (muted) =>
             Clock.currentTimeMillis.pipe(
-              Effect.flatMap((now) => runtime.post({ kind: "Mute", muted, now })),
+              Effect.flatMap((now) => runtime.post({ kind: "Mute", muted, now, requestId: randomUUID() })),
               Effect.map(() => runtime.snapshot(0))
             ),
           ready: (input) =>

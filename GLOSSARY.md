@@ -32,3 +32,6 @@ A user message confirmed as durably saved in the single conversation. Rechecking
 
 **Interrupted reply**:
 Assistant text collected before a response was stopped. The saved text may include words whose audio the user did not hear; it does not imply user agreement.
+
+**Microphone mute**:
+Stops microphone input without cancelling captured speech recognition, durable admission, reply generation or playback. It is separate from ending a voice session or interrupting an assistant reply.

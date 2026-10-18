@@ -1,7 +1,7 @@
 import { HashMap, Match } from "effect"
 import type { RecognitionInput } from "./recognition-events.ts"
 import type { RecognitionState, ReadyRecognition } from "./recognition-state.ts"
-import { transitionRecognitionWindow } from "./recognition-transition-segment.ts"
+import { finishRecognitionCapture, transitionRecognitionWindow } from "./recognition-transition-segment.ts"
 import { transitionRecognitionPacket } from "./recognition-transition-packets.ts"
 import { transitionRecognitionSettlement } from "./recognition-transition-settlement.ts"
 import { resetRecognition, failRecognitionTurn } from "./recognition-transition-reset.ts"
@@ -20,7 +20,7 @@ export const initialRecognition = (generation: number): RecognitionState => ({
 })
 export const readyFinal = (state: RecognitionState): ReadyRecognition | null => state.turn?.ready ?? null
 const sameReadyTurn = (state: RecognitionState, generation: number, turnId: string) =>
-  state.generation === generation && state.turn?.id === turnId && state.turn.ready !== null
+  state.turn?.generation === generation && state.turn.id === turnId && state.turn.ready !== null
 const dispatch = Match.type<
   RecognitionInput & { readonly state: RecognitionState; readonly allowedLanguages: readonly string[] }
 >().pipe(
@@ -30,6 +30,7 @@ const dispatch = Match.type<
     Packet: (input) => transitionRecognitionPacket(input.state, input, input.allowedLanguages),
     Invalid: (input) => transitionRecognitionPacket(input.state, input, input.allowedLanguages),
     Settled: (input) => transitionRecognitionSettlement(input.state, input),
+    CaptureBoundary: (input) => finishRecognitionCapture(input.state, input.generation, input.requestId),
     Reset: (input) => resetRecognition(input.state, input.generation),
     Handed: (input) =>
       sameReadyTurn(input.state, input.generation, input.turnId)

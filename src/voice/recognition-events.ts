@@ -41,6 +41,7 @@ export type RecognitionInput =
         | { readonly kind: "Defect"; readonly error: RecognitionError }
         | { readonly kind: "Interrupted" }
     }
+  | { readonly kind: "CaptureBoundary"; readonly generation: number; readonly requestId: string }
   | { readonly kind: "Reset"; readonly generation: number }
   | { readonly kind: "Handed"; readonly generation: number; readonly turnId: string }
   | {

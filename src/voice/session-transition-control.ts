@@ -1,10 +1,11 @@
+import { composeRecognition } from "./session-transition-recognition.ts"
 import { type SessionState, sessionControlMillis } from "./session-state.ts"
 import type { SessionEvent } from "./session-events.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
 type ControlEvent = Extract<SessionEvent, { kind: "Activated" | "Joined" | "Renew" | "Mute" }>
 const mute = (state: SessionState, event: Extract<SessionEvent, { kind: "Mute" }>): SessionTransition => {
-  if (state.phase !== "active") return unchanged(state)
+  if (state.phase !== "active" || state.muted === event.muted) return unchanged(state)
   const result = emit(
     {
       ...state,
@@ -15,7 +16,10 @@ const mute = (state: SessionState, event: Extract<SessionEvent, { kind: "Mute" }
     },
     { kind: "Muted", muted: event.muted }
   )
-  return { state: result.state, commands: [{ kind: "ResetCapture" }, ...result.commands] }
+  return composeRecognition(
+    { state: result.state, commands: [{ kind: "ResetCapture" }, ...result.commands] },
+    { kind: "CaptureBoundary", generation: result.state.generation, requestId: event.requestId }
+  )
 }
 const joined = (state: SessionState): SessionTransition =>
   state.phase === "active" || state.phase === "starting" ? unchanged({ ...state, joined: true }) : unchanged(state)

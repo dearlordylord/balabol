@@ -11,7 +11,7 @@ export type SessionEvent =
   | { readonly kind: "Activated" }
   | { readonly kind: "Joined" }
   | { readonly kind: "Renew"; readonly now: number }
-  | { readonly kind: "Mute"; readonly muted: boolean; readonly now: number }
+  | { readonly kind: "Mute"; readonly muted: boolean; readonly now: number; readonly requestId: string }
   | { readonly kind: "End" }
   | { readonly kind: "Expire"; readonly now: number }
   | {

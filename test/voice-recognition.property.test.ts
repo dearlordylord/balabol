@@ -94,7 +94,7 @@ it("reserves two slots before JobStarted and holds cancellation slots until exac
 it("generated reset and completion histories preserve fragment ownership and bounded reservations", () => {
   fc.assert(
     fc.property(
-      fc.array(fc.constantFrom("speech", "quiet", "reset", "start", "final", "settle"), {
+      fc.array(fc.constantFrom("speech", "quiet", "boundary", "reset", "start", "final", "settle"), {
         minLength: 20,
         maxLength: 60
       }),
@@ -109,6 +109,13 @@ it("generated reset and completion histories preserve fragment ownership and bou
               break
             case "quiet":
               run.feed(16000, false)
+              break
+            case "boundary":
+              run.step({
+                kind: "CaptureBoundary",
+                generation: run.state().generation + 1,
+                requestId: `boundary-${run.state().generation}`
+              })
               break
             case "reset":
               run.step({ kind: "Reset", generation: run.state().generation + 1 })

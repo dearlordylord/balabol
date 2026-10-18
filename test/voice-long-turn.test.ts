@@ -7,7 +7,7 @@ import type { RecognitionRequest, RecognitionEvent } from "../src/speech-recogni
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice, SpeechActivity, fakeSpeechActivityLayer } from "../src/voice/index.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
-import { withVoiceOutput } from "./voice-output-fixture.ts"
+import { withVoiceOutput, waitForOutput } from "./voice-output-fixture.ts"
 import type { voiceTransportFixture } from "./voice-fixture.ts"
 
 type Transport = ReturnType<typeof voiceTransportFixture>
@@ -210,7 +210,62 @@ it("fails the whole incomplete turn once, ignores stale chunk errors and suppres
   )
 })
 
-it("fences both late recognition success and failure when muted", async () => {
+it.each([
+  { quiet: true, unmute: false, newSpeech: false },
+  { quiet: true, unmute: true, newSpeech: false },
+  { quiet: false, unmute: false, newSpeech: false },
+  { quiet: false, unmute: true, newSpeech: false },
+  { quiet: true, unmute: true, newSpeech: true }
+])("finishes captured input and reply across mute: %j", async ({ newSpeech, quiet, unmute }) => {
+  const activity = await Effect.runPromise(classifiedActivity)
+  const provider = controlledRecognition()
+  return withVoiceOutput(
+    (transport) =>
+      Effect.gen(function* () {
+        const voice = yield* Voice
+        const join = yield* voice.start(startVoiceRequest())
+        yield* frames(transport, activity, 3)
+        if (quiet) {
+          yield* frames(transport, activity, 50, 0)
+          yield* waitRequests(provider, 1)
+        }
+        yield* voice.mute(join.sessionId, true)
+        yield* waitRequests(provider, 1)
+        if (unmute) yield* voice.mute(join.sessionId, false)
+        if (newSpeech) {
+          yield* frames(transport, activity, 3)
+          yield* frames(transport, activity, 50, 0)
+          const rejected = yield* voice.snapshot(join.sessionId, 0)
+          expect(rejected.events.filter((event) => event.kind === "Error")).toMatchObject([
+            { code: "RecognitionFailed" }
+          ])
+          expect(provider.requests).toHaveLength(1)
+        }
+        provider.requests[0]?.finish("finish my captured message")
+        yield* waitAccepted(voice, join.sessionId)
+        const output = (yield* waitForOutput(voice, join.sessionId, "AwaitingReady")).output
+        if (output?.manifest == null) throw new Error("Missing reply publication")
+        yield* voice.ready(join.sessionId, {
+          responseId: output.responseId,
+          outputEpoch: output.outputEpoch,
+          trackSid: output.manifest.trackSid
+        })
+        const snapshot = yield* waitForOutput(voice, join.sessionId, "Delivered")
+        expect(snapshot.muted).toBe(!unmute)
+        expect(transport.captured.length).toBeGreaterThan(0)
+        expect((yield* page()).messages[0]?.text).toBe("finish my captured message")
+        yield* voice.end(join.sessionId)
+      }),
+    fakeSynthesisLayer(),
+    undefined,
+    provider.layer,
+    undefined,
+    undefined,
+    activity.layer
+  )
+})
+
+it("retains queued chunks and reports recognition failure while the microphone is muted", async () => {
   const activity = await Effect.runPromise(classifiedActivity)
   const provider = controlledRecognition()
   return withVoiceOutput(
@@ -221,6 +276,42 @@ it("fences both late recognition success and failure when muted", async () => {
         yield* frames(transport, activity, 1010)
         yield* waitRequests(provider, 2)
         yield* voice.mute(join.sessionId, true)
+        provider.requests[0]?.finish("first chunk")
+        yield* waitRequests(provider, 3)
+        provider.requests[1]?.finish("second chunk")
+        provider.requests[2]?.fail()
+        let snapshot = yield* voice.snapshot(join.sessionId, 0)
+        for (let poll = 0; !snapshot.events.some((event) => event.kind === "Error") && poll < 200; poll++) {
+          yield* Effect.sleep(5)
+          snapshot = yield* voice.snapshot(join.sessionId, 0)
+        }
+        expect(snapshot.muted).toBe(true)
+        expect(snapshot.events.filter((event) => event.kind === "Error")).toMatchObject([
+          { code: "RecognitionFailed", message: "controlled chunk failure" }
+        ])
+        expect((yield* page()).messages).toEqual([])
+        yield* voice.end(join.sessionId)
+      }),
+    fakeSynthesisLayer(),
+    waiting,
+    provider.layer,
+    undefined,
+    undefined,
+    activity.layer
+  )
+})
+
+it("fences both late recognition success and failure when ended", async () => {
+  const activity = await Effect.runPromise(classifiedActivity)
+  const provider = controlledRecognition()
+  return withVoiceOutput(
+    (transport) =>
+      Effect.gen(function* () {
+        const voice = yield* Voice
+        const join = yield* voice.start(startVoiceRequest())
+        yield* frames(transport, activity, 1010)
+        yield* waitRequests(provider, 2)
+        yield* voice.end(join.sessionId)
         provider.requests[0]?.finish("stale")
         provider.requests[1]?.fail()
         yield* settle

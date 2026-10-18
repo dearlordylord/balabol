@@ -1,3 +1,4 @@
+import { prepareRecognitionFinal } from "./recognition-transition-assembly.ts"
 import type { RecognitionInput } from "./recognition-events.ts"
 import type { PcmSlice, RecognitionState, RecognitionTurn } from "./recognition-state.ts"
 import { retainFragment, releaseSlices, releaseUnownedWindow } from "./recognition-transition-fragments.ts"
@@ -22,6 +23,24 @@ const appendSlice = (state: RecognitionState, slice: PcmSlice): RecognitionState
 /** Only a qualified onset extends a ready turn; subthreshold PCM remains an
  * onset candidate and can carry into the next turn if the prior one is handed. */
 const onset = (state: RecognitionState, event: Window): RecognitionTransition => {
+  if (state.turn !== null && state.turn.generation !== event.generation) {
+    const released = releaseSlices(state, state.segment.slices)
+    return {
+      state: { ...released.state, suppressed: true, segment: { kind: "Active", slices: [], samples: 0, quiet: 0 } },
+      commands: [
+        ...released.commands,
+        {
+          kind: "Error",
+          turnId: event.turnId,
+          generation: event.generation,
+          error: {
+            code: "RecognitionFailed",
+            message: "Previous captured speech is still processing; repeat this utterance after it finishes"
+          }
+        }
+      ]
+    }
+  }
   if (state.turn !== null) return unchangedRecognition({ ...state, turn: { ...state.turn, ended: false, ready: null } })
   const turn: RecognitionTurn = {
     id: event.turnId,
@@ -71,7 +90,7 @@ const idlePiece = (state: RecognitionState, event: Window, offset: number): Piec
     offset: event.sampleFrames
   }
 }
-const seal = (state: RecognitionState, event: Window, ended: boolean): RecognitionTransition => {
+const seal = (state: RecognitionState, requestId: string, ended: boolean): RecognitionTransition => {
   const turn = state.turn
   const segment = state.segment
   if (turn === null || segment.kind !== "Active") return unchangedRecognition(state)
@@ -86,7 +105,7 @@ const seal = (state: RecognitionState, event: Window, ended: boolean): Recogniti
     turnId: turn.id,
     generation: turn.generation,
     index: turn.chunks,
-    requestId: event.requestId,
+    requestId,
     slices: segment.slices,
     sampleFrames: segment.samples
   }
@@ -117,7 +136,7 @@ const activePiece = (state: RecognitionState, event: Window, offset: number): Pi
   }
   const ended = quiet >= recognitionQuietSamples
   return {
-    step: ended || samples >= recognitionChunkSamples ? seal(next, event, ended) : unchangedRecognition(next),
+    step: ended || samples >= recognitionChunkSamples ? seal(next, event.requestId, ended) : unchangedRecognition(next),
     offset: offset + length
   }
 }
@@ -137,4 +156,25 @@ const consume = (state: RecognitionState, event: Window, offset: number): Recogn
 export const transitionRecognitionWindow = (state: RecognitionState, event: Window): RecognitionTransition => {
   const step = event.generation === state.generation ? consume(state, event, 0) : unchangedRecognition(state)
   return releaseUnownedWindow(step, event.fragmentId)
+}
+
+/** A microphone boundary ends captured input, not the turn's recognition work. */
+export const finishRecognitionCapture = (
+  state: RecognitionState,
+  generation: number,
+  requestId: string
+): RecognitionTransition => {
+  const captured =
+    state.segment.kind === "Active" && state.segment.samples > 0 && state.turn !== null
+      ? seal(state, requestId, true)
+      : releaseSlices(state, state.segment.slices)
+  const next = captured.state
+  const final = prepareRecognitionFinal({
+    ...next,
+    generation,
+    suppressed: false,
+    segment: { kind: "Idle", slices: [], samples: 0 },
+    turn: next.turn === null ? null : { ...next.turn, ended: true }
+  })
+  return { state: final.state, commands: [...captured.commands, ...final.commands] }
 }

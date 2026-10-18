@@ -5,7 +5,7 @@ const maximumConcurrent = 2
 export const findRecognitionJob = (state: RecognitionState, operation: number, generation: number) =>
   state.jobs.find((job) => job.operation === operation && job.generation === generation)
 export const currentRecognitionJob = (state: RecognitionState, job: RecognitionJob) =>
-  job.status !== "Cancelling" && job.generation === state.generation && state.turn?.id === job.turnId
+  job.status !== "Cancelling" && job.generation === state.turn?.generation && state.turn?.id === job.turnId
 export const replaceRecognitionJob = (state: RecognitionState, job: RecognitionJob): RecognitionState => ({
   ...state,
   jobs: state.jobs.map((item) => (item.operation === job.operation ? job : item))

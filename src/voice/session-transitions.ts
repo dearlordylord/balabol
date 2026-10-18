@@ -43,7 +43,7 @@ export const transitionSession = (state: SessionState, event: SessionEvent): Ses
   const selected = dispatch({ ...event, state })
   const result = closeBrokenSubscription(selected, event)
   const fenced =
-    state.generation === result.state.generation
+    state.generation === result.state.generation || event.kind === "Mute"
       ? result
       : composeRecognition(result, { kind: "Reset", generation: result.state.generation })
   return reconcileSessionExpiry(settleRecognition(fenced))
