@@ -1,6 +1,9 @@
 /// Small communication composition, not another application implementation.
 /// The same relevant Voice owner remains live while its observation transport
 /// stalls. Full capture failure and owner replacement are qualified separately.
+/// LocalCut assumes interruption intent has already been authorized. Conditional
+/// terminal convergence checks communication after that cut, not whether speech
+/// was human or assistant echo; convergence can succeed after a false onset.
 module VoiceConvergenceCore {
   import basicSpells.* from "./spells/basicSpells"
   import VoiceOutputCore.* from "./VoiceOutput"

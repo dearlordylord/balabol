@@ -165,3 +165,91 @@ import os
     var snapshot: VoiceTraceSnapshot { state.withLock { $0.snapshot } }
   }
 #endif
+
+internal struct VoiceAudioProcessingSnapshot: Codable, Sendable {
+  let stage: String
+  let uptimeSeconds: Double
+  let category: String
+  let mode: String
+  let inputPortTypes: [String]
+  let outputPortTypes: [String]
+  let sampleRate: Double
+  let ioDurationSeconds: Double
+  let requestedAEC: Bool?
+  let requestedAECMode: String?
+  let effectiveAEC: String
+  let softwareAECResolved: Bool
+  let softwareAECActive: Bool
+  let platformAECResolved: Bool?
+  let platformAECActive: Bool?
+  let vpioEnabledRequested: Bool
+  let vpioEnabledActive: Bool
+  let vpioBypassRequested: Bool
+  let vpioBypassActive: Bool
+  let levels: Levels?
+  struct Levels: Codable, Sendable {
+    let rms: Float
+    let peak: Float
+    let frames: Int
+    let onset: Bool?
+  }
+}
+#if DEBUG
+  internal struct VoiceAudioProcessingJournal: Codable, Sendable {
+    let dropped: Int
+    let events: [VoiceAudioProcessingSnapshot]
+    static let empty = Self(dropped: 0, events: [])
+    func appending(_ event: VoiceAudioProcessingSnapshot) -> Self {
+      Self(
+        dropped: dropped + (events.count == 128 ? 1 : 0),
+        events: Array(events.suffix(127)) + [event])
+    }
+  }
+  /// Bounded scalar snapshots only; one utility writer owns encoding and protected atomic I/O.
+  internal final class VoiceAudioProcessingTrace: @unchecked Sendable {
+    static let shared = VoiceAudioProcessingTrace(
+      destination:
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("balabol-voice-audio-processing.json"))
+    private let destination: URL?
+    private let writer = DispatchQueue(label: "balabol.voice.audio-processing", qos: .utility)
+    private var journal = VoiceAudioProcessingJournal.empty
+    private var reportedFailure = false
+    init(destination: URL?) { self.destination = destination }
+    func record(_ event: VoiceAudioProcessingSnapshot) {
+      writer.async { self.persist(event) }
+    }
+    func reportEncodingFailure() {
+      writer.async { self.reportFailure() }
+    }
+    private func reportFailure() {
+      guard !reportedFailure else { return }
+      reportedFailure = true
+      NSLog("Balabol audio-processing diagnostics could not be persisted")
+    }
+    private func persist(_ event: VoiceAudioProcessingSnapshot) {
+      journal = journal.appending(event)
+      guard let destination else { return }
+      do {
+        let data = try JSONEncoder().encode(journal)
+        guard data.count <= 131072 else { throw CocoaError(.fileWriteOutOfSpace) }
+        try FileManager.default.createDirectory(
+          at: destination.deletingLastPathComponent(),
+          withIntermediateDirectories: true)
+        #if os(iOS)
+          try data.write(
+            to: destination,
+            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        #else
+          try data.write(to: destination, options: .atomic)
+        #endif
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600], ofItemAtPath: destination.path)
+      } catch {
+        reportFailure()
+      }
+    }
+    func flush() { writer.sync {} }
+    var snapshot: VoiceAudioProcessingJournal { writer.sync { journal } }
+  }
+#endif

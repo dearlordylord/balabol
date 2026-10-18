@@ -63,11 +63,14 @@
         // SDK readbacks synchronously wait for WebRTC's worker/signaling threads.
         // Run them off MainActor and never from an AudioRenderer callback.
         Task.detached(priority: .utility) {
-          let record = VoiceAudioDiagnosticRecord.read(stage: stage, levels: levels)
-          guard let data = try? JSONEncoder().encode(record),
-            let json = String(data: data, encoding: .utf8)
-          else { return }
-          print("[BALABOL-AUDIO] " + json)
+          let record = VoiceAudioProcessingSnapshot.read(stage: stage, levels: levels)
+          VoiceAudioProcessingTrace.shared.record(record)
+          do {
+            let data = try JSONEncoder().encode(record)
+            print("[BALABOL-AUDIO] " + String(decoding: data, as: UTF8.self))
+          } catch {
+            VoiceAudioProcessingTrace.shared.reportEncodingFailure()
+          }
         }
       #endif
     }
@@ -605,36 +608,10 @@
 
   }
 
-  private struct VoiceAudioLevels: Codable, Sendable {
-    let rms: Float
-    let peak: Float
-    let frames: Int
-    let onset: Bool?
-  }
+  private typealias VoiceAudioLevels = VoiceAudioProcessingSnapshot.Levels
   #if DEBUG
-    private struct VoiceAudioDiagnosticRecord: Encodable, Sendable {
-      let stage: String
-      let uptimeSeconds: Double
-      let category: String
-      let mode: String
-      let inputPortTypes: [String]
-      let outputPortTypes: [String]
-      let sampleRate: Double
-      let ioDurationSeconds: Double
-      let requestedAEC: Bool?
-      let requestedAECMode: String?
-      let effectiveAEC: String
-      let softwareAECResolved: Bool
-      let softwareAECActive: Bool
-      let platformAECResolved: Bool?
-      let platformAECActive: Bool?
-      let vpioEnabledRequested: Bool
-      let vpioEnabledActive: Bool
-      let vpioBypassRequested: Bool
-      let vpioBypassActive: Bool
-      let levels: VoiceAudioLevels?
-
-      static func read(stage: String, levels: VoiceAudioLevels?) -> Self {
+    extension VoiceAudioProcessingSnapshot {
+      fileprivate static func read(stage: String, levels: VoiceAudioLevels?) -> Self {
         let manager = AudioManager.shared
         let processing = manager.audioProcessingState.echoCancellation
         let platform = manager.platformVoiceProcessingState

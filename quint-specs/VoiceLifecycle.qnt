@@ -1,6 +1,12 @@
 /// Composed capture/output owner after a real, deterministic listening bootstrap.
 /// Admissions/checkpoint are empty and loaded. Transport pages have no speech
 /// events or pending admissions; this model targets output and owner lifetime.
+/// Speech is an onset already admitted by the capture adapter; request identity
+/// fences retired callbacks but does not establish acoustic source authenticity.
+/// SpeechIntent is explicit interruption intent. Neither event models PCM, AEC,
+/// speaker-to-microphone leakage or classification authorization. A fresh false
+/// onset can legitimately cut output under these laws; preventing that requires
+/// an implemented capture authorization contract and separate acoustic evidence.
 module VoiceLifecycleCore {
   import basicSpells.* from "./spells/basicSpells"
   import VoiceOutputCore as O from "./VoiceOutput"

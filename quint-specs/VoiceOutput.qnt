@@ -1,5 +1,7 @@
 /// One MainActor-owned output projection. Events are delivered sequentially;
-/// network loss, capture scheduling and physical audio belong to later models.
+/// Network loss is composed separately; capture scheduling and physical audio
+/// are outside this model. Cut is an already-authorized interruption, not proof
+/// that a microphone onset came from the human rather than assistant echo.
 module VoiceOutputCore {
   import basicSpells.* from "./spells/basicSpells"
   type Identity = { input: int, response: int, epoch: int }
