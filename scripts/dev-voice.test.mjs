@@ -132,3 +132,10 @@ test("a fresh checkout reports missing optional dictionary data with the recover
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("Soniox requires a key without acquiring local Qwen dependencies", () => {
+  const environment = { BALABOL_RECOGNITION_PROVIDER: "soniox" };
+  assert.throws(() => checkLocalResources(environment), /SONIOX_API_KEY/);
+  assert.doesNotThrow(() => checkLocalResources({ ...environment, SONIOX_API_KEY: "fixture-only" }));
+  assert.deepEqual(localRequirements(environment), []);
+});

@@ -31,7 +31,7 @@
     "check-all": "pnpm secrets:files && pnpm check:bend && pnpm test:harness && node scripts/quality/cli.mjs all && pnpm check-format",
     "verify:effect-cohort": "node scripts/quality/cli.mjs cohort",
     "start": "node dist/bootstrap/main.js",
-    "dev:voice": "node scripts/dev-voice.mjs",
+    "dev:voice": "node --env-file-if-exists=.env scripts/dev-voice.mjs",
     "subscription": "pnpm build && node dist/bootstrap/subscription-main.js",
     "build:speech": "node scripts/build-apple-speech.mjs",
     "prepare:vad": "node scripts/prepare-vad.mjs",

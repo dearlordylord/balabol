@@ -30,7 +30,13 @@ import {
   configurableFakeSummaryLayer,
   subscriptionSummaryLayer
 } from "../summary-generation/index.ts"
-import { fakeRecognitionLayer, qwenRecognitionLayer, QwenSettings } from "../speech-recognition/index.ts"
+import {
+  fakeRecognitionLayer,
+  qwenRecognitionLayer,
+  QwenSettings,
+  sonioxRecognitionLayer,
+  SonioxSettings
+} from "../speech-recognition/index.ts"
 import { fakeSynthesisLayer, appleSynthesisLayer, AppleSynthesisSettings } from "../speech-synthesis/index.ts"
 import {
   LiveKitSettings,
@@ -126,7 +132,7 @@ export const ServerConfig = Schema.Struct({
   voice: Schema.optionalKey(LiveKitSettings),
   voiceDiagnostics: Schema.optionalKey(Schema.Boolean),
   voiceLanguages: Schema.optionalKey(LanguageTags),
-  recognition: Schema.optionalKey(QwenSettings),
+  recognition: Schema.optionalKey(Schema.Union([QwenSettings, SonioxSettings])),
   activity: Schema.optionalKey(SpeechActivitySettings),
   synthesis: Schema.optionalKey(AppleSynthesisSettings),
   voiceOutput: Schema.optionalKey(VoiceOutputSettings),
@@ -204,23 +210,26 @@ const outputSelection = (environment: NodeJS.ProcessEnv) => ({
 const activitySelection = (environment: NodeJS.ProcessEnv) => ({
   activity: {
     provider:
-      environment.BALABOL_ACTIVITY_PROVIDER ??
-      (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr" ? "silero" : "fake"),
+      environment.BALABOL_ACTIVITY_PROVIDER ?? defaultActivityProvider(environment.BALABOL_RECOGNITION_PROVIDER),
     modelPath:
       environment.BALABOL_VAD_MODEL ??
       join(homedir(), ".local", "share", "balabol", "models", "vad", speechActivityModel.filename)
   }
 })
+const recognitionSelection = (environment: NodeJS.ProcessEnv) =>
+  environment.BALABOL_RECOGNITION_PROVIDER === "soniox"
+    ? { provider: "soniox", apiKey: Redacted.make(environment.SONIOX_API_KEY ?? "") }
+    : {
+        provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
+        executable:
+          environment.BALABOL_QWEN_PYTHON_PATH ??
+          join(homedir(), ".local", "share", "balabol", "tools", "qwen-asr", ".venv", "bin", "python"),
+        helperPath: environment.BALABOL_QWEN_HELPER_PATH ?? join(process.cwd(), "scripts", "qwen-asr.py"),
+        modelPath:
+          environment.BALABOL_QWEN_MODEL ?? join(homedir(), ".local", "share", "balabol", "models", "qwen3-asr-1.7b")
+      }
 const speechSelection = (environment: NodeJS.ProcessEnv) => ({
-  recognition: {
-    provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
-    executable:
-      environment.BALABOL_QWEN_PYTHON_PATH ??
-      join(homedir(), ".local", "share", "balabol", "tools", "qwen-asr", ".venv", "bin", "python"),
-    helperPath: environment.BALABOL_QWEN_HELPER_PATH ?? join(process.cwd(), "scripts", "qwen-asr.py"),
-    modelPath:
-      environment.BALABOL_QWEN_MODEL ?? join(homedir(), ".local", "share", "balabol", "models", "qwen3-asr-1.7b")
-  },
+  recognition: recognitionSelection(environment),
   synthesis: {
     provider: environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake",
     helperExecutable:
@@ -229,6 +238,11 @@ const speechSelection = (environment: NodeJS.ProcessEnv) => ({
     ffmpegExecutable: environment.BALABOL_FFMPEG_EXECUTABLE ?? "/opt/homebrew/bin/ffmpeg"
   }
 })
+const selectedRecognition = (config: ServerConfig) => {
+  const settings = config.recognition
+  if (settings?.provider === "soniox") return sonioxRecognitionLayer(settings)
+  return settings?.provider === "qwen3-asr" ? qwenRecognitionLayer(settings) : fakeRecognitionLayer()
+}
 export const parseConfig = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(ServerConfig)({
     voiceDiagnostics: environment.BALABOL_VOICE_DIAGNOSTICS === "1",
@@ -255,8 +269,10 @@ const selectedSynthesis = (config: ServerConfig) =>
   config.synthesis?.provider === "apple"
     ? appleSynthesisLayer(config.synthesis, config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages)
     : fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })
+const defaultActivityProvider = (provider: string | undefined) =>
+  ["qwen3-asr", "soniox"].includes(provider ?? "fake") ? "silero" : "fake"
 const selectedSpeechActivity = (config: ServerConfig) => {
-  const provider = config.activity?.provider ?? (config.recognition?.provider === "qwen3-asr" ? "silero" : "fake")
+  const provider = config.activity?.provider ?? defaultActivityProvider(config.recognition?.provider)
   return provider === "silero"
     ? sileroSpeechActivityLayer({
         modelPath:
@@ -308,9 +324,7 @@ export const serverLayer = (config: ServerConfig) => {
         allowedLanguages: config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages
       })
     ),
-    Layer.provide(
-      config.recognition?.provider === "qwen3-asr" ? qwenRecognitionLayer(config.recognition) : fakeRecognitionLayer()
-    ),
+    Layer.provide(selectedRecognition(config)),
     Layer.provide(selectedSynthesis(config)),
     Layer.provide(selectedSpeechActivity(config)),
     Layer.provide(Layer.succeed(VoiceOutputConfiguration, config.voiceOutput ?? defaultVoiceOutputSettings)),
