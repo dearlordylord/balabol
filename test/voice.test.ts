@@ -261,8 +261,12 @@ it("ignores isolated transients before admitting sustained speech without consum
         expect(received).toEqual([])
         for (const sample of [1200, 1300, 1400]) yield* fixture.sendClassified(sample)
         for (let frame = 0; frame < 50; frame++) yield* fixture.sendClassified(0)
-        yield* settle
-        const snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        // Classification completion is not durable acceptance; wait for its public receipt.
+        let snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        for (let attempt = 0; !snapshot.events.some((event) => event.kind === "Accepted") && attempt < 200; attempt++) {
+          yield* Effect.sleep(5)
+          snapshot = yield* voice.snapshot(joined.sessionId, 0)
+        }
         const accepted = snapshot.events.filter((event) => event.kind === "Accepted")
         expect(received).toEqual([{ samples: 16960, prefix: [1200, 1300, 1400] }])
         expect(accepted).toHaveLength(1)

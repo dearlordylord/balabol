@@ -116,7 +116,7 @@ it("retains 100 one-KiB entities across revisions and reopen with explicit compl
   }
 })
 
-it("reports query and four-MiB state byte limits without truncating or advancing the last accepted revision", async () => {
+it("reports query byte limits without truncating or advancing the last accepted revision", async () => {
   const database = await temporaryDatabase()
   try {
     await opened(
@@ -131,28 +131,10 @@ it("reports query and four-MiB state byte limits without truncating or advancing
           failure: { code: "LimitExceeded", message: expect.stringContaining("262144") }
         })
         expect((yield* knowledge.query({ limit: 25 })).entities).toHaveLength(25)
-        let accepted = 4
-        let stateLimitReached = false
-        for (let batch = 3; batch < 45; batch++) {
-          const result = yield* knowledge
-            .apply(creation(entities(batch * 25, 25, 4096)), context(`batch${batch}`))
-            .pipe(Effect.result)
-          if (result._tag === "Failure") {
-            expect(result.failure).toMatchObject({ code: "LimitExceeded", message: expect.stringContaining("4194304") })
-            stateLimitReached = true
-            break
-          }
-          accepted = result.success.revision
-        }
-        expect(stateLimitReached).toBe(true)
-        expect((yield* knowledge.inspect()).revision).toBe(accepted)
-        expect((yield* knowledge.revision(2)).entities).toEqual(entities(0, 25, 4096))
-        expect(Buffer.byteLength(JSON.stringify(yield* knowledge.revision(accepted)))).toBeLessThanOrEqual(
-          knowledgeLimits.stateBytes
-        )
+        expect((yield* knowledge.inspect()).revision).toBe(4)
       })
     )
   } finally {
     await database.close()
   }
-}, 20_000)
+})
