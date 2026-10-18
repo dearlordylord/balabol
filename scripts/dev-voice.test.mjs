@@ -139,3 +139,12 @@ test("Soniox requires a key without acquiring local Qwen dependencies", () => {
   assert.doesNotThrow(() => checkLocalResources({ ...environment, SONIOX_API_KEY: "fixture-only" }));
   assert.deepEqual(localRequirements(environment), []);
 });
+
+test("Soniox synthesis requires a key and no installed Apple voices or helper", () => {
+  const environment = { BALABOL_SYNTHESIS_PROVIDER: "soniox" };
+  for (const SONIOX_API_KEY of [undefined, "", " "]) {
+    assert.throws(() => checkLocalResources({ ...environment, SONIOX_API_KEY }), /SONIOX_API_KEY/);
+  }
+  assert.doesNotThrow(() => checkLocalResources({ ...environment, SONIOX_API_KEY: "fixture-only" }));
+  assert.deepEqual(localRequirements(environment), []);
+});

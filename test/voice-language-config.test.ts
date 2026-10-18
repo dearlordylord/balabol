@@ -93,3 +93,34 @@ it("selects validated Qwen resources and speech classification without acquiring
   ])
     expect(await Effect.runPromise(parseConfig(environment).pipe(Effect.isFailure))).toBe(true)
 })
+
+it("selects cloud synthesis independently, validates its credentials and preserves explicit playback budgets", async () => {
+  const config = await Effect.runPromise(
+    parseConfig({
+      BALABOL_SYNTHESIS_PROVIDER: "soniox",
+      SONIOX_API_KEY: "fixture-only",
+      BALABOL_SONIOX_VOICE: "Adrian"
+    })
+  )
+  expect(config.synthesis).toMatchObject({ provider: "soniox", voice: "Adrian" })
+  expect(config.recognition?.provider).toBe("fake")
+  expect(config.voiceOutput).toEqual({ completionMillis: 300000 })
+  expect(JSON.stringify(config.synthesis)).not.toContain("fixture-only")
+  expect(
+    (
+      await Effect.runPromise(
+        parseConfig({
+          BALABOL_SYNTHESIS_PROVIDER: "soniox",
+          SONIOX_API_KEY: "fixture-only",
+          BALABOL_VOICE_COMPLETION_MILLIS: "90000"
+        })
+      )
+    ).voiceOutput
+  ).toEqual({ completionMillis: 90000 })
+  for (const environment of [
+    { BALABOL_SYNTHESIS_PROVIDER: "soniox" },
+    { BALABOL_SYNTHESIS_PROVIDER: "soniox", SONIOX_API_KEY: "" },
+    { BALABOL_SYNTHESIS_PROVIDER: "soniox", SONIOX_API_KEY: "fixture-only", BALABOL_SONIOX_VOICE: "" }
+  ])
+    expect(await Effect.runPromise(parseConfig(environment).pipe(Effect.isFailure))).toBe(true)
+})

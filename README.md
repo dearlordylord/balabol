@@ -1,7 +1,7 @@
 # Balabol
 
 **Purpose:** Describe the repository and its current development state.
-**Status:** Durable conversation with opt-in subscription Sol/Luna, local Qwen3-ASR recognition and Apple speech synthesis; physical-device qualification remains separate.
+**Status:** Durable conversation with opt-in subscription Sol/Luna, local Qwen3-ASR or Soniox recognition and Apple or Soniox speech synthesis; physical-device qualification remains separate.
 **Authority:** Product requirements live in the published prototype issue; engineering guidance lives in AGENTS.md.
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
@@ -76,7 +76,7 @@ Apple synthesis requires macOS and Xcode Command Line Tools. `pnpm build:speech`
 
 Each complete phrase has at most 800 UTF-16 units and 60 seconds of audio across all rendering runs, under one serialization permit and deadline. Each run uses the existing AVSpeechSynthesizer end-of-stream and delegate completion checks, writes a protected temporary file, then ffmpeg converts complete audio to mono PCM16LE at 24 kHz. The adapter validates each voice receipt and concatenates the converted audio in text order before emitting chunks of at most 1,200 frames. Phrase generation precedes the first chunk, so this adapter is replaceable rather than a claim of incremental native streaming. Cancellation stops the owned process, prevents subsequent runs and removes temporary files. Speech failure retains useful conversation text and allows a subsequent reply.
 
-Voice owns the overall response/playback deadline: fixtures default to 30 seconds, local synthesis to five minutes, covering prior-memory wait, inference and playback. `BALABOL_VOICE_COMPLETION_MILLIS` explicitly overrides it up to five minutes. Control keepalive remains independent. Physical iPhone media, locked-screen and interruption checks remain [issue #29](https://github.com/dearlordylord/balabol/issues/29).
+Voice owns the overall response/playback deadline: fixtures default to 30 seconds, Apple/Soniox synthesis to five minutes, covering prior-memory wait, inference and playback. `BALABOL_VOICE_COMPLETION_MILLIS` explicitly overrides it up to five minutes. Control keepalive remains independent. Physical iPhone media, locked-screen and interruption checks remain [issue #29](https://github.com/dearlordylord/balabol/issues/29).
 
 ## Prepare speech activity detection
 
@@ -200,3 +200,11 @@ The initial adapter uses `stt-rt-v5` over authenticated WebSocket with strict co
 Balabol owns a separate subscription connection; changing the Codex login or restarting the backend does not change it. On the loopback subscription setup page, use **Switch account** to clear the previous account registration and start authorization for the new account. Ordinary reconnect keeps the existing registration. If OpenAI reports that an app is restricted to its workspace, retry through Switch account rather than reusing the previous client registration; OpenAI still decides the new account's access.
 
 Authentication failures are reported as ChatGPT authentication failures with reconnect/switch-account guidance. Subscription limits have a separate message. Only locally controlled failure descriptions cross the agent runtime into durable replies; provider payloads and credentials remain private.
+
+### Soniox synthesis trial
+
+Set `BALABOL_SYNTHESIS_PROVIDER=soniox` with the same server-side `SONIOX_API_KEY` used for recognition, then run `pnpm dev:voice --real`. Recognition and synthesis are independent selections. `BALABOL_SONIOX_VOICE` selects the voice (default `Adrian`); `BALABOL_SYNTHESIS_PROVIDER=apple` restores installed Apple voices. No Apple helper, ffmpeg or installed voices are required for Soniox synthesis. TTS is separately metered by Soniox; there is no automatic retry or provider fallback.
+
+The Effect Layer uses [`tts-rt-v2` over WebSocket](https://soniox.com/docs/api-reference/tts/websocket-api), sends each complete bounded phrase and receives streaming 24 kHz mono PCM. RU/FR/EN and the Japanese extension are exposed through the existing language configuration. Soniox handles language mixing within a phrase. One scoped socket belongs to each phrase; cancellation closes it and fences late callbacks. Audio remains bounded to 60 seconds per phrase; only explicit successful stream termination completes synthesis. Authentication, billing, quota, network, malformed audio and premature termination fail explicitly without copying provider payloads into errors. Provider generation has a 60-second deadline; the independent overall response/playback budget defaults to five minutes.
+
+Synthetic provider probes establish transport and timing only. Pronunciation, mixed-language quality and perceived latency still require listening in the iPhone application. Text is sent to Soniox for cloud synthesis; credentials remain on the backend. The adapter receives complete phrases rather than forwarding individual LLM tokens.

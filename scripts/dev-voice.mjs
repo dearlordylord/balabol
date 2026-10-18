@@ -88,7 +88,10 @@ export const localRequirements = (environment, includeHelper = true) => {
   return requirements;
 };
 export const checkLocalResources = (environment, includeHelper = true) => {
-  if (environment.BALABOL_RECOGNITION_PROVIDER === "soniox" && !environment.SONIOX_API_KEY?.trim())
+  if (
+    [environment.BALABOL_RECOGNITION_PROVIDER, environment.BALABOL_SYNTHESIS_PROVIDER].includes("soniox") &&
+    !environment.SONIOX_API_KEY?.trim()
+  )
     throw new Error("Soniox requires SONIOX_API_KEY in the backend environment; keep it outside Git.");
   for (const requirement of localRequirements(environment, includeHelper)) {
     try {
