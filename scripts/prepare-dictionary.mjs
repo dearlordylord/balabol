@@ -117,7 +117,9 @@ export const main = async (args) => {
           ]) {
             const page = yield* dictionary.lookup({ language, word, limit: 1 });
             if (JSON.stringify(page.source) !== JSON.stringify(metadata) || page.entries.length === 0)
-              throw new Error("Dictionary catalog is incomplete or does not match the pinned source");
+              throw new Error(
+                "Dictionary catalog is incomplete or does not match the pinned source; run pnpm prepare:dictionary",
+              );
           }
         }).pipe(Effect.provide(sqliteDictionaryLayer(path))),
       ),
@@ -157,6 +159,7 @@ export const main = async (args) => {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     console.error(error instanceof Error ? error.message : "Dictionary preparation failed");
+    console.error("Dictionary is unavailable. Run pnpm prepare:dictionary; restart the backend after preparation.");
     process.exitCode = 1;
   });
 }

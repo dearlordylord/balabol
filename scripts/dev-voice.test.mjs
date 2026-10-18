@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { constants, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { constants, mkdtempSync, rmSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { checkLocalResources, localRequirements, providerDescription, providerEnvironment } from "./dev-voice.mjs";
+import {
+  checkLocalResources,
+  dictionaryReadiness,
+  localRequirements,
+  providerDescription,
+  providerEnvironment,
+} from "./dev-voice.mjs";
 
 test("ordinary launch preserves fake defaults and does not acquire any local speech dependencies", () => {
   const source = { BALABOL_DATABASE: "personal.sqlite" };
@@ -108,6 +114,20 @@ test("read-only speech checks require readable files and executables without inv
       () => checkLocalResources({ ...environment, BALABOL_QWEN_MODEL: join(directory, "missing") }),
       /Qwen model configuration/,
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a fresh checkout reports missing optional dictionary data with the recovery command", () => {
+  const directory = mkdtempSync(join(tmpdir(), "balabol-no-dictionary-"));
+  try {
+    const path = join(directory, "missing.sqlite");
+    const status = dictionaryReadiness({ ...process.env, BALABOL_DICTIONARY_PATH: path });
+    assert.match(status, /Dictionary: UNAVAILABLE/);
+    assert.match(status, /pnpm prepare:dictionary/);
+    assert.match(status, /Ordinary chat remains available/);
+    assert.throws(() => statSync(path));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

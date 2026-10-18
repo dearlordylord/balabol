@@ -19,7 +19,7 @@ const unavailable = (error: unknown) =>
       error.message.includes("unable to open")
         ? "Missing"
         : "Corrupt",
-    message: "Local dictionary could not be read; prepare the catalogue again"
+    message: "Local dictionary unavailable; run pnpm prepare:dictionary, then restart the backend"
   })
 const query = (raw: DictionaryQuery) =>
   Effect.try({
@@ -80,9 +80,14 @@ export const sqliteDictionaryLayer = (path: string) =>
           (database) => Effect.sync(() => database.close())
         )
       )
-      if (opened._tag === "Failure") return Dictionary.of({ lookup: () => Effect.fail(opened.failure) })
+      if (opened._tag === "Failure") {
+        yield* Effect.logWarning(opened.failure.message)
+        return Dictionary.of({ lookup: () => Effect.fail(opened.failure) })
+      }
       const database = opened.success
       const source = yield* Effect.result(Effect.try({ try: () => readSource(database), catch: unavailable }))
+      if (source._tag === "Failure") yield* Effect.logWarning(source.failure.message)
+      else yield* Effect.logInfo("Local dictionary catalog opened (ru/fr/en)")
       return Dictionary.of({
         lookup: (raw) =>
           query(raw).pipe(

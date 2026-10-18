@@ -168,6 +168,17 @@ export const ready = async (url, alive) => {
   );
 };
 
+/** Optional data readiness is checked separately from voice prerequisites. */
+export const dictionaryReadiness = (environment) => {
+  const result = spawnSync(process.execPath, [join(root, "scripts/prepare-dictionary.mjs"), "--check"], {
+    env: environment,
+    encoding: "utf8",
+    timeout: 30000,
+  });
+  if (result.status === 0) return "Dictionary: ready (English, French, Russian).";
+  return `Dictionary: UNAVAILABLE. Run pnpm prepare:dictionary, then restart the backend. Ordinary chat remains available.\n${result.stderr?.trim() || result.error?.message || "Catalog verification failed"}`;
+};
+
 export const main = async (args) => {
   if (args.includes("--help")) {
     console.log(
@@ -177,6 +188,7 @@ export const main = async (args) => {
   }
   const environment = providerEnvironment(args, process.env);
   const check = args.includes("--check");
+  console.log(dictionaryReadiness(environment));
   checkLocalResources(environment, check);
   if (Number(process.versions.node.split(".")[0]) !== 24)
     throw new Error("Use Node 24 and the repository's pinned pnpm.");

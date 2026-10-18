@@ -38,6 +38,13 @@ it("looks up sourced etymology through the conversation without changing persona
     async (request) => {
       calls++
       expect(request.instructions).toContain("Separate sourced linguistic relationships from invented mnemonics")
+      expect(request.instructions).toContain(
+        "Always call lookup_dictionary before creating etymologies or vocabulary associations"
+      )
+      expect(request.instructions).toContain("without waiting for an explicit user request")
+      expect(request.instructions).toContain("never claim attested ancestry without source evidence")
+      expect(request.instructions).toContain("credit Wiktionary contributors with the entry sourceUrl")
+      expect(request.instructions).toContain("THIRD_PARTY_NOTICES.md")
       if (calls === 1) return tool("lookup_dictionary", { language: "fr", word: "avocat" }, "dictionary-1")
       const result = Schema.decodeUnknownSync(DictionaryPage)(lastToolResult(request))
       expect(result.entries[0]?.etymologyText).toBe("From Latin advocatus.")
