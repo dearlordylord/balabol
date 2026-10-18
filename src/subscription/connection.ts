@@ -28,7 +28,7 @@ export const connection = (initial: PersistentState, ports: SubscriptionPorts) =
         body: body.toString()
       })
       .pipe(
-        Effect.flatMap(checkResponse),
+        Effect.flatMap(checkTokenResponse),
         Effect.flatMap((body) =>
           Schema.decodeUnknownEffect(TokenResponse)(body).pipe(
             Effect.mapError(() => failed("Authentication", "Invalid subscription token response"))
@@ -194,3 +194,11 @@ const checkResponse = (response: { readonly status: number; readonly body: unkno
     return Effect.fail(failed("Provider", "Subscription provider request failed"))
   return Effect.succeed(response.body)
 }
+
+const invalidTokenRequestStatus = 400
+const checkTokenResponse = (response: { readonly status: number; readonly body: unknown }) =>
+  response.status === invalidTokenRequestStatus
+    ? Effect.fail(
+        failed("Authentication", "ChatGPT authentication failed; reconnect the subscription or switch account")
+      )
+    : checkResponse(response)

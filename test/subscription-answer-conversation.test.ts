@@ -91,3 +91,36 @@ it("selects the exact qualified model only after explicit opt-in and rejects uns
   )
   expect(invalid._tag).toBe("Failure")
 })
+
+it.each([401, 403, 429])(
+  "preserves the actionable subscription failure for HTTP %s through the agent runtime",
+  async (status) => {
+    const database = await temporaryDatabase()
+    const answer = knowledgeAnswerLayer(
+      async () => new Response("private provider details must not escape", { status })
+    )
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const conversation = yield* Conversation
+            yield* conversation.send(input)
+            const reply = yield* waitForReply(conversation, input.deliveryId)
+            expect(reply.state).toBe("Failed")
+            expect(reply.error?.message).toContain(
+              status === 429 ? "subscription usage limit" : "authentication failed"
+            )
+            expect(reply.error?.message).not.toContain("private provider details")
+            expect(reply.error?.message).not.toContain("AI error")
+          })
+        ).pipe(
+          Effect.provide(
+            replyLayer(database.path, answer, { answerProvider: "subscription", answerModel: "gpt-6.1-sol" })
+          )
+        )
+      )
+    } finally {
+      await database.close()
+    }
+  }
+)

@@ -27,6 +27,7 @@ const transcriptEvent = (utteranceId: string, selected: typeof emptySonioxTransc
       : { kind: "Interim", utteranceId, text: selected.text }
   )
 }
+const emptyHypothesis = (finished: boolean, text: string) => !finished && text.length === 0
 const transcribe = (request: RecognitionRequest, settings: SonioxSettings, factory: SonioxSocketFactory) =>
   Stream.callback<RecognitionEvent, RecognitionFailed>(
     (queue) =>
@@ -79,6 +80,13 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
             fail(sonioxFailure("Soniox audio submission failed"))
           }
         }
+        const publish = (event: RecognitionEvent) => {
+          if (!Queue.offerUnsafe(queue, event)) fail(sonioxFailure("Soniox event capacity exceeded"))
+          if (finished) {
+            terminal = true
+            Queue.endUnsafe(queue)
+          }
+        }
         socket.onmessage = (message) => {
           if (terminal) return
           try {
@@ -86,12 +94,10 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
             transcript = result.committed
             finished = result.finished
             const selected = finished ? transcript : result.provisional
+            // A provider heartbeat is not a valid client Interim text event.
+            if (emptyHypothesis(finished, selected.text)) return
             const event = transcriptEvent(request.utteranceId, selected, finished)
-            if (!Queue.offerUnsafe(queue, event)) fail(sonioxFailure("Soniox event capacity exceeded"))
-            if (finished) {
-              terminal = true
-              Queue.endUnsafe(queue)
-            }
+            publish(event)
           } catch (error) {
             fail(error instanceof RecognitionFailed ? error : sonioxFailure("Invalid Soniox response"))
           }

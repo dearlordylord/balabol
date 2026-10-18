@@ -185,3 +185,28 @@ it("keeps parsed token values redacted across identity and persistence ports", a
   )
   expect(saved && validated).toBe(true)
 })
+
+it("reports a rejected expired-token refresh as authentication without provider details", async () => {
+  const { ports, tokens } = fixture()
+  const layer = subscriptionLayerWith({
+    ...ports,
+    request: (_url, init) =>
+      Effect.succeed(
+        init.body?.includes("grant_type=refresh_token")
+          ? { status: 400, body: { error: "private refresh details" } }
+          : { status: 200, body: { ...tokens, expires_in: 1 } }
+      )
+  })
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const subscription = yield* Subscription
+      yield* authorize(subscription)
+      const result = yield* subscription.accessToken().pipe(Effect.result)
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "Authentication", message: expect.stringContaining("switch account") }
+      })
+      expect(JSON.stringify(result)).not.toContain("private refresh details")
+    }).pipe(Effect.provide(layer))
+  )
+})

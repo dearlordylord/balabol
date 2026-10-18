@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema, Stream } from "effect"
-import { AiError, LanguageModel, Model, Tool, type Prompt } from "effect/ai"
+import { LanguageModel, Model, Tool, type Prompt } from "effect/ai"
 import {
   SubscriptionToolInference,
   ToolInferenceRequest,
@@ -10,12 +10,7 @@ import {
 import { SubscriptionParts } from "./subscription-parts.ts"
 import { yieldedAnswerLayer } from "./yielded.ts"
 
-const providerError = () =>
-  AiError.make({
-    module: "balabol/subscription",
-    method: "streamText",
-    reason: new AiError.UnknownError({ description: "Subscription structured answer failed" })
-  })
+import { subscriptionProviderError as providerError } from "./subscription-failure.ts"
 export const subscriptionPromptInputs = (prompt: Prompt.Prompt): ToolInput[] =>
   prompt.content.flatMap((message): ToolInput[] => {
     if (message.role === "system") return []

@@ -9,6 +9,7 @@ import { SonioxSocket } from "./soniox-fixture.ts"
 it("accepts multilingual Soniox results through Voice and durable Conversation before delivering reply audio", async () => {
   const input = await Effect.runPromise(classifiedVoiceInput())
   const socket = new SonioxSocket([
+    { tokens: [] },
     {
       tokens: [
         { text: "Bonjour ", language: "fr", is_final: true },
@@ -25,6 +26,10 @@ it("accepts multilingual Soniox results through Voice and durable Conversation b
         yield* input.segment(transport)
         const output = (yield* waitForOutput(voice, join.sessionId, "AwaitingReady")).output
         if (output?.manifest == null) throw new Error("Missing reply publication")
+        const snapshot = yield* voice.snapshot(join.sessionId, 0)
+        expect(
+          snapshot.events.filter((event) => event.kind === "Interim").every((event) => event.text.length > 0)
+        ).toBe(true)
         const messages = (yield* conversation.page({ limit: 100 })).messages
         expect(messages[0]).toMatchObject({
           text: "Bonjour привет",

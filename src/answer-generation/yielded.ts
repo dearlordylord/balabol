@@ -1,3 +1,4 @@
+import { answerRuntimeFailureMessage } from "./subscription-failure.ts"
 import * as Agent from "@yielded/agent/agent"
 import { AgentPolicy } from "@yielded/agent/agent-policy"
 import * as AgentRuntime from "@yielded/agent/agent-runtime"
@@ -103,7 +104,7 @@ export const yieldedAnswerLayer = (
                     return completion(event)
                   }
                   if (runtimeFailure(event))
-                    return Effect.fail(failed(`Answer runtime or knowledge tool failed (${event.errorTag})`))
+                    return Effect.fail(failed(answerRuntimeFailureMessage(event.errorTag, event.message)))
                   return Effect.succeed([])
                 }),
                 Stream.flatMap(Stream.fromIterable),

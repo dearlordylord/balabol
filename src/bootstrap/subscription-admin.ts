@@ -30,6 +30,7 @@ const page = (message: string, connected = false, status = 200) =>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Balabol subscription</title><style>body{font:18px/1.6 system-ui;max-width:38rem;margin:3rem auto;padding:1rem}button{font:inherit;padding:.5rem 1rem}</style>
 <h1>Connect ChatGPT to Balabol</h1><p>${message}</p>
+<form method="post" action="/switch-account"><button>Switch account</button></form>
 ${connected ? '<form method="post" action="/disconnect"><button>Disconnect Balabol</button></form>' : '<form method="post" action="/connect"><button>Continue with ChatGPT</button></form>'}
 <p>This connection belongs to Balabol. Your existing Codex login is unchanged.</p>
 <p>Connecting does not run AI or spend credits. Balabol must use your subscription only, with paid credits disabled.</p>
@@ -98,6 +99,11 @@ const callback = Effect.gen(function* () {
       Effect.succeed(HttpServerResponse.redirect("/failed", { status: 303 }))
   })
 )
+const switchAccount = Effect.gen(function* () {
+  const subscription = yield* Subscription
+  yield* subscription.disconnect("ChangeAccount")
+  return yield* connect
+})
 const disconnect = Effect.gen(function* () {
   const subscription = yield* Subscription
   const result = yield* subscription.disconnect()
@@ -121,6 +127,7 @@ export const subscriptionAdminRoutes = Layer.unwrap(
         yield* router.add("POST", "/connect", connect.pipe(errors))
         yield* router.add("GET", "/callback", callback.pipe(errors))
         yield* router.add("POST", "/disconnect", disconnect.pipe(errors))
+        yield* router.add("POST", "/switch-account", switchAccount.pipe(errors))
       })
     ).pipe(Layer.provide(localOnly(local).layer))
   })

@@ -19,6 +19,7 @@ const collect = (socket: SonioxSocket, input = request) =>
 it.effect("preserves mixed-language text and UTF-16 spans while replacing provisional text", () =>
   Effect.gen(function* () {
     const socket = new SonioxSocket([
+      { tokens: [] },
       { tokens: [token("Bon", "fr", false)] },
       { tokens: [token("Bonjour "), token("wrong", "en", false)] },
       { tokens: [token("😀привет", "ru"), token("<end>")] }

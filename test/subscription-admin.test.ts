@@ -56,6 +56,7 @@ it("validates setup configuration before binding a loopback listener", async () 
 it("keeps subscription consent on loopback and rejects browser cross-site mutations", async () => {
   const callbacks: string[] = []
   let disconnected = false
+  const disconnectModes: unknown[] = []
   let connected = false
   const service = Layer.succeed(Subscription, {
     begin: (uri) => {
@@ -70,8 +71,9 @@ it("keeps subscription consent on loopback and rejects browser cross-site mutati
     status: () => Effect.succeed(connected ? { kind: "Connected", expiresAt: 1000 } : { kind: "Disconnected" }),
     models: () => Effect.succeed([]),
     accessToken: () => Effect.die("Admin must never request an inference token"),
-    disconnect: () =>
+    disconnect: (mode) =>
       Effect.sync(() => {
+        disconnectModes.push(mode)
         disconnected = true
         connected = false
         return { revocation: "Unconfirmed" }
@@ -110,6 +112,9 @@ it("keeps subscription consent on loopback and rejects browser cross-site mutati
     const connectedPage = await (await request("/connected")).text()
     expect(connectedPage).toContain("Setup is complete")
     expect(connectedPage).not.toContain("Continue with ChatGPT")
+    const switched = await request("/switch-account", { method: "POST" })
+    expect(switched.status).toBe(303)
+    expect(disconnectModes).toEqual(["ChangeAccount"])
     const disconnect = await request("/disconnect", { method: "POST" })
     expect(disconnect.status).toBe(200)
     expect(await disconnect.text()).toContain("We could not confirm")
