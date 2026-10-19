@@ -4,7 +4,7 @@ import type { RecognitionState, ReadyRecognition } from "./recognition-state.ts"
 import { finishRecognitionCapture, transitionRecognitionWindow } from "./recognition-transition-segment.ts"
 import { transitionRecognitionPacket } from "./recognition-transition-packets.ts"
 import { transitionRecognitionSettlement } from "./recognition-transition-settlement.ts"
-import { resetRecognition, failRecognitionTurn } from "./recognition-transition-reset.ts"
+import { gapRecognition, resetRecognition, failRecognitionTurn } from "./recognition-transition-reset.ts"
 import { unchangedRecognition } from "./recognition-transition-result.ts"
 import type { RecognitionTransition } from "./recognition-transition-result.ts"
 export type { RecognitionTransition } from "./recognition-transition-result.ts"
@@ -32,6 +32,7 @@ const dispatch = Match.type<
     Settled: (input) => transitionRecognitionSettlement(input.state, input),
     CaptureBoundary: (input) => finishRecognitionCapture(input.state, input.generation, input.requestId),
     Reset: (input) => resetRecognition(input.state, input.generation),
+    Gap: (input) => gapRecognition(input.state, input.generation),
     Handed: (input) =>
       sameReadyTurn(input.state, input.generation, input.turnId)
         ? unchangedRecognition({ ...input.state, turn: null })

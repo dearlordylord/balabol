@@ -31,7 +31,7 @@ internal func startVoice(_ state: VoiceState, proposedId: UUID, resuming: Bool) 
     capture: resuming ? .resuming : .requestingMicrophone, startRequestId: .some(proposedId),
     startMuted: (resuming && state.wantsMuted) || state.hasPendingAdmission, bootstrapKnown: false,
     retryStep: 0, origin: .some(nil), snapshotSequence: -1, generation: state.generation + 1, sequence: 0,
-    muteInFlight: false, resumeProbe: resuming, tentative: "", tentativeUtterance: .some(nil), unrecognizedUtterance: .some(nil))
+    muteInFlight: false, resumeProbe: resuming, tentative: "", tentativeUtterance: .some(nil), inputNotice: .some(nil))
   let next = state.replacing(capture: capture, recovery: state.recovery.replacing(admissionFailure: .some(nil)),
     output: VoiceOutputState(), execution: state.execution.replacing(activeCapture: .some(nil)))
   let cancelled = cancelVoice(next) { _, operation in captureProducer(operation.kind) }
@@ -85,7 +85,7 @@ internal func endVoice(_ state: VoiceState, shutdown: Bool) -> VoiceTransition {
   if !shutdown && [.idle, .ending, .ended].contains(state.capture) { return unchangedVoice(state) }
   let capture = state.captureModel.replacing(intent: .off, capture: state.capture == .idle ? .idle : .ending,
     muteInFlight: false, drainingOrigin: .some(state.captureModel.drainingOrigin ?? state.captureModel.origin),
-    isRetired: shutdown, tentative: "", tentativeUtterance: .some(nil), unrecognizedUtterance: .some(nil))
+    isRetired: shutdown, tentative: "", tentativeUtterance: .some(nil), inputNotice: .some(nil))
   let next = markVoiceChecking(state.replacing(capture: capture,
     execution: state.execution.replacing(platformObservation: .some(nil), shuttingDown: shutdown)))
   let closed = closeVoiceProducer(next, origin: state.captureModel.origin ?? state.captureModel.drainingOrigin, preserveObservation: !shutdown)

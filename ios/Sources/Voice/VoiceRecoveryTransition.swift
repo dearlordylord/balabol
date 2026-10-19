@@ -50,7 +50,7 @@ internal func stageVoiceFinal(_ state: VoiceState, association: VoiceAdmissionAs
     stagedFinals: trimmed.stagedFinals.merging([association.deliveryId: text]) { _, new in new },
     checkpointRevision: trimmed.checkpointRevision + 1,
     admissionLanguageSpans: trimmed.admissionLanguageSpans.merging([association.deliveryId: spans]) { _, new in new })
-  let staged = trimmed.replacing(capture: trimmed.captureModel.replacing(unrecognizedUtterance: .some(nil)), recovery: recovery,
+  let staged = trimmed.replacing(capture: trimmed.captureModel.replacing(inputNotice: .some(nil)), recovery: recovery,
     execution: state.associations.isEmpty ? state.execution.replacing(resolutionStep: 0) : state.execution)
   if staged.associations.count == 2, staged.wantsListening, staged.sessionId != nil,
     staged.capture == .listening, !staged.muteInFlight {
@@ -79,7 +79,10 @@ internal func acceptVoiceAdmission(_ state: VoiceState, association: VoiceAdmiss
     admissionLanguageSpans: state.admissionLanguageSpans.merging([id: receipt.languageSpans]) { _, new in new },
     admissions: state.admissions.merging([id: .saved(receipt)]) { _, new in new },
     utterances: state.utterances.contains(id) ? state.utterances : state.utterances + [id])
-  let saved = trimVoiceAdmissions(state.replacing(recovery: recovery))
+  let accepted = state.replacing(recovery: recovery)
+  let cleared = state.inputNotice?.utteranceId == id
+    ? accepted.replacing(capture: accepted.captureModel.replacing(inputNotice: .some(nil))) : accepted
+  let saved = trimVoiceAdmissions(cleared)
   let projected = composeVoiceOutput(VoiceTransition(state: saved, commands: [.accepted(receipt)]), .inputAccepted(id))
   return finishVoiceResolutionEpisode(continueVoice(projected, restoreVoiceCaptureAfterAdmission))
 }

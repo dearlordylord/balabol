@@ -9,6 +9,15 @@ const maximumEvents = 256
 const maximumBytes = 131072
 const correlationLength = 32
 const nanosPerMilli = 1000000
+const maximumDroppedFrames = 65535
+const maximumQueueDepth = 8
+const CapturePressure = Schema.Struct({
+  queueDepth: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumQueueDepth })),
+  droppedFrames: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumDroppedFrames })),
+  queueWaitMillis: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  processingMillis: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  gapMillis: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)))
+})
 export const VoiceDiagnosticCause = Schema.Literals([
   "backendSpeech",
   "clientInterrupt",
@@ -18,6 +27,7 @@ export const VoiceDiagnosticCause = Schema.Literals([
   "detach",
   "lifecycle",
   "queueOverflow",
+  "captureRecovered",
   "captureError",
   "recognitionStarted",
   "recognitionSucceeded",
@@ -32,6 +42,7 @@ export const VoiceDiagnosticErrorCode = Schema.Literals([
   "InvalidAudio",
   "ActivityUnavailable",
   "Overloaded",
+  "CaptureDiscontinuity",
   "StorageUnavailable",
   "AdmissionConflict",
   "InvalidInput",
@@ -44,6 +55,7 @@ export const diagnosticErrorCode = (code: string): typeof VoiceDiagnosticErrorCo
   Option.getOrElse(Schema.decodeUnknownOption(VoiceDiagnosticErrorCode)(code), () => "Other")
 export const VoiceDiagnosticInput = Schema.Struct({
   cause: VoiceDiagnosticCause,
+  capturePressure: Schema.optionalKey(CapturePressure),
   failureReason: Schema.optionalKey(FailureReason),
   errorCode: Schema.optionalKey(VoiceDiagnosticErrorCode),
   recognitionReason: Schema.optionalKey(RecognitionFailureReason),
@@ -65,6 +77,7 @@ const correlation = (value: string) =>
   createHash("sha256").update(value.toLowerCase()).digest("hex").slice(0, correlationLength)
 export const VoiceDiagnosticRecord = Schema.Struct({
   cause: VoiceDiagnosticCause,
+  capturePressure: VoiceDiagnosticInput.fields.capturePressure,
   failureReason: Schema.optionalKey(FailureReason),
   session: Schema.String,
   errorCode: VoiceDiagnosticInput.fields.errorCode,
@@ -81,6 +94,7 @@ export const VoiceDiagnosticRecord = Schema.Struct({
 })
 export type VoiceDiagnosticRecord = typeof VoiceDiagnosticRecord.Type
 const recognitionMetadata = (parsed: VoiceDiagnosticInput) => ({
+  ...(parsed.capturePressure === undefined ? {} : { capturePressure: parsed.capturePressure }),
   ...(parsed.recognitionReason === undefined ? {} : { recognitionReason: parsed.recognitionReason }),
   ...(parsed.sampleFrames === undefined ? {} : { sampleFrames: parsed.sampleFrames })
 })

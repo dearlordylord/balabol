@@ -35,3 +35,20 @@ export const failRecognitionTurn = (state: RecognitionState, error: RecognitionE
     commands: [...result.commands, { kind: "Error", turnId: turn.id, generation: turn.generation, error }]
   }
 }
+
+/** Missing PCM invalidates only the unfinished utterance. Sealed work keeps its original identity. */
+export const gapRecognition = (state: RecognitionState, generation: number): RecognitionTransition => {
+  const affected = state.turn !== null && !state.turn.ended
+  const released = affected
+    ? continueRecognition(releaseCapture(state), cancelRecognitionJobs)
+    : releaseSlices(state, state.segment.slices)
+  return {
+    state: {
+      ...released.state,
+      generation,
+      suppressed: true,
+      segment: { kind: "Active", slices: [], samples: 0, quiet: 0 }
+    },
+    commands: released.commands
+  }
+}

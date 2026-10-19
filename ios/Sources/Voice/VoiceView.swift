@@ -21,10 +21,10 @@
             }
           }
         }
-        if model.state.unrecognizedUtterance != nil,
+        if let inputNotice = model.state.inputNotice,
           model.state.capture == .listening || model.state.capture == .muted
         {
-          Text("Couldn’t recognize that. Please repeat.").font(.caption)
+          Text(inputNotice.message).font(.caption)
             .accessibilityIdentifier("voice-recognition-repeat")
         }
         if model.state.admissionFailure != nil && model.state.hasPendingAdmission {

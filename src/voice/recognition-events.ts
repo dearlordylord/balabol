@@ -43,6 +43,7 @@ export type RecognitionInput =
     }
   | { readonly kind: "CaptureBoundary"; readonly generation: number; readonly requestId: string }
   | { readonly kind: "Reset"; readonly generation: number }
+  | { readonly kind: "Gap"; readonly generation: number }
   | { readonly kind: "Handed"; readonly generation: number; readonly turnId: string }
   | {
       readonly kind: "RejectTurn"

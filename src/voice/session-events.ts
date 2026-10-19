@@ -21,6 +21,7 @@ export type SessionEvent =
       readonly code: string
       readonly message: string
     }
+  | { readonly kind: "CaptureGap"; readonly generation: number }
   | { readonly kind: "Disconnected"; readonly code: string; readonly message?: string }
   | { readonly kind: "Released"; readonly resource: string }
   | {

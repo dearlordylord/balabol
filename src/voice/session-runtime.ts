@@ -1,5 +1,5 @@
 import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
-import { Deferred, Effect, Queue, Scope, Exit, Schema } from "effect"
+import { Deferred, Effect, Queue, Scope, Exit } from "effect"
 import type { Fiber } from "effect"
 import type { InputSource } from "../conversation/index.ts"
 import type { SessionDependencies, SessionIdentity, SessionRetention } from "./session-port.ts"
@@ -7,9 +7,10 @@ import type { SessionEvent, SessionCommand } from "./session-events.ts"
 import { initialSession, pendingCount, sessionSnapshot } from "./session-state.ts"
 import type { SessionState } from "./session-state.ts"
 import { transitionSession } from "./session-transitions.ts"
-import { VoiceFrame, failed } from "./contracts.ts"
+import { failed } from "./contracts.ts"
 import type { VoiceFailed, MediaConnection, OutputReady, OutputInterrupt } from "./contracts.ts"
 import type { ActivityStream } from "./activity.ts"
+import { makeCaptureIngress } from "./capture-ingress.ts"
 import { makeOutputExecutor } from "./output-executor.ts"
 import { makeSessionExpiryExecutor } from "./session-expiry-executor.ts"
 import type { OutputDecision } from "./output-state.ts"
@@ -39,11 +40,6 @@ interface Envelope {
 interface SessionAcknowledgement {
   readonly state: SessionState
   readonly outputDecision?: OutputDecision
-}
-interface CaptureFrame {
-  readonly track: string
-  readonly frame: VoiceFrame
-  readonly generation: number
 }
 export const makeSessionRuntime = (
   deps: SessionDependencies,
@@ -76,10 +72,8 @@ export const makeSessionRuntime = (
     let connection: MediaConnection | undefined
     let acquisition: Fiber.Fiber<unknown, unknown> | undefined
     const mailbox = yield* Queue.unbounded<Envelope>()
-    const frames = yield* Queue.make<CaptureFrame>({ capacity: 8 })
     const closed = yield* Deferred.make<void>()
     const acquired = yield* Deferred.make<void>()
-    let frameOperation = 0
     const notify = (event: SessionEvent) => {
       if (retired) return
       Queue.offerUnsafe(mailbox, { event, ack: Deferred.makeUnsafe<SessionAcknowledgement, VoiceFailed>() })
@@ -289,53 +283,16 @@ export const makeSessionRuntime = (
         else yield* Deferred.fail(envelope.ack, result.error)
       })
     yield* Effect.forever(Queue.take(mailbox).pipe(Effect.flatMap(consume))).pipe(Effect.forkIn(ownerScope))
-    const frame = (value: CaptureFrame) =>
-      Effect.gen(function* () {
-        const operation = ++frameOperation
-        const next = yield* post({
-          kind: "Frame",
-          operation,
-          generation: value.generation,
-          track: value.track,
-          samples: value.frame.samplesPerChannel
-        })
-        if (next.classification?.operation !== operation) return
-        const generation = next.generation
-        yield* Effect.suspend(() =>
-          state.classification?.operation === operation ? activity.push(value.frame) : Effect.succeed([])
-        ).pipe(
-          withAuditSpan("voice.activity", undefined, { session: auditIdentity(identity.sessionId), generation }),
-          Effect.flatMap((windows) => recognition.classified(windows, generation)),
-          Effect.catch((error) =>
-            post({ kind: "CaptureFailed", generation, operation, code: error.code, message: error.message }).pipe(
-              Effect.asVoid,
-              Effect.ignore
-            )
-          ),
-          Effect.ensuring(Effect.sync(() => notify({ kind: "Classified", operation })))
-        )
-      })
-    yield* Effect.forever(Queue.take(frames).pipe(Effect.flatMap(frame))).pipe(Effect.forkIn(captureScope))
-    const incoming = (track: string, raw: unknown) => {
-      if (retired || state.phase !== "active" || state.muted || state.retiredTracks.includes(track)) return
-      const parsed = Schema.decodeUnknownExit(VoiceFrame)(raw)
-      if (Exit.isFailure(parsed)) {
-        notify({
-          kind: "CaptureFailed",
-          generation: state.generation,
-          operation: null,
-          code: "InvalidAudio",
-          message: "Expected 16 kHz mono 20 ms PCM audio"
-        })
-        return
-      }
-      const value = parsed.value
-      const frame = { ...value, data: value.data.slice() }
-      if (!Queue.offerUnsafe(frames, { track, frame, generation: state.generation })) {
-        trace("queueOverflow")
-        notify({ kind: "Disconnected", code: "Overloaded" })
-      }
-    }
+    const incoming = yield* makeCaptureIngress({
+      scope: captureScope,
+      current: () => state,
+      retired: () => retired,
+      activity,
+      post,
+      notify,
+      classified: recognition.classified,
+      diagnostics: deps.diagnostics
+    })
     const close = () =>
       Effect.suspend(() =>
         state.phase === "ended" ? Effect.void : post({ kind: "End" }).pipe(Effect.andThen(Deferred.await(closed)))

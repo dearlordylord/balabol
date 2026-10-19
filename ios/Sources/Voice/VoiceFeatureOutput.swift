@@ -30,7 +30,11 @@ private func suppressVoiceOutput(_ state: VoiceState, target: VoiceOutputIdentit
   return continueVoice(stopped) { reserveVoice($0, .interrupt(origin, target), after: after) }
 }
 internal func cutVoiceOutput(_ state: VoiceState, nextInput: UUID? = nil) -> VoiceTransition {
-  let cleared = state.replacing(execution: state.execution.replacing(pendingFailureCue: .some(nil)))
+  let capture: VoiceCaptureState
+  if case .captureDiscontinuity = state.inputNotice {
+    capture = state.captureModel.replacing(inputNotice: .some(nil))
+  } else { capture = state.captureModel }
+  let cleared = state.replacing(capture: capture, execution: state.execution.replacing(pendingFailureCue: .some(nil)))
   let cut = composeVoiceOutput(unchangedVoice(cleared), .cut(nextInput: nextInput, pendingInputs: state.pendingAssociations.map(\.deliveryId)))
   return VoiceTransition(state: cut.state, commands: [.cancelGenerationCue] + voiceTrace(state, .cut) + cut.commands)
 }

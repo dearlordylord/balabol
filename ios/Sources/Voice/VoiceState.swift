@@ -7,6 +7,23 @@ import Foundation
 /// One immutable feature value owns capture, recovery and output decisions.
 /// Start changes in VoiceFeatureTransition; the ViewModel only interprets commands.
 public struct VoiceState: Equatable, Sendable {
+  /// One recoverable input notice; it never owns playout or admission state.
+  public enum InputNotice: Equatable, Sendable {
+    case unrecognized(UUID)
+    case captureDiscontinuity(UUID)
+    internal var utteranceId: UUID? {
+      switch self {
+      case .unrecognized(let id): id
+      case .captureDiscontinuity(let id): id
+      }
+    }
+    public var message: String {
+      switch self {
+      case .unrecognized: "Couldn’t recognize that. Please repeat."
+      case .captureDiscontinuity: "I missed part of that. Please repeat."
+      }
+    }
+  }
   public enum Capture: Equatable, Sendable {
     case idle, requestingMicrophone, connecting, reconnecting, hostUnavailable,
       checkingPreviousSpeech, listening, muted, paused, resuming, ending, ended
@@ -60,7 +77,11 @@ public struct VoiceState: Equatable, Sendable {
   internal var isRetired: Bool { captureModel.isRetired }
   public var tentative: String { captureModel.tentative }
   internal var tentativeUtterance: UUID? { captureModel.tentativeUtterance }
-  public var unrecognizedUtterance: UUID? { captureModel.unrecognizedUtterance }
+  public var inputNotice: InputNotice? { captureModel.inputNotice }
+  public var unrecognizedUtterance: UUID? {
+    if case .unrecognized(let utterance) = inputNotice { return utterance }
+    return nil
+  }
   internal var recentAcceptedAdmissions: [VoiceAcceptedAdmission] { recovery.recentAcceptedAdmissions }
   internal var associations: [UUID: VoiceAdmissionAssociation] { recovery.associations }
   internal var stagedFinals: [UUID: String] { recovery.stagedFinals }

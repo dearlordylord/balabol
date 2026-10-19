@@ -1491,6 +1491,107 @@ import XCTest
     await model.shutdown()
   }
 
+  func testCaptureDiscontinuityIsInputOnlyWithOrderedSnapshotsAndPreservedAdmissions() throws {
+    let initial = try VoiceLifecycleITFMapping().initial()
+    let origin = try XCTUnwrap(initial.origin)
+    let open = UUID(), handed = UUID(), previousUnrecognized = UUID()
+    var wire = outputValue(session: origin.sessionId, input: UUID(), response: UUID(), epoch: UUID())
+    wire["status"] = "Playing"
+    let playing = try JSONDecoder().decode(VoiceOutput.self, from: JSONSerialization.data(withJSONObject: wire))
+    let association = VoiceAdmissionAssociation(backendIncarnationId: origin.backendIncarnationId,
+      sessionId: origin.sessionId, deliveryId: handed)
+    for muted in [false, true] {
+      for abandoned in [Optional(open), nil, Optional(handed), Optional(UUID())] {
+        let capture = initial.captureModel.replacing(intent: .listening(muted: muted),
+          capture: muted ? .muted : .listening, tentative: "unfinished input", tentativeUtterance: .some(open),
+          inputNotice: .some(.unrecognized(previousUnrecognized)))
+        let recovery = initial.recovery.replacing(associations: [handed: association],
+          admissions: [handed: .checking(deliveryId: handed, text: "already finalized")])
+        let state = initial.replacing(capture: capture, recovery: recovery,
+          output: initial.output.replacing(current: .some(playing), receivedAudio: true))
+        let gap = try event(session: origin.sessionId, sequence: 1, kind: "Error", fields: [
+          "utteranceId": abandoned.map { $0.uuidString as Any } ?? NSNull(),
+          "code": "CaptureDiscontinuity", "message": "Microphone audio was interrupted; repeat the unfinished utterance"])
+        let page = VoiceSnapshot(sessionId: origin.sessionId, status: "active", muted: muted, sequence: 1,
+          backendIncarnationId: origin.backendIncarnationId, events: [gap], nextAfter: nil)
+        let result = voiceSnapshotObserved(state, requestOrigin: origin, page: page, proposedId: UUID())
+        XCTAssertEqual(result.state.capture, state.capture)
+        XCTAssertEqual(result.state.intent, state.intent)
+        XCTAssertEqual(result.state.output, state.output)
+        XCTAssertEqual(result.state.recovery, recovery)
+        let expectedNotice: VoiceState.InputNotice = abandoned == open ? .captureDiscontinuity(open) : .unrecognized(previousUnrecognized)
+        XCTAssertEqual(result.state.inputNotice, expectedNotice)
+        XCTAssertEqual(result.state.tentative, abandoned == nil || abandoned == open ? "" : "unfinished input")
+        XCTAssertFalse(result.commands.contains { if case .run = $0 { true } else { false } })
+        let replay = voiceSnapshotObserved(result.state, requestOrigin: origin, page: page, proposedId: UUID())
+        XCTAssertEqual(replay.state, result.state)
+        XCTAssertTrue(replay.commands.isEmpty)
+        let old = VoiceOrigin(sessionId: UUID(), backendIncarnationId: origin.backendIncarnationId)
+        XCTAssertEqual(voiceSnapshotObserved(result.state, requestOrigin: old, page: page, proposedId: UUID()).state, result.state)
+        let late = try event(session: old.sessionId, sequence: 2, kind: "Error", fields: [
+          "utteranceId": NSNull(), "code": "CaptureDiscontinuity", "message": "Old capture gap"])
+        let latePage = VoiceSnapshot(sessionId: origin.sessionId, status: "active", muted: muted, sequence: 2,
+          backendIncarnationId: origin.backendIncarnationId, events: [late], nextAfter: nil)
+        let ignored = voiceSnapshotObserved(result.state, requestOrigin: origin, page: latePage, proposedId: UUID())
+        XCTAssertEqual(ignored.state.inputNotice, result.state.inputNotice)
+        XCTAssertEqual(ignored.state.output, result.state.output)
+        XCTAssertTrue(ignored.commands.isEmpty)
+        let receipt = ConversationMessage(deliveryId: handed, recordId: 1, position: 0, text: "already finalized")
+        let accepted = acceptVoiceAdmission(result.state, association: association, receipt: receipt,
+          expectedText: "already finalized", proposedId: UUID())
+        XCTAssertEqual(accepted.state.admissions[handed], .saved(receipt))
+        XCTAssertEqual(accepted.state.inputNotice, expectedNotice)
+        if abandoned == open {
+          let onset = transitionVoice(result.state, .init(event: .speechIntent, proposedStartRequestId: UUID()))
+          XCTAssertNil(onset.state.inputNotice)
+          let next = try event(session: origin.sessionId, sequence: 3, kind: "Interim", fields: [
+            "utteranceId": UUID().uuidString, "text": "next utterance"])
+          let nextPage = VoiceSnapshot(sessionId: origin.sessionId, status: "active", muted: false, sequence: 3,
+            backendIncarnationId: origin.backendIncarnationId, events: [next], nextAfter: nil)
+          if !muted {
+            XCTAssertNil(voiceSnapshotObserved(result.state, requestOrigin: origin, page: nextPage, proposedId: UUID()).state.inputNotice)
+          }
+        }
+      }
+    }
+  }
+
+  func testCaptureDiscontinuityKeepsLivePlaybackAndNextFinalClearsNotice() async throws {
+    for scoped in [false, true] {
+      let control = FixtureControl()
+      let media = FixtureMedia(allowed: true)
+      media.holdOutput = false
+      let model = VoiceViewModel(control: control, media: media) { _ in }
+      model.start()
+      await settle { model.state.capture == .listening }
+      let session = await control.identity()
+      var wire = outputValue(session: session, input: UUID(), response: UUID(), epoch: UUID())
+      wire["status"] = "Playing"
+      await control.append(try event(session: session, sequence: 1, kind: "Output", fields: ["output": wire]))
+      await settle { model.output.current?.status == .playing }
+      let output = model.output
+      let stops = media.stoppedOutput
+      let abandoned: UUID? = scoped ? UUID() : nil
+      await control.append(try event(session: session, sequence: 2, kind: "Error", fields: [
+        "utteranceId": abandoned.map { $0.uuidString as Any } ?? NSNull(),
+        "code": "CaptureDiscontinuity", "message": "Microphone audio was interrupted; repeat the unfinished utterance"]))
+      await settle { model.state.sequence >= 2 }
+      XCTAssertEqual(model.state.inputNotice, abandoned.map { .captureDiscontinuity($0) })
+      XCTAssertEqual(model.state.capture, .listening)
+      XCTAssertEqual(model.output, output)
+      XCTAssertEqual(media.stoppedOutput, stops)
+      XCTAssertFalse(media.disconnected)
+      let opened = await control.openedCount()
+      XCTAssertEqual(opened, 1)
+      let delivery = UUID()
+      await control.append(try event(session: session, sequence: 3, kind: "Final", fields: [
+        "utteranceId": delivery.uuidString, "deliveryId": delivery.uuidString, "text": "new valid input"]))
+      await settle { model.state.hasPendingAdmission }
+      XCTAssertNil(model.state.inputNotice)
+      await model.shutdown()
+    }
+  }
+
   func testRepeatNoticeRetainsThroughInterimAndClearsOnEndAndRestart() async throws {
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)

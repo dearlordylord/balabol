@@ -25,6 +25,7 @@ const dispatch = Match.type<SessionEvent & { readonly state: SessionState }>().p
     Expire: (input) => transitionClosure(input.state, input),
     Disconnected: (input) => transitionClosure(input.state, input),
     Released: (input) => transitionClosure(input.state, input),
+    CaptureGap: (input) => transitionCapture(input.state, input),
     CaptureFailed: (input) => transitionCapture(input.state, input),
     Frame: (input) => transitionCapture(input.state, input),
     Classified: (input) => transitionCapture(input.state, input),
@@ -43,7 +44,7 @@ export const transitionSession = (state: SessionState, event: SessionEvent): Ses
   const selected = dispatch({ ...event, state })
   const result = closeBrokenSubscription(selected, event)
   const fenced =
-    state.generation === result.state.generation || event.kind === "Mute"
+    state.generation === result.state.generation || event.kind === "Mute" || event.kind === "CaptureGap"
       ? result
       : composeRecognition(result, { kind: "Reset", generation: result.state.generation })
   return reconcileSessionExpiry(settleRecognition(fenced))

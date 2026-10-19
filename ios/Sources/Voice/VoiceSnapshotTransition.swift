@@ -77,14 +77,18 @@ private func voiceWireObserved(
   switch event.kind {
   case "Interim":
     guard state.capture == .listening else { return unchangedVoice(advanced) }
+    let notice: VoiceState.InputNotice??
+    if case .captureDiscontinuity(let missed) = advanced.inputNotice, missed != event.utteranceId {
+      notice = .some(nil)
+    } else { notice = nil }
     return unchangedVoice(advanced.replacing(capture: advanced.captureModel.replacing(
-      tentative: event.text ?? "", tentativeUtterance: .some(event.utteranceId))))
+      tentative: event.text ?? "", tentativeUtterance: .some(event.utteranceId), inputNotice: notice)))
   case "Final":
     guard let delivery = event.deliveryId, let text = event.text,
       event.backendIncarnationId == origin.backendIncarnationId else { return unchangedVoice(advanced) }
     let cleared = clearVoiceTentative(advanced, utterance: event.utteranceId)
     return stageVoiceFinal(cleared.replacing(capture: cleared.captureModel.replacing(
-      unrecognizedUtterance: .some(nil))), association: VoiceAdmissionAssociation(
+      inputNotice: .some(nil))), association: VoiceAdmissionAssociation(
         backendIncarnationId: origin.backendIncarnationId, sessionId: origin.sessionId,
         deliveryId: delivery, detectedLanguage: event.detectedLanguage), text: text,
       spans: event.languageSpans ?? [], proposedId: proposedId)
@@ -124,6 +128,25 @@ private func voiceWireFailure(
 private func decideVoiceWireFailure(
   _ state: VoiceState, event: VoiceWireEvent, proposedId: UUID
 ) -> VoiceTransition {
+  // A discontinuity abandons only unfinished microphone input. It cannot
+  // authorize admission resolution, retire the session or interrupt playout.
+  if event.code == "CaptureDiscontinuity" {
+    guard [.listening, .muted, .checkingPreviousSpeech].contains(state.capture) else { return unchangedVoice(state) }
+    guard let utterance = event.utteranceId else {
+      // No abandoned speech: repair only stale interim input, without inventing
+      // a repeat request or overwriting an existing notice for another turn.
+      return unchangedVoice(state.replacing(capture: state.captureModel.replacing(
+        tentative: "", tentativeUtterance: .some(nil))))
+    }
+    guard state.associations[utterance] == nil,
+      !state.recentAcceptedAdmissions.contains(where: { $0.association.deliveryId == utterance }),
+      state.admissions[utterance] == nil,
+      state.tentativeUtterance == nil || state.tentativeUtterance == utterance
+    else { return unchangedVoice(state) }
+    let cleared = clearVoiceTentative(state, utterance: utterance)
+    return unchangedVoice(cleared.replacing(capture: cleared.captureModel.replacing(
+      inputNotice: .some(.captureDiscontinuity(utterance)))))
+  }
   if let utterance = event.utteranceId, let association = state.associations[utterance] {
     let checking: VoiceState
     if let text = state.admissionText(utterance) {
@@ -141,7 +164,7 @@ private func decideVoiceWireFailure(
     ["RecognitionFailed", "InvalidRecognition"].contains(event.code ?? "") {
     let cleared = clearVoiceTentative(state, utterance: utterance)
     return unchangedVoice(cleared.replacing(capture: cleared.captureModel.replacing(
-      unrecognizedUtterance: .some(utterance))))
+      inputNotice: .some(.unrecognized(utterance)))))
   }
   return failVoiceTransport(state,
     .backend(code: event.code ?? "", message: event.message ?? ""), proposedId: proposedId)

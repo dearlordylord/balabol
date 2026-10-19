@@ -84,7 +84,7 @@ private func voiceBootstrapCompleted(_ state: VoiceState, requestedId: UUID, mut
       return continueVoice(releaseVoiceBootstrap(state, origin: voiceOrigin(join))) { failVoiceTransport($0, .invalidResponse, proposedId: proposedId) }
     }
     let origin = voiceOrigin(join)
-    let connected = state.replacing(capture: state.captureModel.replacing(bootstrapKnown: true, origin: .some(origin), unrecognizedUtterance: .some(nil)))
+    let connected = state.replacing(capture: state.captureModel.replacing(bootstrapKnown: true, origin: .some(origin), inputNotice: .some(nil)))
     let actuallyMuted = muted || state.wantsMuted || state.hasPendingAdmission
     let request = VoiceRequest(generation: state.generation, id: state.execution.nextRequest)
     let reserved = reserveVoice(connected, .connect(join, muted: actuallyMuted), after: physicalVoiceRequests(state))

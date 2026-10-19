@@ -21,7 +21,7 @@ internal struct VoiceCaptureState: Equatable, Sendable {
   let isRetired: Bool
   let tentative: String
   let tentativeUtterance: UUID?
-  let unrecognizedUtterance: UUID?
+  let inputNotice: VoiceState.InputNotice?
   init(
     intent: VoiceState.Intent = .off,
     capture: VoiceState.Capture = .idle,
@@ -39,7 +39,7 @@ internal struct VoiceCaptureState: Equatable, Sendable {
     isRetired: Bool = false,
     tentative: String = "",
     tentativeUtterance: UUID? = nil,
-    unrecognizedUtterance: UUID? = nil
+    inputNotice: VoiceState.InputNotice? = nil
   ) {
     self.intent = intent
     self.capture = capture
@@ -57,7 +57,7 @@ internal struct VoiceCaptureState: Equatable, Sendable {
     self.isRetired = isRetired
     self.tentative = tentative
     self.tentativeUtterance = tentativeUtterance
-    self.unrecognizedUtterance = unrecognizedUtterance
+    self.inputNotice = inputNotice
   }
   func replacing(
     intent: VoiceState.Intent? = nil,
@@ -76,7 +76,7 @@ internal struct VoiceCaptureState: Equatable, Sendable {
     isRetired: Bool? = nil,
     tentative: String? = nil,
     tentativeUtterance: UUID?? = nil,
-    unrecognizedUtterance: UUID?? = nil
+    inputNotice: VoiceState.InputNotice?? = nil
   ) -> VoiceCaptureState {
     VoiceCaptureState(
       intent: intent ?? self.intent,
@@ -95,7 +95,7 @@ internal struct VoiceCaptureState: Equatable, Sendable {
       isRetired: isRetired ?? self.isRetired,
       tentative: tentative ?? self.tentative,
       tentativeUtterance: tentativeUtterance ?? self.tentativeUtterance,
-      unrecognizedUtterance: unrecognizedUtterance ?? self.unrecognizedUtterance
+      inputNotice: inputNotice ?? self.inputNotice
     )
   }
 }

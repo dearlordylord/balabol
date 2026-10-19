@@ -1,8 +1,9 @@
+import { composeRecognition } from "./session-transition-recognition.ts"
 import type { SessionState } from "./session-state.ts"
 import type { SessionEvent } from "./session-events.ts"
 import { unchanged, emit } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
-type CaptureEvent = Extract<SessionEvent, { kind: "CaptureFailed" | "Frame" | "Classified" }>
+type CaptureEvent = Extract<SessionEvent, { kind: "CaptureFailed" | "CaptureGap" | "Frame" | "Classified" }>
 const selectTrack = (state: SessionState, track: string) => {
   if (state.track === undefined || state.track === track)
     return { generation: state.generation, retiredTracks: state.retiredTracks }
@@ -41,8 +42,25 @@ const captureFailed = (
   )
   return { state: result.state, commands: [{ kind: "ResetCapture" }, ...result.commands] }
 }
+const captureGap = (state: SessionState, event: Extract<SessionEvent, { kind: "CaptureGap" }>): SessionTransition => {
+  if (state.phase !== "active" || state.generation !== event.generation || state.muted) return unchanged(state)
+  const turn = state.recognition.turn
+  const next = { ...state, generation: state.generation + 1, classification: undefined }
+  const notice = emit(next, {
+    kind: "Error",
+    utteranceId: turn !== null && !turn.ended ? turn.id : null,
+    code: "CaptureDiscontinuity",
+    message: "Microphone audio was interrupted; repeat the unfinished utterance"
+  })
+  return composeRecognition(
+    { state: notice.state, commands: [{ kind: "ResetCapture" }, ...notice.commands] },
+    { kind: "Gap", generation: next.generation }
+  )
+}
 export const transitionCapture = (state: SessionState, event: CaptureEvent): SessionTransition => {
   switch (event.kind) {
+    case "CaptureGap":
+      return captureGap(state, event)
     case "CaptureFailed":
       return captureFailed(state, event)
     case "Frame":
