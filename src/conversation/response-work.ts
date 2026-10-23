@@ -1,8 +1,9 @@
 import { withAuditSpan } from "../operation-audit/index.ts"
 import { Effect, Schema, Stream } from "effect"
 import { Receipt, samePayload, StorageUnavailable, type Memory } from "../memory/index.ts"
-import type { AnswerGeneration } from "../answer-generation/index.ts"
+import { AnswerFailed, type AnswerGeneration } from "../answer-generation/index.ts"
 import { parseAnswerEvent, validateAnswerLanguages } from "./answer-languages.ts"
+import { initialPlainText, normalizeAnswerEvent } from "./plain-text.ts"
 import { waitForPriorMemory } from "./prior-context.ts"
 import { appendReply } from "./reply-persistence.ts"
 import type { ResponseCommand, ResponseEvent } from "./response-events.ts"
@@ -17,12 +18,30 @@ export const generateResponse = (
   authorized: () => boolean
 ) => {
   const permitted = Effect.suspend(() => (authorized() ? Effect.void : Effect.interrupt))
+  let plainText = initialPlainText
   const publish = (raw: unknown) =>
     permitted.pipe(
       Effect.andThen(parseAnswerEvent(raw, answer.capabilities)),
       Effect.flatMap((event) =>
-        post({ kind: "ProviderEvent", attempt: command.attempt, operation: command.operation, event })
-      )
+        Effect.try({
+          try: () => normalizeAnswerEvent(plainText, event),
+          catch: (error) =>
+            error instanceof AnswerFailed ? error : new AnswerFailed({ message: "Invalid normalized provider output" })
+        })
+      ),
+      Effect.flatMap((result) => {
+        plainText = result.state
+        return Effect.forEach(
+          result.events,
+          (event) =>
+            parseAnswerEvent(event, answer.capabilities).pipe(
+              Effect.andThen(
+                post({ kind: "ProviderEvent", attempt: command.attempt, operation: command.operation, event })
+              )
+            ),
+          { discard: true }
+        )
+      })
     )
   const prior = /^[0-9]+\+[0-9]+\|assistant_interrupted:/m.test(command.prior)
     ? `[Interrupted assistant output: generated text may not have been heard; no user agreement implied]\n${command.prior}`

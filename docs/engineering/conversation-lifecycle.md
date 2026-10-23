@@ -79,6 +79,12 @@ Delivery registration installs its scoped subscription and initial snapshot atom
 
 The authorization check must hold at the actual publication boundary, including after asynchronous synthesis or readiness waits. Checking only when a command is dequeued permits a stale capture to publish later. The resource gate is synchronously revocable; its private implementation does not make independent domain policy.
 
+## Answer text admission
+
+Conversation owns the plain-text admission boundary in `response-work.ts` and its `plain-text` transition. Validate provider events first, then normalize new answer deltas before posting them to the response owner. Response snapshots, persisted terminal text and Voice phrase staging consume that single append-only representation; presentation and synthesis must not apply independent text filters. Raw provider output keeps its own total bound, including removed syntax. Retained characters preserve their source language annotations at remapped UTF-16 offsets; formatting removal does not infer languages.
+
+The incremental pure transition retains only undecided suffixes and fence/line context. Ordinary text is released immediately; line prefixes resolve at line boundaries, and unmatched inline constructs are retained on successful completion. Failed or cancelled work does not flush unpublished suffixes, and existing attempt/operation fences still reject late output. This is a conservative supported-Markdown boundary, not a full document renderer or a migration of historical receipts.
+
 ## Completion and interruption
 
 Cancellation first records logical invalidation and revokes resource authorization, then requests physical cancellation. A delayed or noncooperative worker may finish, but its old generation/operation/response cannot change the selected state or release stale audio.

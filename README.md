@@ -26,6 +26,12 @@ Open **Usage** in the iPhone conversation toolbar for separate chat, memory-summ
 
 Speech shows actual API cost, tokens and audio duration for the configured Soniox project over the trailing 30-day UTC window, obtained from [Soniox usage summary](https://soniox.com/docs/guides/usage-summary). These project totals can include traffic outside Balabol. Refresh failures retain prior values only within the same credential scope. No billing credential is sent to the iPhone.
 
+## Plain-text answers
+
+The answer prompt requests plain spoken text. Conversation also removes supported residual Markdown before publishing new answer text, so live chat, saved replies, memory and speech use the same text. The incremental boundary handles headings, list/quote prefixes, matched emphasis, inline code, fenced-code wrappers and inline links. Code contents and meaningful literal symbols are retained; links keep both their label and destination.
+
+Ordinary text streams immediately. Ambiguous formatting suffixes wait for enough input to interpret them; unmatched literals are retained on successful completion. Cancellation or provider failure discards pending, unpublished text rather than emitting it late. Existing saved history is not rewritten.
+
 ## Local operation audit
 
 The backend exports sanitized Effect spans to `~/.local/share/balabol/diagnostics/operations.jsonl` (private permissions; rotation retains the current and previous file, up to 4 MiB each). No telemetry server is required. Spans record operation, parent/trace identity, hashed response identity, duration, outcome and typed failure reason; conversation text, credentials, raw exceptions and audio are excluded. Queue overflow and write failures are counted and reported to stderr. Shutdown drains pending writes for up to three seconds; this is operational diagnostics, not a crash-durable transaction log.
