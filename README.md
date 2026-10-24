@@ -1,19 +1,19 @@
 # Balabol
 
 **Purpose:** Describe the repository and its current development state.
-**Status:** Durable conversation with opt-in subscription Sol/Luna, local Qwen3-ASR or Soniox recognition and Apple or Soniox speech synthesis; physical-device qualification remains separate.
+**Status:** Durable conversation with opt-in subscription Sol/Luna, Soniox recognition and speech synthesis; physical-device qualification remains separate.
 **Authority:** Product requirements live in the published prototype issue; engineering guidance lives in AGENTS.md.
 **Expected use:** Start here before contributing.
 **Lifecycle:** Update when the product spec, setup or implementation status changes.
 
-An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; recognition can opt into pinned local Qwen3-ASR and synthesis into installed Apple voices. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
+An iOS-first personal voice assistant with one enduring conversation. SwiftUI/MVVM client, TypeScript/Effect backend, @firfi/unii memory. Speech providers default to deterministic fakes; real recognition and synthesis use Soniox. Answers and summaries default to fakes, with independent opt-ins for the qualified ChatGPT subscription models.
 
 - [Accepted prototype specification](https://github.com/dearlordylord/balabol/issues/1) — ready-for-agent
 - [Synchronized local specification](docs/product/prototype-spec.md)
 - [Domain glossary](GLOSSARY.md)
 - [Personal knowledge architecture](docs/adr/0001-personal-knowledge-module.md)
 - [Yielded agent runtime](docs/adr/0002-yielded-agent-runtime.md)
-- [Personal knowledge specification — implementation in progress](https://github.com/dearlordylord/balabol/issues/40)
+- [Personal knowledge specification — implemented](https://github.com/dearlordylord/balabol/issues/40)
 - [Wayfinder map](.scratch/voice-prototype/map.md)
 - [Functional conversation lifecycle specification](docs/product/functional-conversation-spec.md) — implemented through #52–#58; start changes from the [owner protocol](docs/engineering/conversation-lifecycle.md)
 - [Client lifecycle verification specification](https://github.com/dearlordylord/balabol/issues/59) — event admission contracts and Quint-to-Swift conformance, implemented incrementally through #60–#63
@@ -86,39 +86,25 @@ LiveKit ICE advertises the Mac's Tailscale IPv4 address on UDP 7882 with TCP 788
 
 ## Use all real providers
 
-With local resources provisioned and the ChatGPT subscription connected, run:
+With Silero VAD provisioned, the ChatGPT subscription connected and a server-side `SONIOX_API_KEY` configured, run:
 
 ```sh
 pnpm dev:voice --real
 ```
 
-This selects subscription Sol replies, subscription Luna summaries, local Qwen3-ASR recognition and installed Apple synthesis. Explicit provider environment overrides still apply. The launcher builds the native speech helper and backend before starting private services; it does not download weights or install voices. `pnpm dev:voice --real --check` remains read-only. Default `pnpm dev:voice` retains deterministic fixtures.
+This selects subscription Sol replies, subscription Luna summaries, Soniox recognition and Soniox synthesis. Explicit supported provider overrides still apply. The launcher builds the backend before starting private services; it does not install speech engines or download weights. `pnpm dev:voice --real --check` remains read-only. Ordinary startup defaults to deterministic fixtures when no explicit provider configuration is supplied.
 
-Apple synthesis requires macOS and Xcode Command Line Tools. `pnpm build:speech` builds the Swift 6 helper outside the checkout at `~/.local/share/balabol/tools/apple-speech/apple-speech`. `BALABOL_APPLE_SPEECH_EXECUTABLE` and `BALABOL_FFMPEG_EXECUTABLE` override its executable and ffmpeg paths. `BALABOL_SYNTHESIS_PROVIDER=apple` selects synthesis independently. Startup enumerates actual installed voices and rejects missing configured languages. Apple voice locale is separate from detected input language and requested response language. Private rendering runs use local Apple language recognition at writing-system transitions to choose among configured installed voices, so a Russian quotation inside French speech is not silently omitted. The plan must conserve the complete supplied text. These rendering estimates never become model attribution or saved language spans; ambiguous same-script text retains the requested voice. Unresolvable non-Latin runs fail explicitly rather than reporting successful silence; ambiguous Latin names retain the requested voice. No voice outside the configured catalog is selected.
+Soniox is the only supported real speech provider. Apple synthesis and local Qwen recognition have been removed; selecting `apple` or `qwen3-asr` fails configuration validation rather than falling back. Previously downloaded local models/runtimes outside the checkout are not removed automatically. Historical qualification records remain in the tracker and research documents.
 
-Each complete phrase has at most 800 UTF-16 units and 60 seconds of audio across all rendering runs, under one serialization permit and deadline. Each run uses the existing AVSpeechSynthesizer end-of-stream and delegate completion checks, writes a protected temporary file, then ffmpeg converts complete audio to mono PCM16LE at 24 kHz. The adapter validates each voice receipt and concatenates the converted audio in text order before emitting chunks of at most 1,200 frames. Phrase generation precedes the first chunk, so this adapter is replaceable rather than a claim of incremental native streaming. Cancellation stops the owned process, prevents subsequent runs and removes temporary files. Speech failure retains useful conversation text and allows a subsequent reply.
-
-Voice owns the overall response/playback deadline: fixtures default to 30 seconds, Apple/Soniox synthesis to five minutes, covering prior-memory wait, inference and playback. `BALABOL_VOICE_COMPLETION_MILLIS` explicitly overrides it up to five minutes. Control keepalive remains independent. Physical iPhone media, locked-screen and interruption checks remain [issue #29](https://github.com/dearlordylord/balabol/issues/29).
+Voice owns the overall response/playback deadline: fixtures default to 30 seconds and Soniox synthesis to five minutes, covering prior-memory wait, inference and playback. `BALABOL_VOICE_COMPLETION_MILLIS` explicitly overrides it up to five minutes. Control keepalive remains independent. Physical iPhone media, locked-screen and interruption checks remain [issue #29](https://github.com/dearlordylord/balabol/issues/29).
 
 ## Prepare speech activity detection
 
 Run `pnpm prepare:vad` once before building the iPhone app or using real voice. It provisions the pinned Silero **v6.2.3** ONNX artifact outside the checkout at `~/.local/share/balabol/models/vad/silero-v6.2.3.onnx`. `pnpm prepare:vad --check` verifies it without downloads. Size is 2,327,524 bytes; SHA-256 is `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`. The source revision and complete artifact contract live in `src/voice/activity-model.json`, which is also bundled with the iOS model. The build verifies and copies this model into the app; weights are never committed.
 
-`--real` selects `BALABOL_ACTIVITY_PROVIDER=silero`. Direct Qwen3-ASR configuration also defaults to Silero. `BALABOL_VAD_MODEL` overrides the external model path while retaining exact checks. Missing/invalid resources fail explicitly; no energy-only fallback is used. The explicit `fake` provider is for deterministic development Layers. The pinned runtime is ONNX Runtime **1.24.2** on Node and iOS. Native inference runs outside the realtime audio callback with bounded buffering and stale-result fencing. Effect owns the backend's isolated inference process, including deadlines, termination and reaping; a failed frame is not retried, and a later request can acquire a replacement worker. Neither classifier receives conversation context or tools.
+`--real` selects `BALABOL_ACTIVITY_PROVIDER=silero`. Direct Soniox recognition configuration also defaults to Silero. `BALABOL_VAD_MODEL` overrides the external model path while retaining exact checks. Missing/invalid resources fail explicitly; no energy-only fallback is used. The explicit `fake` provider is for deterministic development Layers. The pinned runtime is ONNX Runtime **1.24.2** on Node and iOS. Native inference runs outside the realtime audio callback with bounded buffering and stale-result fencing. Effect owns the backend's isolated inference process, including deadlines, termination and reaping; a failed frame is not retried, and a later request can acquire a replacement worker. Neither classifier receives conversation context or tools.
 
-## Enable local recognition
-
-Provision the pinned runtime and model explicitly with `pnpm prepare:qwen` (requires `uv` and Python 3.12; downloads approximately 2.46 GB of weights outside Git). `pnpm prepare:qwen --check` verifies package version and every artifact hash without downloading. Ordinary voice startup never installs dependencies or downloads weights.
-
-The local recognition adapter uses **Qwen3-ASR 1.7B** through **mlx-audio 0.5.9** on Apple Silicon. Model files and the isolated Python environment live outside Git. The default runtime is `~/.local/share/balabol/tools/qwen-asr/.venv/bin/python`; the default model directory is `~/.local/share/balabol/models/qwen3-asr-1.7b`. `--real` selects this adapter; the ordinary launcher still selects deterministic fixtures.
-
-```sh
-BALABOL_RECOGNITION_PROVIDER=qwen3-asr pnpm dev:voice
-```
-
-`BALABOL_QWEN_PYTHON_PATH`, `BALABOL_QWEN_HELPER_PATH` and `BALABOL_QWEN_MODEL` override the local runtime, helper and model paths. Startup validates the installed engine and pinned model revision before accepting audio. Missing or mismatched resources fail explicitly; there is no fake fallback. Recognition remains independent of the answer, summary and synthesis selections. Whisper and its caption-specific text filtering are removed rather than retained as fallback behavior.
-
-Each supplied mono PCM16LE 16 kHz recognition chunk (at most 15 seconds) gets one serialized native process. The 30-second deadline includes queueing, model initialization and inference; cancellation terminates and reaps that process and removes private temporary audio. The next chunk starts a fresh process after failure; a failed chunk is never retried automatically. This has a per-chunk model-load cost and does not retain a warm resident model. Raw native process output and recognition text are not written to the technical journals. Supported languages do not establish mixed-language accuracy: local synthetic qualification and physical microphone acceptance remain separate evidence.
+## Voice turn handling and diagnostics
 
 Debug iPhone builds and `pnpm dev:voice --real` retain bounded local technical journals for interruption, recognition and playback attribution. The iPhone journal also records foreground/background and protected-data lock transitions. These journals contain hashed correlation IDs, timing, state and error codes, without microphone recordings, transcript text or credentials. Backend metadata lives outside the checkout at `~/.local/share/balabol/diagnostics/backend.json`; the iPhone journal lives in its app cache. `BALABOL_VOICE_DIAGNOSTICS=0` opts out; release iPhone builds keep diagnostics disabled.
 
@@ -126,7 +112,7 @@ Real voice mode uses pinned Silero VAD before microphone onset can interrupt an 
 
 Voice separates recognition chunks from a completed spoken turn. The ten-second audio-buffer boundary starts another bounded recognition chunk without sending a message or starting a reply. Ordered chunk text and language spans are assembled provisionally until about one second of classified quiet and completion of every required chunk; speech that resumes before this handoff continues the same provisional turn. Once handed to durable admission, resumed speech fences the exact pending reply's audio and interrupts that response when acceptance completes. Two recognition requests may be active; a turn is bounded to 30 chunks (at most five minutes of PCM, less with partial chunks), 100,000 UTF-16 text units and 1,000 language spans. Exceeding capacity or losing any required chunk rejects the incomplete turn with a recoverable notice and suppresses its remaining speech until quiet; it never accepts a surviving prefix or suffix as a complete message. Genuine interruption of an already active reply is unchanged.
 
-Automatic language detection preserves mixed transcript text and emits nullable whole-result `detectedLanguage` with empty exact spans. Empty text has no detected language and creates no message. Russian, French and English are the initial scope; Japanese is a future configured capability, not a quality claim. Advertised support is separate from measured language accuracy and latency; qualification evidence belongs in issue #27.
+Recognition preserves mixed transcript text with validated token-derived UTF-16 language spans. Whole-result `detectedLanguage` is nullable when no single language describes the result. Empty text has no detected language and creates no message. Russian, French and English are the initial scope; Japanese is also configurable; configured support is not a quality claim. Advertised support is separate from measured language accuracy and latency; qualification evidence belongs in issue #27.
 
 ## Connect the ChatGPT subscription
 
@@ -211,7 +197,7 @@ The dictionary is rebuildable reference data. The conversation and personal know
 
 ### Soniox recognition trial
 
-Set `BALABOL_RECOGNITION_PROVIDER=soniox` and `SONIOX_API_KEY` in the ignored local `.env` (mode `0600`) or backend environment, then run `pnpm dev:voice --real`. The voice launcher loads `.env`; explicit shell variables take precedence. Prefer a `.env` symlink to a mode-`0600` file outside the checkout (for example `~/.config/balabol/backend.env`), keeping actual credentials outside repository directory scans and checkouts. The key remains server-side and redacted in parsed configuration; never put it in Git, the iPhone app or chat. Missing credentials fail preflight with an actionable error. The default remains local Qwen; restore it by removing the provider override. Apple synthesis, Sol/Luna, tools and memory are unchanged. Cloud audio processing is separately metered by Soniox.
+Set `BALABOL_RECOGNITION_PROVIDER=soniox` and `SONIOX_API_KEY` in the ignored local `.env` (mode `0600`) or backend environment, then run `pnpm dev:voice --real`. The voice launcher loads `.env`; explicit shell variables take precedence. Prefer a `.env` symlink to a mode-`0600` file outside the checkout (for example `~/.config/balabol/backend.env`), keeping actual credentials outside repository directory scans and checkouts. The key remains server-side and redacted in parsed configuration; never put it in Git, the iPhone app or chat. Missing credentials fail preflight with an actionable error. Real mode defaults to Soniox. Sol/Luna, tools and memory remain independent. Cloud audio processing is separately metered by Soniox.
 
 The initial adapter uses `stt-rt-v5` over authenticated WebSocket with strict configured-language hints and token language identification. It accepts supplied PCM chunks from the current Voice pipeline, consumes provisional/final tokens, and requires the provider's explicit finished response before emitting Final. Early closure, malformed data, provider rejection, output capacity and the 30-second request deadline are explicit failures; cancellation closes the request socket without retrying paid requests automatically. Provider text is not copied into diagnostics.
 
@@ -225,7 +211,7 @@ Authentication failures are reported as ChatGPT authentication failures with rec
 
 ### Soniox synthesis trial
 
-Set `BALABOL_SYNTHESIS_PROVIDER=soniox` with the same server-side `SONIOX_API_KEY` used for recognition, then run `pnpm dev:voice --real`. Recognition and synthesis are independent selections. `BALABOL_SONIOX_VOICE` selects the voice (default `Adrian`); `BALABOL_SYNTHESIS_PROVIDER=apple` restores installed Apple voices. No Apple helper, ffmpeg or installed voices are required for Soniox synthesis. TTS is separately metered by Soniox; there is no automatic retry or provider fallback.
+Set `BALABOL_SYNTHESIS_PROVIDER=soniox` with the same server-side `SONIOX_API_KEY` used for recognition, then run `pnpm dev:voice --real`. Recognition and synthesis are independent selections. `BALABOL_SONIOX_VOICE` selects the voice (default `Adrian`); Soniox is the only real synthesis provider; deterministic `fake` remains available for development. No native speech helper, ffmpeg or installed voices are required. TTS is separately metered by Soniox; there is no automatic retry or provider fallback.
 
 The Effect Layer uses [`tts-rt-v2` over WebSocket](https://soniox.com/docs/api-reference/tts/websocket-api), sends each complete bounded phrase and receives streaming 24 kHz mono PCM. RU/FR/EN and the Japanese extension are exposed through the existing language configuration. Soniox handles language mixing within a phrase. One scoped socket belongs to each phrase; cancellation closes it and fences late callbacks. Audio remains bounded to 60 seconds per phrase; only explicit successful stream termination completes synthesis. Authentication, billing, quota, network, malformed audio and premature termination fail explicitly without copying provider payloads into errors. Provider generation has a 60-second deadline; the independent overall response/playback budget defaults to five minutes.
 

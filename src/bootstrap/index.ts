@@ -31,20 +31,8 @@ import {
   configurableFakeSummaryLayer,
   subscriptionSummaryLayer
 } from "../summary-generation/index.ts"
-import {
-  fakeRecognitionLayer,
-  qwenRecognitionLayer,
-  QwenSettings,
-  sonioxRecognitionLayer,
-  SonioxSettings
-} from "../speech-recognition/index.ts"
-import {
-  fakeSynthesisLayer,
-  appleSynthesisLayer,
-  AppleSynthesisSettings,
-  sonioxSynthesisLayer,
-  SonioxSynthesisSettings
-} from "../speech-synthesis/index.ts"
+import { fakeRecognitionLayer, sonioxRecognitionLayer, SonioxSettings } from "../speech-recognition/index.ts"
+import { fakeSynthesisLayer, sonioxSynthesisLayer, SonioxSynthesisSettings } from "../speech-synthesis/index.ts"
 import {
   LiveKitSettings,
   liveKitLayer,
@@ -56,7 +44,7 @@ import {
   VoiceOutputConfiguration,
   VoiceOutputSettings,
   defaultVoiceOutputSettings,
-  localSpeechVoiceOutputSettings,
+  realSpeechVoiceOutputSettings,
   SpeechActivitySettings,
   fakeSpeechActivityLayer,
   sileroSpeechActivityLayer,
@@ -139,9 +127,11 @@ export const ServerConfig = Schema.Struct({
   voice: Schema.optionalKey(LiveKitSettings),
   voiceDiagnostics: Schema.optionalKey(Schema.Boolean),
   voiceLanguages: Schema.optionalKey(LanguageTags),
-  recognition: Schema.optionalKey(Schema.Union([QwenSettings, SonioxSettings])),
+  recognition: Schema.optionalKey(Schema.Union([Schema.Struct({ provider: Schema.Literal("fake") }), SonioxSettings])),
   activity: Schema.optionalKey(SpeechActivitySettings),
-  synthesis: Schema.optionalKey(Schema.Union([AppleSynthesisSettings, SonioxSynthesisSettings])),
+  synthesis: Schema.optionalKey(
+    Schema.Union([Schema.Struct({ provider: Schema.Literal("fake") }), SonioxSynthesisSettings])
+  ),
   voiceOutput: Schema.optionalKey(VoiceOutputSettings),
   tailnetOwner: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximumOwnerIdentityLength))
@@ -206,8 +196,8 @@ const outputSelection = (environment: NodeJS.ProcessEnv) => ({
     completionMillis: Number(
       environment.BALABOL_VOICE_COMPLETION_MILLIS ??
         String(
-          (["apple", "soniox"].includes(environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake")
-            ? localSpeechVoiceOutputSettings
+          (environment.BALABOL_SYNTHESIS_PROVIDER === "soniox"
+            ? realSpeechVoiceOutputSettings
             : defaultVoiceOutputSettings
           ).completionMillis
         )
@@ -226,15 +216,7 @@ const activitySelection = (environment: NodeJS.ProcessEnv) => ({
 const recognitionSelection = (environment: NodeJS.ProcessEnv) =>
   environment.BALABOL_RECOGNITION_PROVIDER === "soniox"
     ? { provider: "soniox", apiKey: Redacted.make(environment.SONIOX_API_KEY ?? "") }
-    : {
-        provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake",
-        executable:
-          environment.BALABOL_QWEN_PYTHON_PATH ??
-          join(homedir(), ".local", "share", "balabol", "tools", "qwen-asr", ".venv", "bin", "python"),
-        helperPath: environment.BALABOL_QWEN_HELPER_PATH ?? join(process.cwd(), "scripts", "qwen-asr.py"),
-        modelPath:
-          environment.BALABOL_QWEN_MODEL ?? join(homedir(), ".local", "share", "balabol", "models", "qwen3-asr-1.7b")
-      }
+    : { provider: environment.BALABOL_RECOGNITION_PROVIDER ?? "fake" }
 const synthesisSelection = (environment: NodeJS.ProcessEnv) =>
   environment.BALABOL_SYNTHESIS_PROVIDER === "soniox"
     ? {
@@ -242,13 +224,7 @@ const synthesisSelection = (environment: NodeJS.ProcessEnv) =>
         apiKey: Redacted.make(environment.SONIOX_API_KEY ?? ""),
         voice: environment.BALABOL_SONIOX_VOICE ?? "Adrian"
       }
-    : {
-        provider: environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake",
-        helperExecutable:
-          environment.BALABOL_APPLE_SPEECH_EXECUTABLE ??
-          join(homedir(), ".local", "share", "balabol", "tools", "apple-speech", "apple-speech"),
-        ffmpegExecutable: environment.BALABOL_FFMPEG_EXECUTABLE ?? "/opt/homebrew/bin/ffmpeg"
-      }
+    : { provider: environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake" }
 const speechSelection = (environment: NodeJS.ProcessEnv) => ({
   recognition: recognitionSelection(environment),
   synthesis: synthesisSelection(environment)
@@ -256,7 +232,7 @@ const speechSelection = (environment: NodeJS.ProcessEnv) => ({
 const selectedRecognition = (config: ServerConfig) => {
   const settings = config.recognition
   if (settings?.provider === "soniox") return sonioxRecognitionLayer(settings)
-  return settings?.provider === "qwen3-asr" ? qwenRecognitionLayer(settings) : fakeRecognitionLayer()
+  return fakeRecognitionLayer()
 }
 export const parseConfig = (environment: NodeJS.ProcessEnv) =>
   Schema.decodeUnknownEffect(ServerConfig)({
@@ -283,12 +259,9 @@ export const parseConfig = (environment: NodeJS.ProcessEnv) =>
 const selectedSynthesis = (config: ServerConfig) => {
   const settings = config.synthesis
   if (settings?.provider === "soniox") return sonioxSynthesisLayer(settings)
-  return settings?.provider === "apple"
-    ? appleSynthesisLayer(settings, config.voiceLanguages ?? defaultVoiceLanguageConfiguration.allowedLanguages)
-    : fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })
+  return fakeSynthesisLayer({ sampleFrames: fixtureSynthesisFrames })
 }
-const defaultActivityProvider = (provider: string | undefined) =>
-  ["qwen3-asr", "soniox"].includes(provider ?? "fake") ? "silero" : "fake"
+const defaultActivityProvider = (provider: string | undefined) => (provider === "soniox" ? "silero" : "fake")
 const selectedSpeechActivity = (config: ServerConfig) => {
   const provider = config.activity?.provider ?? defaultActivityProvider(config.recognition?.provider)
   return provider === "silero"

@@ -6,7 +6,7 @@ export const VoiceOutputSettings = Schema.Struct({
 })
 export type VoiceOutputSettings = typeof VoiceOutputSettings.Type
 export const defaultVoiceOutputSettings: VoiceOutputSettings = { completionMillis: 30000 }
-export const localSpeechVoiceOutputSettings: VoiceOutputSettings = { completionMillis: 300000 }
+export const realSpeechVoiceOutputSettings: VoiceOutputSettings = { completionMillis: 300000 }
 export class VoiceOutputConfiguration extends Context.Service<VoiceOutputConfiguration, VoiceOutputSettings>()(
   "balabol/voice-output-configuration"
 ) {}

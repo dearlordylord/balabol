@@ -103,6 +103,7 @@ export const FailureDiagnostic = Schema.Struct({
     "VoiceBusy"
   ]),
   provider: Schema.optionalKey(
+    // Retain retired provider tags so saved diagnostics remain readable.
     Schema.Literals(["subscription", "soniox", "qwen", "apple", "silero", "livekit", "fake"])
   ),
   status: Schema.optionalKey(

@@ -26,7 +26,7 @@ export {
   VoiceOutputSettings,
   VoiceOutputConfiguration,
   defaultVoiceOutputSettings,
-  localSpeechVoiceOutputSettings
+  realSpeechVoiceOutputSettings
 } from "./output-configuration.ts"
 
 export { SpeechActivity, SpeechActivitySettings, ActivityWindow, fakeSpeechActivityLayer } from "./activity.ts"

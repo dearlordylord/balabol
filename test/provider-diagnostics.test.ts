@@ -1,4 +1,3 @@
-import { appleNative } from "../src/speech-synthesis/apple-native.ts"
 import { Effect, Redacted, Stream, Layer } from "effect"
 import { expect, it } from "vitest"
 import { OperationAudit, operationAuditLayer, withAuditSpan } from "../src/operation-audit/index.ts"
@@ -80,35 +79,4 @@ it("persists synthesis billing failure without provider payload", async () => {
   )
   expect(lines.join("")).not.toContain("private")
   expect(lines.join("")).not.toContain("Private source")
-})
-
-it("retains the native process failure through Apple planning classification", async () => {
-  const voice = { id: "fixture-voice", actualLocale: "fr-FR" }
-  const lines = await persisted(
-    appleNative.plan(
-      { provider: "apple", helperExecutable: "/missing/balabol-fixture-helper", ffmpegExecutable: "unused" },
-      "Private source",
-      voice,
-      [voice]
-    ),
-    Layer.empty
-  )
-  const records: unknown[] = lines.map((line) => JSON.parse(line))
-  expect(records).toContainEqual(
-    expect.objectContaining({
-      name: "speech.process",
-      outcome: "Failed",
-      diagnostic: { category: "Synthesis", provider: "apple", reason: "ProcessStart" }
-    })
-  )
-  expect(records).toContainEqual(
-    expect.objectContaining({
-      name: "speech.plan",
-      outcome: "Failed",
-      reason: "SynthesisPlanFailed",
-      diagnostic: { category: "Synthesis", provider: "apple", reason: "ProcessStart" }
-    })
-  )
-  expect(lines.join("")).not.toContain("Private source")
-  expect(lines.join("")).not.toContain("missing")
 })

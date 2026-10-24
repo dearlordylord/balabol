@@ -1,12 +1,7 @@
 import { Deferred, Effect, Layer, Queue, Stream } from "effect"
 import { expect, it } from "vitest"
 import { Conversation } from "../src/conversation/index.ts"
-import {
-  SpeechRecognition,
-  RecognitionFailed,
-  fakeRecognitionLayer,
-  qwenRecognitionLayer
-} from "../src/speech-recognition/index.ts"
+import { SpeechRecognition, RecognitionFailed, fakeRecognitionLayer } from "../src/speech-recognition/index.ts"
 import { fakeAnswerLayer } from "../src/answer-generation/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice, VoiceDiagnostics } from "../src/voice/index.ts"
@@ -178,22 +173,32 @@ for (const terminal of ["stream error", "malformed late packet"] as const)
     )
   })
 
-it("does not admit malformed native recognition and keeps listening for a valid phrase", async () => {
+it("does not admit failed recognition and keeps listening for a valid phrase", async () => {
   const input = await Effect.runPromise(classifiedVoiceInput())
   let calls = 0
-  const recognition = qwenRecognitionLayer(
-    { provider: "qwen3-asr", helperPath: "fixture.py", executable: "fixture", modelPath: "fixture.bin" },
-    {
-      prepare: () => Effect.void,
-      transcribe: () =>
-        Effect.sync(() => {
-          calls++
-          return calls === 1
-            ? "not-json"
-            : JSON.stringify({ language: "fr", text: "Bonjour, je voudrais apprendre le français. Привет." })
-        })
-    }
-  )
+  const recognition = Layer.succeed(SpeechRecognition, {
+    capabilities: {
+      input: "supplied-audio",
+      languages: ["ru", "fr", "en"],
+      encoding: "pcm-s16le",
+      sampleRateHz: 16000,
+      channels: 1,
+      maximumSampleFrames: 240000
+    },
+    recognize: (request) =>
+      Stream.suspend(() => {
+        calls++
+        return calls === 1
+          ? Stream.fail(new RecognitionFailed({ reason: "Json", message: "Invalid provider response" }))
+          : Stream.make({
+              kind: "Final",
+              utteranceId: request.utteranceId,
+              text: "Bonjour, je voudrais apprendre le français. Привет.",
+              spans: [],
+              detectedLanguage: "fr"
+            })
+      })
+  })
   await withVoiceOutput(
     (transport) =>
       Effect.gen(function* () {

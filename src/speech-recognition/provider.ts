@@ -76,8 +76,8 @@ export const RecognitionCapabilities = Schema.Struct({
   maximumSampleFrames: Schema.Literal(MAX_SAMPLE_FRAMES)
 })
 export type RecognitionCapabilities = typeof RecognitionCapabilities.Type
-// Grounding: research/local-speech.md, mlx_audio/stt/models/qwen3_asr/qwen3_asr.py.
-// MLX accepts complete supplied audio; scripted Interim events do not promise incoming streaming.
+// Grounding: https://soniox.com/docs/api-reference/stt/websocket-api
+// Supplied chunks do not promise streaming microphone ingress.
 // UTF-16 spans annotate detected languages; empty Final remains valid and needs application admission.
 export class SpeechRecognition extends Context.Service<
   SpeechRecognition,

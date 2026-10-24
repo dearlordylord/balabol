@@ -2,7 +2,7 @@ import { Effect, Layer, Stream } from "effect"
 import { expect, it } from "vitest"
 import { AnswerGeneration } from "../src/answer-generation/index.ts"
 import { Conversation } from "../src/conversation/index.ts"
-import { qwenRecognitionLayer } from "../src/speech-recognition/index.ts"
+import { SpeechRecognition } from "../src/speech-recognition/index.ts"
 import { fakeSynthesisLayer } from "../src/speech-synthesis/index.ts"
 import { Voice } from "../src/voice/index.ts"
 import { startVoiceRequest } from "./voice-admission-fixture.ts"
@@ -13,13 +13,24 @@ it("discards empty recognition finals without memory or answers while preserving
   let transcriptions = 0
   let answerCalls = 0
   const results = ["", "  ", "Bonjour Hello"]
-  const recognition = qwenRecognitionLayer(
-    { provider: "qwen3-asr", helperPath: "fixture.py", executable: "fixture", modelPath: "fixture.bin" },
-    {
-      prepare: () => Effect.void,
-      transcribe: () => Effect.sync(() => JSON.stringify({ language: "fr", text: results[transcriptions++] ?? "" }))
-    }
-  )
+  const recognition = Layer.succeed(SpeechRecognition, {
+    capabilities: {
+      input: "supplied-audio",
+      languages: ["ru", "fr", "en"],
+      encoding: "pcm-s16le",
+      sampleRateHz: 16000,
+      channels: 1,
+      maximumSampleFrames: 240000
+    },
+    recognize: (request) =>
+      Stream.sync(() => ({
+        kind: "Final",
+        utteranceId: request.utteranceId,
+        text: results[transcriptions++] ?? "",
+        spans: [],
+        detectedLanguage: "fr"
+      }))
+  })
   const answer = Layer.succeed(AnswerGeneration, {
     capabilities: { languages: ["ru", "fr", "en"], output: "text-deltas" },
     generate: () => {

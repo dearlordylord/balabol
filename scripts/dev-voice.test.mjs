@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { constants, mkdtempSync, rmSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { constants, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -23,13 +23,13 @@ test("ordinary launch preserves fake defaults and does not acquire any local spe
   );
 });
 
-test("real opt-in selects subscription models and local speech while check preserves the same selection", () => {
+test("real opt-in selects subscription models and Soniox speech while check preserves the same selection", () => {
   const selected = providerEnvironment(["--real"], {});
   assert.deepEqual(selected, {
     BALABOL_ANSWER_PROVIDER: "subscription",
     BALABOL_SUMMARY_PROVIDER: "subscription",
-    BALABOL_RECOGNITION_PROVIDER: "qwen3-asr",
-    BALABOL_SYNTHESIS_PROVIDER: "apple",
+    BALABOL_RECOGNITION_PROVIDER: "soniox",
+    BALABOL_SYNTHESIS_PROVIDER: "soniox",
     BALABOL_ACTIVITY_PROVIDER: "silero",
     BALABOL_VOICE_DIAGNOSTICS: "1",
     BALABOL_ANSWER_MODEL: "gpt-6.1-sol",
@@ -38,20 +38,14 @@ test("real opt-in selects subscription models and local speech while check prese
   assert.deepEqual(providerEnvironment(["--real", "--check"], {}), selected);
   assert.deepEqual(
     localRequirements(selected).map((item) => item.mode),
-    [constants.X_OK, constants.R_OK, constants.R_OK, constants.X_OK, constants.X_OK, constants.R_OK],
+    [constants.R_OK],
   );
-  assert.equal(localRequirements(selected, false).length, 5);
 });
 
-test("explicit provider, model and local executable overrides survive real opt-in without mutating the caller", () => {
+test("explicit provider, model and VAD overrides survive real opt-in without mutating the caller", () => {
   const source = {
     BALABOL_ANSWER_PROVIDER: "fake",
     BALABOL_SUMMARY_MODEL: "custom-luna",
-    BALABOL_QWEN_PYTHON_PATH: "/local/python",
-    BALABOL_QWEN_HELPER_PATH: "/local/qwen.py",
-    BALABOL_QWEN_MODEL: "/local/qwen-model",
-    BALABOL_APPLE_SPEECH_EXECUTABLE: "/local/apple",
-    BALABOL_FFMPEG_EXECUTABLE: "/local/ffmpeg",
     BALABOL_VAD_MODEL: "/local/vad.onnx",
   };
   const selected = providerEnvironment(["--real"], source);
@@ -60,14 +54,7 @@ test("explicit provider, model and local executable overrides survive real opt-i
   assert.equal(selected.BALABOL_SUMMARY_MODEL, "custom-luna");
   assert.deepEqual(
     localRequirements(selected).map((item) => item.path),
-    [
-      "/local/python",
-      "/local/qwen.py",
-      "/local/qwen-model/config.json",
-      "/local/ffmpeg",
-      "/local/apple",
-      "/local/vad.onnx",
-    ],
+    ["/local/vad.onnx"],
   );
   assert.match(providerDescription(selected), /^answers=fake, memory summaries=subscription/);
   assert.equal(source.BALABOL_SUMMARY_PROVIDER, undefined);
@@ -83,36 +70,20 @@ test("unknown options fail selection before prerequisite commands can run", () =
   assert.throws(() => providerEnvironment(["--reel"], {}), /Unknown option/);
 });
 
-test("read-only speech checks require readable files and executables without invoking their contents", () => {
+test("read-only speech checks require readable VAD files without invoking their contents", () => {
   const directory = mkdtempSync(join(tmpdir(), "balabol-launch-check-"));
   try {
-    const executable = join(directory, "executable");
-    const model = join(directory, "qwen-model");
-    mkdirSync(model);
-    writeFileSync(join(model, "config.json"), "{}");
     const artifact = join(directory, "artifact");
-    writeFileSync(executable, "This file must never be executed by prerequisite checking", { mode: 0o700 });
     writeFileSync(artifact, "fixture weights", { mode: 0o600 });
     const environment = providerEnvironment(["--real", "--check"], {
-      BALABOL_QWEN_PYTHON_PATH: executable,
-      BALABOL_QWEN_HELPER_PATH: artifact,
-      BALABOL_QWEN_MODEL: model,
-      BALABOL_APPLE_SPEECH_EXECUTABLE: executable,
-      BALABOL_FFMPEG_EXECUTABLE: executable,
       BALABOL_VAD_MODEL: artifact,
+      SONIOX_API_KEY: "fixture-only",
     });
     assert.doesNotThrow(() => checkLocalResources(environment));
+    assert.throws(() => checkLocalResources({ ...environment, BALABOL_VAD_MODEL: directory }), /Silero VAD weights/);
     assert.throws(
-      () => checkLocalResources({ ...environment, BALABOL_QWEN_MODEL: directory }),
-      /Qwen model configuration/,
-    );
-    assert.throws(
-      () => checkLocalResources({ ...environment, BALABOL_APPLE_SPEECH_EXECUTABLE: artifact }),
-      /Apple speech helper/,
-    );
-    assert.throws(
-      () => checkLocalResources({ ...environment, BALABOL_QWEN_MODEL: join(directory, "missing") }),
-      /Qwen model configuration/,
+      () => checkLocalResources({ ...environment, BALABOL_VAD_MODEL: join(directory, "missing") }),
+      /Silero VAD weights/,
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -133,8 +104,8 @@ test("a fresh checkout reports missing optional dictionary data with the recover
   }
 });
 
-test("Soniox requires a key without acquiring local Qwen dependencies", () => {
-  const environment = { BALABOL_RECOGNITION_PROVIDER: "soniox" };
+test("Soniox recognition requires a key and the default speech classifier", () => {
+  const environment = { BALABOL_RECOGNITION_PROVIDER: "soniox", BALABOL_ACTIVITY_PROVIDER: "fake" };
   assert.throws(() => checkLocalResources(environment), /SONIOX_API_KEY/);
   assert.doesNotThrow(() => checkLocalResources({ ...environment, SONIOX_API_KEY: "fixture-only" }));
   assert.deepEqual(localRequirements(environment), []);

@@ -20,8 +20,8 @@ export const providerEnvironment = (args, environment) => {
     ...environment,
     BALABOL_ANSWER_PROVIDER: environment.BALABOL_ANSWER_PROVIDER ?? "subscription",
     BALABOL_SUMMARY_PROVIDER: environment.BALABOL_SUMMARY_PROVIDER ?? "subscription",
-    BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "qwen3-asr",
-    BALABOL_SYNTHESIS_PROVIDER: environment.BALABOL_SYNTHESIS_PROVIDER ?? "apple",
+    BALABOL_RECOGNITION_PROVIDER: environment.BALABOL_RECOGNITION_PROVIDER ?? "soniox",
+    BALABOL_SYNTHESIS_PROVIDER: environment.BALABOL_SYNTHESIS_PROVIDER ?? "soniox",
     BALABOL_ACTIVITY_PROVIDER: environment.BALABOL_ACTIVITY_PROVIDER ?? "silero",
     BALABOL_VOICE_DIAGNOSTICS: environment.BALABOL_VOICE_DIAGNOSTICS ?? "1",
   };
@@ -33,53 +33,14 @@ export const providerEnvironment = (args, environment) => {
 };
 
 export const providerDescription = (environment) =>
-  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}, speech activity=${environment.BALABOL_ACTIVITY_PROVIDER ?? (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr" ? "silero" : "fake")}`;
+  `answers=${environment.BALABOL_ANSWER_PROVIDER ?? "fake"}, memory summaries=${environment.BALABOL_SUMMARY_PROVIDER ?? "fake"}, recognition=${environment.BALABOL_RECOGNITION_PROVIDER ?? "fake"}, synthesis=${environment.BALABOL_SYNTHESIS_PROVIDER ?? "fake"}, speech activity=${environment.BALABOL_ACTIVITY_PROVIDER ?? (environment.BALABOL_RECOGNITION_PROVIDER === "soniox" ? "silero" : "fake")}`;
 
-// Existence/permissions only: provider acquisition owns engine and weight validation.
-export const localRequirements = (environment, includeHelper = true) => {
+// Existence/permissions only: provider acquisition owns VAD weight validation.
+export const localRequirements = (environment) => {
   const requirements = [];
-  if (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr") {
-    requirements.push(
-      {
-        label: "Qwen Python runtime",
-        path:
-          environment.BALABOL_QWEN_PYTHON_PATH ??
-          join(homedir(), ".local/share/balabol/tools/qwen-asr/.venv/bin/python"),
-        mode: constants.X_OK,
-      },
-      {
-        label: "Qwen helper",
-        path: environment.BALABOL_QWEN_HELPER_PATH ?? join(root, "scripts/qwen-asr.py"),
-        mode: constants.R_OK,
-      },
-      {
-        label: "Qwen model configuration",
-        path: join(
-          environment.BALABOL_QWEN_MODEL ?? join(homedir(), ".local/share/balabol/models/qwen3-asr-1.7b"),
-          "config.json",
-        ),
-        mode: constants.R_OK,
-      },
-    );
-  }
-  if (environment.BALABOL_SYNTHESIS_PROVIDER === "apple") {
-    requirements.push({
-      label: "ffmpeg executable",
-      path: environment.BALABOL_FFMPEG_EXECUTABLE ?? "/opt/homebrew/bin/ffmpeg",
-      mode: constants.X_OK,
-    });
-    if (includeHelper)
-      requirements.push({
-        label: "Apple speech helper (run pnpm build:speech)",
-        path:
-          environment.BALABOL_APPLE_SPEECH_EXECUTABLE ??
-          join(homedir(), ".local/share/balabol/tools/apple-speech/apple-speech"),
-        mode: constants.X_OK,
-      });
-  }
   if (
     (environment.BALABOL_ACTIVITY_PROVIDER ??
-      (environment.BALABOL_RECOGNITION_PROVIDER === "qwen3-asr" ? "silero" : "fake")) === "silero"
+      (environment.BALABOL_RECOGNITION_PROVIDER === "soniox" ? "silero" : "fake")) === "silero"
   )
     requirements.push({
       label: "Silero VAD weights (run pnpm prepare:vad)",
@@ -88,13 +49,13 @@ export const localRequirements = (environment, includeHelper = true) => {
     });
   return requirements;
 };
-export const checkLocalResources = (environment, includeHelper = true) => {
+export const checkLocalResources = (environment) => {
   if (
     [environment.BALABOL_RECOGNITION_PROVIDER, environment.BALABOL_SYNTHESIS_PROVIDER].includes("soniox") &&
     !environment.SONIOX_API_KEY?.trim()
   )
     throw new Error("Soniox requires SONIOX_API_KEY in the backend environment; keep it outside Git.");
-  for (const requirement of localRequirements(environment, includeHelper)) {
+  for (const requirement of localRequirements(environment)) {
     try {
       if (!statSync(requirement.path).isFile()) throw new Error("Not a file");
       accessSync(requirement.path, requirement.mode);
@@ -188,14 +149,14 @@ export const dictionaryReadiness = (environment) => {
 export const main = async (args) => {
   if (args.includes("--help")) {
     console.log(
-      "pnpm dev:voice [--real] [--check]\nDefaults to fake providers. --real selects subscription Sol/Luna, local Qwen3-ASR and Apple speech; explicit BALABOL_* overrides win. Private Tailscale media/control routes only. --check checks prerequisites without compiling, starting services or inference.",
+      "pnpm dev:voice [--real] [--check]\nDefaults to fake providers. --real selects subscription Sol/Luna, Soniox recognition and synthesis; explicit BALABOL_* overrides win. Private Tailscale media/control routes only. --check checks prerequisites without compiling, starting services or inference.",
     );
     return;
   }
   const environment = providerEnvironment(args, process.env);
   const check = args.includes("--check");
   console.log(dictionaryReadiness(environment));
-  checkLocalResources(environment, check);
+  checkLocalResources(environment);
   if (Number(process.versions.node.split(".")[0]) !== 24)
     throw new Error("Use Node 24 and the repository's pinned pnpm.");
   command("docker", ["info", "--format", "{{.ServerVersion}}"]);
@@ -214,7 +175,6 @@ export const main = async (args) => {
     );
     return;
   }
-  if (environment.BALABOL_SYNTHESIS_PROVIDER === "apple") command("pnpm", ["build:speech"], 60000);
   command("pnpm", ["build"], 60000);
   const signalPort = await tcpAvailable(0);
   const directory = mkdtempSync(join(tmpdir(), "balabol-voice-"));

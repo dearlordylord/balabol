@@ -56,7 +56,7 @@ export class SpeechSynthesisFailed extends Schema.TaggedError<SpeechSynthesisFai
   message: Schema.String,
   reason: Schema.optionalKey(FailureReason)
 }) {}
-// Grounding: research/local-speech.md, MLX Qwen generate(text, stream=True).
+// Grounding: https://soniox.com/docs/api-reference/tts/websocket-api
 // Complete phrase input yields audio chunks; this interface does not append text to an active request.
 // Chunk sequence starts at zero; exactly one Completed uses the next sequence. Failure has no Completed.
 export class SpeechSynthesis extends Context.Service<
