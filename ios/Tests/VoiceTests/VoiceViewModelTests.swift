@@ -157,6 +157,197 @@ import XCTest
     await model.shutdown()
   }
 
+  func testMicrophoneIntentLifetimeSurvivesTransientRoomTeardown() async {
+    let control = FixtureControl(), media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    XCTAssertTrue(media.recordingPrepared, "User microphone intent must already own the SDK engine before Room teardown")
+    await control.failSnapshots()
+    await settle { model.state.capture == .hostUnavailable }
+    await settle { media.disconnected }
+    XCTAssertTrue(media.recordingPrepared, "Transient room cleanup must retain intended capture")
+    XCTAssertEqual(media.preparationChanges.first, false)
+    await settle { media.captureDevice.inputRunning && model.state.execution.microphoneLifetime.settledRevision == model.state.execution.microphoneLifetime.revision }
+    XCTAssertTrue(media.captureDevice.inputRunning, "Actual SDK input must be running after transient room cleanup")
+    model.end()
+    await settle { !media.recordingPrepared }
+    await model.shutdown()
+  }
+
+  func testMutingOfflineReleasesMicrophoneIntentWithoutWaitingForNewRoom() async {
+    let control = FixtureControl(), media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    await control.failSnapshots()
+    await settle { model.state.capture == .hostUnavailable }
+    model.toggleMute()
+    await settle { model.state.wantsMuted }
+    await settle { media.preparationChanges.last == false && !media.recordingPrepared }
+    XCTAssertFalse(media.recordingPrepared)
+    await model.shutdown()
+  }
+
+  func testLateMicrophonePreparationIsCompensatedAfterEndAndCannotStartRoom() async {
+    let control = FixtureControl(), media = FixtureMedia(allowed: true)
+    media.holdPreparation = true
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { media.preparationWaiting }
+    XCTAssertTrue(media.joinMutes.isEmpty, "Room capture waits for preparation")
+    model.end()
+    media.resolvePreparation()
+    await settle { media.preparationChanges == [false, true, false] }
+    await settle { !media.recordingPrepared }
+    XCTAssertTrue(media.joinMutes.isEmpty, "A cancelled connect cannot publish after late preparation")
+    await model.shutdown()
+  }
+
+  func testLateSDKPreparationAfterEndCannotStartActualRecording() async {
+    let media = FixtureMedia(allowed: true)
+    media.captureDevice.holdPreparation = true
+    let model = VoiceViewModel(control: FixtureControl(), media: media) { _ in }
+    model.start()
+    await settle { media.captureDevice.preparationWaiting }
+    model.end()
+    media.captureDevice.resolvePreparation()
+    await settle { !model.state.microphoneReleasePending && !media.recordingPrepared }
+    XCTAssertFalse(media.captureDevice.calls.contains("startRecording"), "A revoked acquisition must not unmute the SDK after End")
+    XCTAssertFalse(media.captureDevice.inputRunning)
+    await model.shutdown()
+  }
+
+  func testMicrophoneLifetimeReleasesOnPlatformPauseAndPreservesMutedIntent() async {
+    let control = FixtureControl(), media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    media.platform?(.interrupted)
+    await settle { model.state.capture == .paused && !media.recordingPrepared }
+    XCTAssertEqual(media.preparationChanges, [false, true, false])
+    XCTAssertTrue(model.state.wantsListening)
+    XCTAssertFalse(model.state.wantsMuted)
+    await model.shutdown()
+  }
+
+  func testMicrophonePreparationAndReleaseFailuresRemainExplicit() async {
+    let control = FixtureControl(), media = FixtureMedia(allowed: true)
+    media.preparationFailure = .capture
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .failed(.capture) }
+    await settle { media.preparationChanges == [false, true, false] }
+    XCTAssertTrue(media.joinMutes.isEmpty)
+    await model.shutdown()
+    let other = FixtureMedia(allowed: true)
+    let live = VoiceViewModel(control: FixtureControl(), media: other) { _ in }
+    live.start()
+    await settle { live.state.capture == .listening }
+    other.releasePreparationFailure = .capture
+    live.end()
+    await settle { live.state.execution.microphoneLifetime.failure == .capture }
+    XCTAssertFalse(live.state.execution.microphoneLifetime.desired)
+    let shutdown = await live.shutdown()
+    if case .success = shutdown { XCTFail("Failed SDK release must not report a clean shutdown") }
+    XCTAssertEqual(live.state.execution.microphoneLifetime.failure, .capture)
+    XCTAssertNil(live.state.execution.microphoneLifetime.applied)
+    XCTAssertTrue(live.state.microphoneReleasePending)
+    XCTAssertFalse(live.state.canStart)
+    XCTAssertTrue(live.state.canSwitchServer, "A failed retiring owner can retry the awaited shutdown")
+    XCTAssertTrue(other.recordingPrepared, "A refusal leaves the fake SDK engine on")
+    XCTAssertEqual(other.preparationChanges, [false, true, false, false, false, false])
+    other.releasePreparationFailure = nil
+    live.end()
+    await settle { !live.state.microphoneReleasePending && !other.recordingPrepared }
+    XCTAssertNil(live.state.microphoneCleanupFailure)
+    XCTAssertTrue(live.state.requiresReplacement, "Confirmed cleanup permits replacement, never revival of a retired owner")
+    XCTAssertTrue(live.state.canSwitchServer)
+    if case .failure = await live.shutdown() { XCTFail("An explicit retry must recover confirmed cleanup") }
+  }
+
+  func testResumeRecordsIntentWhileMicrophoneReleaseIsHeldButNewRoomWaits() async {
+    let control = FixtureControl(), media = FixtureMedia(allowed: true)
+    let model = VoiceViewModel(control: control, media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .listening }
+    media.holdPreparationRelease = true
+    media.platform?(.interrupted)
+    await settle { model.state.capture == .paused && media.preparationReleaseWaiting }
+    XCTAssertTrue(model.state.canResume)
+    model.resume()
+    await settle { model.state.capture != .paused }
+    XCTAssertTrue(model.state.wantsListening)
+    XCTAssertEqual(media.joinMutes.count, 1, "Replacement capture cannot bypass the held SDK release")
+    media.resolvePreparationRelease()
+    await settle { model.state.capture == .listening && media.joinMutes.count == 2 }
+    XCTAssertEqual(media.preparationChanges, [false, true, false, true])
+    await model.shutdown()
+  }
+
+  func testOnlyMatchingCaptureTeardownRenewsCurrentlyUnmutedLifetime() throws {
+    let initial = try VoiceLifecycleITFMapping().initial()
+    for capture in [false, true] {
+      let stopped = stopVoiceMedia(initial, capture: capture, output: true)
+      let request = try XCTUnwrap(stopped.state.execution.localStop)
+      let completion = VoiceInput(event: .completed(request, .stopped), proposedStartRequestId: UUID())
+      let resumed = transitionVoice(stopped.state, completion)
+      XCTAssertEqual(resumed.commands.contains { if case .microphoneLifetime(_, true) = $0 { true } else { false } }, capture)
+      XCTAssertFalse(transitionVoice(resumed.state, completion).commands.contains { if case .microphoneLifetime(_, true) = $0 { true } else { false } })
+      let muted = stopped.state.replacing(capture: stopped.state.captureModel.replacing(intent: .listening(muted: true)))
+      XCTAssertFalse(transitionVoice(muted, completion).commands.contains { if case .microphoneLifetime(_, true) = $0 { true } else { false } })
+    }
+    let disconnect = reserveVoice(initial, .disconnect)
+    let request = try XCTUnwrap(disconnect.commands.compactMap { command -> VoiceRequest? in
+      if case .run(let request, .disconnect, _) = command { return request }; return nil
+    }.first)
+    let completed = transitionVoice(disconnect.state, .init(event: .completed(request, .disconnected), proposedStartRequestId: UUID()))
+    XCTAssertTrue(completed.commands.contains { if case .microphoneLifetime(_, true) = $0 { true } else { false } })
+  }
+
+  func testMicrophoneLifetimeStaleCompletionCannotChangeNewIntent() throws {
+    let initial = try VoiceLifecycleITFMapping().initial()
+    let lifetime = VoiceMicrophoneLifetimeState(permissionGranted: true, desired: true, revision: 5, settledRevision: 4, applied: true)
+    let state = initial.replacing(execution: initial.execution.replacing(microphoneLifetime: lifetime))
+    let old = transitionVoice(state, .init(event: .microphoneLifetimeSettled(3, .failure(.capture)), proposedStartRequestId: UUID()))
+    XCTAssertEqual(old.state, state)
+    XCTAssertTrue(old.commands.isEmpty)
+  }
+
+  func testMicrophoneSetterCoalescesIntentAndCannotApplyOldReleaseAfterNewAcquire() async {
+    let media = FixtureMedia(allowed: true)
+    media.holdPreparation = true
+    var completed: [Int] = []
+    let lane = VoiceMicrophoneLifetimeInterpreter(media: media) { event in
+      if case .microphoneLifetimeSettled(let revision, _) = event { completed.append(revision) }
+    }
+    lane.reconcile(revision: 1, enabled: true)
+    await settle { media.preparationWaiting }
+    lane.reconcile(revision: 2, enabled: false)
+    lane.reconcile(revision: 3, enabled: true)
+    media.resolvePreparation()
+    await lane.settled()
+    XCTAssertTrue(media.recordingPrepared)
+    XCTAssertEqual(completed, [3])
+    XCTAssertEqual(media.preparationChanges, [true, true])
+    lane.reconcile(revision: 2, enabled: false)
+    await lane.settled()
+    XCTAssertTrue(media.recordingPrepared, "An older scope cannot release the newer microphone intent")
+    lane.reconcile(revision: 4, enabled: false)
+    await lane.settled()
+    XCTAssertFalse(media.recordingPrepared)
+  }
+
+  func testSpontaneousMicrophoneSetterCancellationIsNotSuccessfulCleanup() async {
+    let media = FixtureMedia(allowed: true)
+    media.preparationThrownError = CancellationError()
+    let model = VoiceViewModel(control: FixtureControl(), media: media) { _ in }
+    model.start()
+    await settle { model.state.capture == .failed(.unexpectedOperation) }
+    XCTAssertTrue(media.joinMutes.isEmpty)
+    await model.shutdown()
+  }
+
   func testOldRoomFailureCannotStopNewGeneration() async {
     let control = FixtureControl()
     let media = FixtureMedia(allowed: true)
@@ -1932,6 +2123,43 @@ import XCTest
 }
 
 @MainActor private final class FixtureMedia: VoiceMedia {
+  var preparationChanges: [Bool] = []
+  let captureDevice = VendorCaptureDevice()
+  private lazy var captureLifetime = VoiceCaptureLifetimeDriver(device: captureDevice)
+  var recordingPrepared: Bool { captureDevice.prepared }
+  var holdPreparation = false
+  var preparationWaiting = false
+  var holdPreparationRelease = false
+  var preparationReleaseWaiting = false
+  var preparationFailure: VoiceFailure?
+  var releasePreparationFailure: VoiceFailure?
+  var preparationThrownError: (any Error)?
+  private var preparationGate: CheckedContinuation<Void, Never>?
+  func setCaptureLifetime(_ enabled: Bool) async throws {
+    preparationChanges.append(enabled)
+    if enabled && holdPreparation {
+      preparationWaiting = true
+      await withCheckedContinuation { preparationGate = $0 }
+    }
+    if !enabled && holdPreparationRelease {
+      preparationReleaseWaiting = true
+      await withCheckedContinuation { preparationGate = $0 }
+    }
+    if enabled, let preparationFailure { throw preparationFailure }
+    if enabled, let preparationThrownError { throw preparationThrownError }
+    if !enabled, let releasePreparationFailure { throw releasePreparationFailure }
+    try await captureLifetime.setEnabled(enabled)
+  }
+  func resolvePreparationRelease() {
+    holdPreparationRelease = false
+    preparationGate?.resume()
+    preparationGate = nil
+  }
+  func resolvePreparation() {
+    holdPreparation = false
+    preparationGate?.resume()
+    preparationGate = nil
+  }
   var progressCues: [VoiceProgressCue] = []
   var cueCancellations = 0
   func playCue(_ cue: VoiceProgressCue) { progressCues.append(cue) }
@@ -1953,6 +2181,7 @@ import XCTest
   func fenceCapture() -> Task<Void, Never> {
     captureFences += 1
     captureFenced = true
+    captureDevice.roomStopped()
     return Task {}
   }
   var holdStop = false
@@ -2007,6 +2236,7 @@ import XCTest
     if let connectFailure { throw connectFailure }
     connectedDuringMute = connectedDuringMute || muteInFlight
     joinMutes.append(initiallyMuted)
+    if !initiallyMuted { captureDevice.roomStarted() }
     captureFenced = false
     self.muted = initiallyMuted
     self.failure = failure
@@ -2042,6 +2272,7 @@ import XCTest
     muteContinuation = nil
   }
   func disconnect() async {
+    captureDevice.roomStopped()
     disconnected = true
     if holdDisconnect {
       disconnectWaiting = true

@@ -21,6 +21,10 @@
             }
           }
         }
+        if model.state.microphoneCleanupFailure != nil {
+          Text("Couldn’t confirm the microphone stopped. Tap End to try again.").font(.caption)
+            .accessibilityIdentifier("voice-microphone-cleanup-failed")
+        }
         if let inputNotice = model.state.inputNotice,
           model.state.capture == .listening || model.state.capture == .muted
         {
@@ -120,7 +124,7 @@
       if [
         .requestingMicrophone, .connecting, .reconnecting, .hostUnavailable,
         .checkingPreviousSpeech, .listening, .muted, .paused, .resuming,
-      ].contains(model.state.capture) {
+      ].contains(model.state.capture) || model.state.microphoneCleanupFailure != nil {
         Button("End") { model.end() }
           .buttonStyle(.bordered)
           .controlSize(.large)

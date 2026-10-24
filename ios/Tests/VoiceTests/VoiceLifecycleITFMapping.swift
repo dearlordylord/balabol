@@ -25,10 +25,39 @@ struct VoiceLifecycleITFMapping {
       .completed(.init(generation: 1, id: 5), .connected(.success(()))),
       .completed(.init(generation: 1, id: 7), .languages(.success(languages))),
     ]
-    return events.reduce(VoiceState()) { state, event in
-      transitionVoice(state, VoiceInput(event: event, proposedStartRequestId: proposal)).state
+    var state = VoiceState()
+    for event in events {
+      state = try settleMicrophoneLifetime(
+        transitionVoice(state, VoiceInput(event: event, proposedStartRequestId: proposal))).state
     }
+    return state
   }
+  func apply(_ event: ITFValue, state: VoiceState) throws -> VoiceTransition {
+    try settleMicrophoneLifetime(transitionVoice(state, input(event, state: state)))
+  }
+
+  /// This model abstracts the SDK prepared-engine owner as succeeding between
+  /// Room actions. Supply its real correlated success fact, never overwrite it.
+  /// Delayed, failed and noncooperative setters have separate native tests.
+  private func settleMicrophoneLifetime(_ step: VoiceTransition) throws -> VoiceTransition {
+    let lifetime = step.state.execution.microphoneLifetime
+    guard lifetime.revision > lifetime.settledRevision else { return step }
+    let settled = transitionVoice(step.state, VoiceInput(
+      event: .microphoneLifetimeSettled(lifetime.revision, .success(())), proposedStartRequestId: UUID()))
+    let restoredProjection = settled.state.replacing(execution:
+      settled.state.execution.replacing(microphoneLifetime: lifetime))
+    guard restoredProjection == step.state else {
+      throw VoiceITFError.invalid("SDK lifetime settlement changed modeled Room state")
+    }
+    for command in settled.commands {
+      #if DEBUG
+        if case .trace = command { continue }
+      #endif
+      throw VoiceITFError.invalid("SDK lifetime settlement emitted a modeled work/cancel/dependency command")
+    }
+    return VoiceTransition(state: settled.state, commands: step.commands + settled.commands)
+  }
+
   var languages: VoiceLanguages {
     VoiceLanguages(allowedLanguages: ["en"], supportedLanguages: ["en"])
   }

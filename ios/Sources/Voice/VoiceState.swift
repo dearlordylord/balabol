@@ -99,12 +99,21 @@ public struct VoiceState: Equatable, Sendable {
   internal var drainingIncarnation: UUID? { captureModel.drainingOrigin?.backendIncarnationId }
   public var wantsListening: Bool { if case .listening = intent { true } else { false } }
   public var wantsMuted: Bool { if case .listening(let muted) = intent { muted } else { false } }
-  public var canSwitchServer: Bool { checkpointLoaded && !isRetired && !wantsListening && !hasPendingAdmission && associations.isEmpty }
+  public var requiresReplacement: Bool { isRetired }
+  public var microphoneCleanupFailure: VoiceFailure? {
+    execution.microphoneLifetime.releaseRequired ? execution.microphoneLifetime.failure : nil
+  }
+  public var microphoneReleasePending: Bool { execution.microphoneLifetime.releaseRequired }
+  /// Authorizes an awaited handoff attempt, never transfer before shutdown succeeds.
+  public var canSwitchServer: Bool { (!microphoneReleasePending || microphoneCleanupFailure != nil) && checkpointLoaded && (!isRetired || execution.operations.isEmpty) && !wantsListening && !hasPendingAdmission && associations.isEmpty }
   public var admission: Admission? { utterances.last.flatMap { admissions[$0] } }
-  public var canResume: Bool { capture == .paused && wantsListening }
+  // Resume records intent while ordinary release is in flight; the interpreter
+  // still fences replacement capture behind the serialized SDK setter lane.
+  public var canResume: Bool { !isRetired && microphoneCleanupFailure == nil && capture == .paused && wantsListening }
   public var isChangingMute: Bool { muteInFlight }
   public var canStart: Bool {
-    switch capture { case .idle, .ended, .failed: !wantsListening; default: false }
+    guard !isRetired && !microphoneReleasePending else { return false }
+    return switch capture { case .idle, .ended, .failed: !wantsListening; default: false }
   }
   public var hasPendingAdmission: Bool {
     !associations.isEmpty || admissions.values.contains { value in

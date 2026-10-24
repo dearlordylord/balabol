@@ -7,6 +7,62 @@
 
   /// LiveKit AudioManager.shared automatic AVAudioSession configuration is the
   /// sole audio owner. No AVAudioEngine or manual audio-session activation here.
+  @MainActor private final class SDKVoiceCaptureDevice: VoiceCaptureDevice {
+    private let evidenceEnabled: Bool
+    init(evidenceEnabled: Bool) { self.evidenceEnabled = evidenceEnabled }
+    private func perform(_ stage: VoiceCaptureStage, operation: () async throws -> Void) async throws {
+      try await performVoiceCaptureStage(stage, context: {
+        let application: VoiceCaptureContext.Application = switch UIApplication.shared.applicationState {
+        case .active: .active
+        case .inactive: .inactive
+        case .background: .background
+        @unknown default: .unknown
+        }
+        return VoiceCaptureContext(application: application,
+          protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable)
+      }, record: { diagnostic in
+        #if DEBUG
+          if self.evidenceEnabled { VoiceTransitionTrace.shared.record(.nativeCapture, nativeCapture: diagnostic) }
+        #endif
+        if diagnostic.outcome == .failed {
+          os.Logger(subsystem: "app.balabol.voice", category: "capture").error(
+            "Capture lifetime phase failed: stage=\(diagnostic.stage.rawValue, privacy: .public) domain=\(diagnostic.domain?.rawValue ?? "none", privacy: .public) code=\(diagnostic.code.map(String.init) ?? "unavailable", privacy: .public)")
+        }
+      }, operation: operation)
+    }
+    func prepare(_ enabled: Bool) async throws {
+      try await perform(.recordingPreparation(enabled)) {
+        try await AudioManager.shared.setRecordingAlwaysPreparedMode(enabled,
+          audioProcessingOptions: AudioProcessingOptions(
+            echoCancellation: true, autoGainControl: true, noiseSuppression: true,
+            echoCancellationMode: .software, autoGainControlMode: .software,
+            noiseSuppressionMode: .software))
+      }
+    }
+    func startRecording() async throws {
+      try await perform(.recording) {
+        try await Task.detached {
+          try AudioManager.shared.startLocalRecording(audioProcessingOptions: AudioProcessingOptions(
+            echoCancellation: true, autoGainControl: true, noiseSuppression: true,
+            echoCancellationMode: .software, autoGainControlMode: .software,
+            noiseSuppressionMode: .software))
+        }.value
+      }
+    }
+    func stopRecording() async throws {
+      try await perform(.recordingRelease) {
+        try await Task.detached { try AudioManager.shared.stopLocalRecording() }.value
+      }
+    }
+    func snapshot() async -> VoiceCaptureDeviceSnapshot {
+      await Task.detached {
+        VoiceCaptureDeviceSnapshot(prepared: AudioManager.shared.isRecordingAlwaysPreparedMode,
+          engineRunning: AudioManager.shared.isEngineRunning,
+          microphoneMuted: AudioManager.shared.isMicrophoneMuted)
+      }.value
+    }
+  }
+
   @MainActor public final class LiveKitVoiceMedia: VoiceMedia {
     private var platformObservers: [NSObjectProtocol] = []
     private var observationEpoch = UUID()
@@ -20,6 +76,7 @@
     private var outputTrack: RemoteAudioTrack?
     private var playbackRenderer: VoicePlaybackRenderer?
     private let generationCue = VoiceGenerationCueRenderer()
+    private let captureLifetime: VoiceCaptureLifetimeDriver
     private var outputReceived: (@Sendable (VoiceOutputIdentity) -> Void)?
     private var outputPublication: RemoteTrackPublication?
     private var microphone: LocalAudioTrack?
@@ -54,6 +111,7 @@
       #else
         self.evidenceEnabled = false
       #endif
+      captureLifetime = VoiceCaptureLifetimeDriver(device: SDKVoiceCaptureDevice(evidenceEnabled: self.evidenceEnabled))
       LiveKitSDK.disableLogging()
     }
     private func audioDiagnostic(
@@ -72,6 +130,19 @@
           } catch {
             VoiceAudioProcessingTrace.shared.reportEncodingFailure()
           }
+        }
+      #endif
+    }
+    private func captureDeviceDiagnostic(_ status: String) {
+      #if DEBUG
+        guard evidenceEnabled, diagnosticBudget.admit(status) else { return }
+        let device = captureLifetime.device
+        // This requests a post-cleanup readback, not a resource barrier. SDK
+        // getters run off MainActor; the journal timestamp is the actual readback
+        // completion time. Telemetry must not delay lifetime renewal or cleanup.
+        Task {
+          let snapshot = await device.snapshot()
+          VoiceTransitionTrace.shared.record(.captureDevice, status: status, captureDevice: snapshot)
         }
       #endif
     }
@@ -231,6 +302,7 @@
       let candidate = room
       let task = Task {
         if let candidate { await disableMicrophone(candidate) }
+        self.captureDeviceDiagnostic("capture-fence-completed")
       }
       captureStopTask = task
       return task
@@ -244,6 +316,10 @@
         os.Logger(subsystem: "app.balabol.voice", category: "capture").error(
           "Microphone stop failed; session disconnect retains cleanup ownership")
       }
+    }
+    public func setCaptureLifetime(_ enabled: Bool) async throws {
+      try await captureLifetime.setEnabled(enabled)
+      captureDeviceDiagnostic(enabled ? "capture-lifetime-enabled" : "capture-lifetime-released")
     }
     public func requestPermission() async -> Bool {
       switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -499,6 +575,7 @@
         await disableMicrophone(candidate)
         await candidate.disconnect()
       }
+      captureDeviceDiagnostic("room-disconnect-completed")
       await task?.value
       await stopped.value
       #if DEBUG

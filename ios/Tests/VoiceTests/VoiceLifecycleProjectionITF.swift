@@ -148,6 +148,10 @@ extension VoiceLifecycleITFMapping {
         // projecting every stop, cancellation and dependency above; dedicated
         // generation-cue tests cover sound cancellation and failure-tone ordering.
         case .generationCue, .cancelGenerationCue: return nil
+        // SDK prepared-engine lifetime is outside this Room lifecycle model.
+        // Its independent revision/compensation is exercised by native tests;
+        // every canonical Room stop, cancellation and dependency stays above.
+        case .microphoneLifetime: return nil
         case .interruptConversation(let inputs, let after):
           guard inputs.isEmpty else {
             throw VoiceITFError.invalid("admissions outside lifecycle model")

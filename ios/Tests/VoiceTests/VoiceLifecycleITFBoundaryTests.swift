@@ -60,7 +60,7 @@ final class VoiceLifecycleITFBoundaryTests: XCTestCase {
     var state = try mapping.initial()
     for frame in trace.states {
       guard let event = try frame.values["event"]?.optional({ $0 }) else { continue }
-      state = try transitionVoice(state, mapping.input(event, state: state)).state
+      state = try mapping.apply(event, state: state).state
     }
     let expected = try VoiceOutputIdentity(
       inputDeliveryId: mapping.output.identities.uuid(.input, 2),

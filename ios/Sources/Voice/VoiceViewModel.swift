@@ -49,9 +49,13 @@ import Observation
   public func speechStarted() { receive(.speechIntent) }
   public func toggleMute() { receive(.mute) }
 
-  public func shutdown() async {
+  @discardableResult public func shutdown() async -> Result<Void, VoiceFailure> {
     receive(.shutdown)
     await interpreter?.drain()
+    guard !state.microphoneReleasePending else {
+      return .failure(state.microphoneCleanupFailure ?? .capture)
+    }
+    return .success(())
   }
 
   private func receive(_ event: VoiceFeatureEvent) {

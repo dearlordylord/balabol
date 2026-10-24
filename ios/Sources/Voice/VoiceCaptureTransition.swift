@@ -33,7 +33,7 @@ internal func startVoice(_ state: VoiceState, proposedId: UUID, resuming: Bool) 
     retryStep: 0, origin: .some(nil), snapshotSequence: -1, generation: state.generation + 1, sequence: 0,
     muteInFlight: false, resumeProbe: resuming, tentative: "", tentativeUtterance: .some(nil), inputNotice: .some(nil))
   let next = state.replacing(capture: capture, recovery: state.recovery.replacing(admissionFailure: .some(nil)),
-    output: VoiceOutputState(), execution: state.execution.replacing(activeCapture: .some(nil)))
+    output: VoiceOutputState(), execution: state.execution.replacing(activeCapture: .some(nil), microphoneLifetime: state.execution.microphoneLifetime.permitting(false)))
   let cancelled = cancelVoice(next) { _, operation in captureProducer(operation.kind) }
   let platform = ensureVoicePlatform(cancelled)
   let restored = continueVoice(platform) { current in

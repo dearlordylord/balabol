@@ -34,6 +34,7 @@ internal enum VoiceFeatureEvent: Sendable {
   case inputIntent(UUID)
   case generationCue(input: UUID, response: UUID, cue: VoiceProgressCue)
   case cancelGenerationCue
+  case microphoneLifetimeSettled(Int, Result<Void, VoiceFailure>)
   case completed(VoiceRequest, VoiceWorkResult)
   case platform(VoiceRequest, VoicePlatformEvent)
   case captureFailed(VoiceRequest)
@@ -91,6 +92,7 @@ internal enum VoiceWorkResult: Sendable {
 }
 
 internal enum VoiceEffectCommand: Sendable {
+  case microphoneLifetime(Int, enabled: Bool)
   case run(VoiceRequest, VoiceWork, after: [VoiceRequest])
   case cancel([VoiceRequest])
   case accepted(ConversationMessage)
@@ -115,7 +117,7 @@ internal enum VoiceTraceCause: String, Codable, Sendable {
   // Cleanup task completion is not proof of SDK success or physical silence.
   case output, localStop, cleanupAttemptFinished, mediaCleanupFailed
   case interruptDispatch, interruptReturned, interruptFailed
-  case failure, observationFailed, wireError, transportFailed
+  case failure, observationFailed, wireError, transportFailed, captureDevice
   case nativeCapture
   case onset, onsetAccepted, onsetRejected, audioReceived, playoutPrepared
 }

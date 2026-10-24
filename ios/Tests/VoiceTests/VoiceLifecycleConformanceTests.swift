@@ -18,7 +18,7 @@ final class VoiceLifecycleConformanceTests: XCTestCase {
         let step: VoiceTransition
         if let event {
           guard index > 0 else { throw VoiceITFError.invalid("initial lifecycle event") }
-          step = try transitionVoice(state, mapping.input(event, state: state))
+          step = try mapping.apply(event, state: state)
         } else {
           guard index == 0 else { throw VoiceITFError.invalid("missing lifecycle event") }
           step = VoiceTransition(state: state, commands: [])

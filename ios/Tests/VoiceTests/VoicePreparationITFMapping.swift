@@ -163,6 +163,9 @@ struct VoicePreparationITFMapping {
               "after": .list(after.map(project)),
             ]))
         case .cancel(let requests): return .variant("CancelWork", .list(requests.map(project)))
+        // The model owns playout preparation, not the independently fenced
+        // microphone-engine lifetime. Keep all Room work dependencies above.
+        case .microphoneLifetime: return nil
         #if DEBUG
           case .trace: return nil
         #endif

@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor final class VoiceCaptureStageTests: XCTestCase {
   private let locked = VoiceCaptureContext(application: .background, protectedDataAvailable: false)
+  func testPreparationAndReleaseFailuresHaveDistinctPersistableDiagnosticPhases() async throws {
+    for (enabled, expected) in [(true, "preparation"), (false, "preparationRelease")] {
+      var records: [VoiceCaptureDiagnostic] = []
+      do {
+        let _: Void = try await performVoiceCaptureStage(.recordingPreparation(enabled),
+          context: { self.locked }, record: { records.append($0) }) {
+            throw NSError(domain: "io.livekit.swift-sdk", code: 802)
+          }
+        XCTFail("Expected SDK setter failure")
+      } catch { XCTAssertEqual(error as? VoiceFailure, .capture) }
+      let data = try JSONEncoder().encode(records)
+      let persisted = try JSONDecoder().decode([VoiceCaptureDiagnostic].self, from: data)
+      XCTAssertEqual(persisted.last?.stage.rawValue, expected)
+      XCTAssertEqual(persisted.last?.outcome, .failed)
+      XCTAssertEqual(persisted.last?.code, 802)
+    }
+  }
   func testNativeCaptureCancellationDoesNotBecomeCaptureFailure() async {
     var records: [VoiceCaptureDiagnostic] = []
     do {

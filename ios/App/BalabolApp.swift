@@ -133,6 +133,10 @@ private struct ConversationRoot: View {
       }
       .interactiveDismissDisabled(switchingServer)
     }
+    .onChange(of: shouldRecoverRetiredVoice) { _, ready in
+      guard ready else { return }
+      Task { await recreateCurrentConnectionAfterVoiceRelease() }
+    }
     .onAppear {
       guard model == nil else { return }
       if let launchControlURL = localState.launchControlURL {
@@ -207,6 +211,19 @@ private struct ConversationRoot: View {
     }
   }
 
+  private var shouldRecoverRetiredVoice: Bool {
+    voice?.state.requiresReplacement == true && voice?.state.microphoneReleasePending == false
+      && model?.canSwitchServer == true && !showingServer && !switchingServer
+  }
+
+  private func recreateCurrentConnectionAfterVoiceRelease() async {
+    guard shouldRecoverRetiredVoice else { return }
+    // Use the saved current server, never a cancelled replacement draft. The
+    // called handoff sets switchingServer synchronously before its first await.
+    urlInput = configuredURL
+    await changeServer()
+  }
+
   private func changeServer() async {
     guard !switchingServer, let current = model, current.canSwitchServer,
       voice?.state.canSwitchServer != false
@@ -221,12 +238,16 @@ private struct ConversationRoot: View {
       configurationError = "Enter a valid HTTP or HTTPS server URL without credentials or a path."
       return
     }
-    if urlInput == configuredURL {
+    if urlInput == configuredURL && voice?.state.requiresReplacement != true {
       showingServer = false
       return
     }
     switchingServer = true
-    await voice?.shutdown()
+    if let voice, case .failure = await voice.shutdown() {
+      configurationError = "Couldn’t confirm the microphone stopped. Try switching servers again."
+      switchingServer = false
+      return
+    }
     voice = nil
     await current.shutdown()
     session?.invalidateAndCancel()

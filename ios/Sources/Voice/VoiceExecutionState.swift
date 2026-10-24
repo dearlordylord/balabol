@@ -59,9 +59,10 @@ internal struct VoiceExecutionState: Equatable, Sendable {
   let pendingFailureCue: VoiceOutputIdentity?
   let shuttingDown: Bool
   let resolutionStep: Int
+  let microphoneLifetime: VoiceMicrophoneLifetimeState
   init(bootstrapReleases: [VoiceOrigin: VoiceBootstrapRelease] = [:], operations: [VoiceRequest: VoiceOperation] = [:], nextRequest: Int = 1,
     activeCapture: VoiceRequest? = nil, platformObservation: VoiceRequest? = nil,
-    preparedOutput: VoiceOutputIdentity? = nil, localStop: VoiceRequest? = nil, pendingFailureCue: VoiceOutputIdentity? = nil, shuttingDown: Bool = false, resolutionStep: Int = 0) {
+    preparedOutput: VoiceOutputIdentity? = nil, localStop: VoiceRequest? = nil, pendingFailureCue: VoiceOutputIdentity? = nil, shuttingDown: Bool = false, resolutionStep: Int = 0, microphoneLifetime: VoiceMicrophoneLifetimeState = VoiceMicrophoneLifetimeState()) {
     self.bootstrapReleases = bootstrapReleases
     self.operations = operations
     self.nextRequest = nextRequest
@@ -72,14 +73,15 @@ internal struct VoiceExecutionState: Equatable, Sendable {
     self.pendingFailureCue = pendingFailureCue
     self.shuttingDown = shuttingDown
     self.resolutionStep = resolutionStep
+    self.microphoneLifetime = microphoneLifetime
   }
   func replacing(bootstrapReleases: [VoiceOrigin: VoiceBootstrapRelease]? = nil, operations: [VoiceRequest: VoiceOperation]? = nil, nextRequest: Int? = nil,
     activeCapture: VoiceRequest?? = nil, platformObservation: VoiceRequest?? = nil,
-    preparedOutput: VoiceOutputIdentity?? = nil, localStop: VoiceRequest?? = nil, pendingFailureCue: VoiceOutputIdentity?? = nil, shuttingDown: Bool? = nil, resolutionStep: Int? = nil) -> VoiceExecutionState {
+    preparedOutput: VoiceOutputIdentity?? = nil, localStop: VoiceRequest?? = nil, pendingFailureCue: VoiceOutputIdentity?? = nil, shuttingDown: Bool? = nil, resolutionStep: Int? = nil, microphoneLifetime: VoiceMicrophoneLifetimeState? = nil) -> VoiceExecutionState {
     VoiceExecutionState(bootstrapReleases: bootstrapReleases ?? self.bootstrapReleases, operations: operations ?? self.operations, nextRequest: nextRequest ?? self.nextRequest,
       activeCapture: activeCapture ?? self.activeCapture, platformObservation: platformObservation ?? self.platformObservation,
       preparedOutput: preparedOutput ?? self.preparedOutput, localStop: localStop ?? self.localStop, pendingFailureCue: pendingFailureCue ?? self.pendingFailureCue, shuttingDown: shuttingDown ?? self.shuttingDown,
-      resolutionStep: resolutionStep ?? self.resolutionStep)
+      resolutionStep: resolutionStep ?? self.resolutionStep, microphoneLifetime: microphoneLifetime ?? self.microphoneLifetime)
   }
 }
 internal struct VoiceBootstrapRelease: Equatable, Sendable {

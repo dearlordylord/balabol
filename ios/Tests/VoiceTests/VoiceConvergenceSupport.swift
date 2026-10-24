@@ -123,6 +123,7 @@ actor ConvergenceConversationTransport: ConversationTransport {
     outputReceived: @escaping @Sendable (VoiceOutputIdentity) -> Void
   ) async throws { audio = outputReceived }
   func mute(_ muted: Bool) async throws {}
+  func setCaptureLifetime(_ enabled: Bool) async throws {}
   func disconnect() async {}
   func prepareOutput(_ manifest: VoiceAudioManifest) async throws {
     prepared.append(manifest.identity)

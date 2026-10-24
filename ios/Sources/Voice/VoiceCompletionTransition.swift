@@ -69,7 +69,8 @@ private func voicePermissionCompleted(_ state: VoiceState, allowed: Bool) -> Voi
   guard [.requestingMicrophone, .reconnecting, .resuming].contains(state.capture) else { return unchangedVoice(state) }
   guard allowed else { return unchangedVoice(state.replacing(capture: state.captureModel.replacing(intent: .off, capture: .failed(.permissionDenied)))) }
   guard let id = state.startRequestId else { return unchangedVoice(state) }
-  let connecting = state.replacing(capture: state.captureModel.replacing(capture: state.resumeProbe ? .resuming : .connecting))
+  let connecting = state.replacing(capture: state.captureModel.replacing(capture: state.resumeProbe ? .resuming : .connecting),
+    execution: state.execution.replacing(microphoneLifetime: state.execution.microphoneLifetime.permitting(true)))
   return reserveVoice(connecting, .bootstrap(requestId: id, muted: state.startMuted))
 }
 private func voiceBootstrapCompleted(_ state: VoiceState, requestedId: UUID, muted: Bool,

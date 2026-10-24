@@ -218,6 +218,7 @@ public enum VoiceProgressCue: Equatable, Sendable {
   func observePlatform(_ receive: @escaping @MainActor @Sendable (VoicePlatformEvent) -> Void)
   func retirePlatformObservation()
   func fenceCapture() -> Task<Void, Never>
+  func setCaptureLifetime(_ enabled: Bool) async throws
   func requestPermission() async -> Bool
   func connect(
     _ join: VoiceJoin, initiallyMuted: Bool, failure: @escaping @Sendable () -> Void,

@@ -15,6 +15,7 @@ import Foundation
   private let media: any VoiceMedia
   private let checkpoint: any VoiceAdmissionCheckpoint
   private let clock: any VoiceRetryClock
+  private let microphoneLifetime: VoiceMicrophoneLifetimeInterpreter
   private let receive: @MainActor (VoiceFeatureEvent) -> Void
   private let accepted: @MainActor (ConversationMessage) -> Void
   private let refresh: @MainActor () -> Void
@@ -28,6 +29,7 @@ import Foundation
     refresh: @escaping @MainActor () -> Void,
     interrupt: @escaping @MainActor ([UUID], Task<Void, Never>) -> Void
   ) {
+    self.microphoneLifetime = VoiceMicrophoneLifetimeInterpreter(media: media, receive: receive)
     self.control = control
     self.media = media
     self.checkpoint = checkpoint
@@ -40,6 +42,7 @@ import Foundation
 
   func execute(_ command: VoiceEffectCommand) {
     switch command {
+    case .microphoneLifetime(let revision, let enabled): microphoneLifetime.reconcile(revision: revision, enabled: enabled)
     case .run(let request, let work, let after): run(request, work, after: after)
     case .cancel(let requests):
       for request in requests { entries[request]?.task.cancel() }
@@ -75,10 +78,13 @@ import Foundation
   }
 
   func drain() async {
-    while !entries.isEmpty {
-      let tasks = entries.values.map(\.task)
-      for task in tasks { await task.value }
-    }
+    repeat {
+      while !entries.isEmpty {
+        let tasks = entries.values.map(\.task)
+        for task in tasks { await task.value }
+      }
+      await microphoneLifetime.settled()
+    } while !entries.isEmpty
   }
 
   private func run(_ request: VoiceRequest, _ work: VoiceWork, after: [VoiceRequest]) {
@@ -197,6 +203,7 @@ import Foundation
   {
     let receive = receive
     return .connected(try await attempt {
+      try await self.microphoneLifetime.beforeConnect(initiallyMuted: muted)
       try await self.media.connect(
         join, initiallyMuted: muted,
         failure: { Task { @MainActor in receive(.captureFailed(request)) } },

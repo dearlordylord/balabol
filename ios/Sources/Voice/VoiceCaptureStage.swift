@@ -1,7 +1,8 @@
 import Foundation
 
 internal enum VoiceCaptureStage: String, Codable, Sendable {
-  case publication, processor, firstFrame, mute
+  case preparation, preparationRelease, recording, recordingRelease, publication, processor, firstFrame, mute
+  static func recordingPreparation(_ enabled: Bool) -> Self { enabled ? .preparation : .preparationRelease }
 }
 internal struct VoiceCaptureContext: Codable, Equatable, Sendable {
   enum Application: String, Codable, Sendable { case active, inactive, background, unknown }

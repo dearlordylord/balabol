@@ -9,7 +9,10 @@ internal func transitionVoice(_ state: VoiceState, _ input: VoiceInput) -> Voice
   let observation = continueVoice(recovery, progressVoiceObservation)
   let capture = continueVoice(observation, progressVoiceCapture)
   let outputWork = continueVoice(capture, progressVoiceOutput)
-  let output = continueVoice(outputWork, progressVoiceFailureCue)
+  let initializesLifetime: Bool
+  switch input.event { case .start, .resume, .restore, .shutdown: initializesLifetime = true; default: initializesLifetime = false }
+  let lifetime = reconcileVoiceMicrophoneLifetime(continueVoice(outputWork, progressVoiceFailureCue), initialize: initializesLifetime)
+  let output = renewVoiceMicrophoneLifetime(after: lifetime, previous: state, event: input.event)
   #if DEBUG
     let traces = state.output == output.state.output ? [] : voiceTrace(output.state, .output)
     return VoiceTransition(state: output.state, commands: output.commands + traces)
@@ -18,8 +21,18 @@ internal func transitionVoice(_ state: VoiceState, _ input: VoiceInput) -> Voice
   #endif
 }
 private func decideVoice(_ state: VoiceState, _ input: VoiceInput) -> VoiceTransition {
+  if case .microphoneLifetimeSettled(let revision, let result) = input.event {
+    return settleVoiceMicrophoneLifetime(state, revision: revision, result: result, proposedId: input.proposedStartRequestId)
+  }
   if case .completed(let request, let result) = input.event {
     return completeVoice(state, request: request, result: result, proposedId: input.proposedStartRequestId)
+  }
+  // A retired owner must still be able to discharge its failed SDK release.
+  if case .shutdown = input.event {
+    return retryVoiceMicrophoneRelease(tracedVoice(endVoice(state, shutdown: true), state: state, cause: .shutdown))
+  }
+  if case .end = input.event, state.microphoneCleanupFailure != nil {
+    return retryVoiceMicrophoneRelease(tracedVoice(endVoice(state, shutdown: false), state: state, cause: .end))
   }
   guard !state.isRetired else { return unchangedVoice(state) }
   switch input.event {
@@ -51,7 +64,7 @@ private func decideVoice(_ state: VoiceState, _ input: VoiceInput) -> VoiceTrans
   case .cancelGenerationCue:
     let cleared = state.replacing(execution: state.execution.replacing(pendingFailureCue: .some(nil)))
     return VoiceTransition(state: cleared, commands: [.cancelGenerationCue])
-  case .completed: return unchangedVoice(state)
+  case .completed, .microphoneLifetimeSettled: return unchangedVoice(state)
   case .restore:
     return state.checkpointLoaded || hasVoiceOperation(state, where: { $0 == .restoreCheckpoint }) ? unchangedVoice(state)
       : reserveVoice(state, .restoreCheckpoint)
