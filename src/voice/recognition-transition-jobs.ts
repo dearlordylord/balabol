@@ -1,7 +1,7 @@
+import { maximumRecognitionJobs } from "./recognition-state.ts"
 import type { RecognitionJob, RecognitionState } from "./recognition-state.ts"
 import type { RecognitionCommand } from "./recognition-events.ts"
 import type { RecognitionTransition } from "./recognition-transition-result.ts"
-const maximumConcurrent = 2
 export const findRecognitionJob = (state: RecognitionState, operation: number, generation: number) =>
   state.jobs.find((job) => job.operation === operation && job.generation === generation)
 export const currentRecognitionJob = (state: RecognitionState, job: RecognitionJob) =>
@@ -11,7 +11,7 @@ export const replaceRecognitionJob = (state: RecognitionState, job: RecognitionJ
   jobs: state.jobs.map((item) => (item.operation === job.operation ? job : item))
 })
 export const pumpRecognition = (state: RecognitionState): RecognitionTransition => {
-  if (state.jobs.length >= maximumConcurrent) return { state, commands: [] }
+  if (state.jobs.length >= maximumRecognitionJobs) return { state, commands: [] }
   const chunk = state.queue[0]
   if (chunk === undefined) return { state, commands: [] }
   const job: RecognitionJob = { ...chunk, operation: state.nextOperation, status: "Reserved", candidate: null }

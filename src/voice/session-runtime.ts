@@ -67,6 +67,8 @@ export const makeSessionRuntime = (
         completionMillis: deps.outputSettings.completionMillis
       }
     )
+    if (deps.provider.recognizeStreaming !== undefined)
+      state = { ...state, recognition: { ...state.recognition, streaming: true } }
     let retired = false
     let revision = 0
     let connection: MediaConnection | undefined

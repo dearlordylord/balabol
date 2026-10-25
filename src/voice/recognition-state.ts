@@ -1,6 +1,8 @@
 import type { HashMap } from "effect"
 import type { LanguageSpan } from "../language/index.ts"
 import type { RecognitionEvent } from "../speech-recognition/index.ts"
+export const maximumRecognitionChunks = 30
+export const maximumRecognitionJobs = 2
 /** Immutable coordinates into adapter-owned PCM; never a writable sample buffer. */
 export interface PcmSlice {
   readonly fragmentId: string
@@ -28,6 +30,7 @@ export interface RecognitionChunk {
   readonly sampleFrames: number
 }
 export interface RecognitionJob extends RecognitionChunk {
+  readonly streaming?: "Open" | "Sealed"
   readonly operation: number
   readonly status: "Reserved" | "Running" | "Cancelling"
   readonly candidate: RecognitionFinal | null
@@ -44,6 +47,7 @@ export interface RecognitionTurn {
   readonly ready: ReadyRecognition | null
 }
 export interface RecognitionState {
+  readonly streaming?: true
   readonly generation: number
   readonly segment: RecognitionSegment
   readonly turn: RecognitionTurn | null

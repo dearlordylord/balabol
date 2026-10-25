@@ -30,7 +30,7 @@ export class SonioxSocket extends EventTarget implements WebSocket {
     this.sent.push(data)
     if (data !== "") return
     for (const packet of this.packets) this.message(packet)
-    if (this.terminal === "finished") this.message({ tokens: [], finished: true })
+    if (this.terminal === "finished" || this.terminal === "connecting") this.message({ tokens: [], finished: true })
     if (this.terminal === "close") this.onclose?.call(this, new CloseEvent("close"))
     if (this.terminal === "error")
       this.onerror?.call(

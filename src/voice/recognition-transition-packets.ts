@@ -21,6 +21,12 @@ const packet = (
       state,
       commands: [{ kind: "Interim", turnId: job.turnId, generation: job.generation, text: event.event.text }]
     }
+  if (job.streaming === "Open")
+    return failRecognitionTurn(state, {
+      code: "InvalidRecognition",
+      message: "Recognition finished before captured audio was sealed",
+      reason: "Final"
+    })
   if (!supportedFinal(event.event, languages))
     return failRecognitionTurn(state, {
       code: "InvalidRecognition",

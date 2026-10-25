@@ -29,6 +29,11 @@ export const RecognitionRequest = Schema.Struct({
   audio: RecognitionAudio,
   allowedLanguages: Languages
 })
+export const StreamingRecognitionRequest = Schema.Struct({
+  utteranceId: RecognitionRequest.fields.utteranceId,
+  allowedLanguages: Languages
+})
+export type StreamingRecognitionRequest = typeof StreamingRecognitionRequest.Type
 export type RecognitionRequest = typeof RecognitionRequest.Type
 const Text = Schema.String.check(Schema.isMaxLength(MAX_TEXT_LENGTH))
 const Hypothesis = Schema.Struct({ kind: Schema.Literal("Interim"), text: Text })
@@ -84,6 +89,10 @@ export class SpeechRecognition extends Context.Service<
   {
     capabilities: RecognitionCapabilities
     recognize: (request: RecognitionRequest) => Stream.Stream<RecognitionEvent, RecognitionFailed>
+    recognizeStreaming?: (
+      request: StreamingRecognitionRequest,
+      audio: Stream.Stream<RecognitionAudio, RecognitionFailed>
+    ) => Stream.Stream<RecognitionEvent, RecognitionFailed>
   }
 >()("balabol/speech-recognition") {}
 const Script = Schema.Struct({

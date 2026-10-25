@@ -1,3 +1,5 @@
+import { maximumRecognitionChunks } from "./recognition-state.ts"
+import { feedStreamingRecognition, sealStreamingRecognition } from "./recognition-transition-streaming.ts"
 import { prepareRecognitionFinal } from "./recognition-transition-assembly.ts"
 import type { RecognitionInput } from "./recognition-events.ts"
 import type { PcmSlice, RecognitionState, RecognitionTurn } from "./recognition-state.ts"
@@ -9,7 +11,6 @@ import type { RecognitionTransition } from "./recognition-transition-result.ts"
 export const recognitionOnsetSamples = 960
 export const recognitionQuietSamples = 16000
 export const recognitionChunkSamples = 160000
-const maximumChunks = 30
 const lastSliceOffset = -1
 type Window = Extract<RecognitionInput, { kind: "Window" }>
 interface Piece {
@@ -75,7 +76,12 @@ const collectOnset = (state: RecognitionState, event: Window, offset: number): P
         : { kind: "Active", slices, samples, quiet: 0 }
   }
   return {
-    step: samples < recognitionOnsetSamples ? unchangedRecognition(next) : onset(next, event),
+    step:
+      samples < recognitionOnsetSamples
+        ? unchangedRecognition(next)
+        : continueRecognition(onset(next, event), (current) =>
+            feedStreamingRecognition(current, event.requestId, slices)
+          ),
     offset: event.sampleFrames
   }
 }
@@ -94,8 +100,9 @@ const seal = (state: RecognitionState, requestId: string, ended: boolean): Recog
   const turn = state.turn
   const segment = state.segment
   if (turn === null || segment.kind !== "Active") return unchangedRecognition(state)
+  if (state.streaming) return sealStreamingRecognition(state, ended)
   const next = { ...state, turn: { ...turn, ended } }
-  if (turn.chunks >= maximumChunks)
+  if (turn.chunks >= maximumRecognitionChunks)
     return failRecognitionTurn(next, {
       code: "RecognitionFailed",
       message: "Spoken turn exceeds recognition chunk capacity",
@@ -136,7 +143,11 @@ const activePiece = (state: RecognitionState, event: Window, offset: number): Pi
   }
   const ended = quiet >= recognitionQuietSamples
   return {
-    step: ended || samples >= recognitionChunkSamples ? seal(next, event.requestId, ended) : unchangedRecognition(next),
+    step: continueRecognition(feedStreamingRecognition(next, event.requestId, [slice]), (current) =>
+      ended || samples >= recognitionChunkSamples
+        ? seal(current, event.requestId, ended)
+        : unchangedRecognition(current)
+    ),
     offset: offset + length
   }
 }

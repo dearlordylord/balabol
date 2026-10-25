@@ -9,7 +9,7 @@
 
 ## Authority
 
-`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory, answer generation, summary generation and Bootstrap implement the durable text slice. Voice and speech recognition implement microphone delivery and supplied-audio recognition. Speech synthesis accepts a complete bounded phrase and emits validated audio through fake or Soniox implementations; it does not accept appended text or install speech engines.
+`quality-owners.json` is the executable dependency declaration for backend product source. A missing owner root is planned, not an implemented capability. Once a root exists it must have its declared public entrypoint. Conversation, Memory, answer generation, summary generation and Bootstrap implement the durable text slice. Voice and speech recognition implement microphone delivery and bounded supplied/streaming-audio recognition. Speech synthesis accepts a complete bounded phrase and emits validated audio through fake or Soniox implementations; it does not accept appended text or install speech engines.
 
 Each entrypoint hides sequencing, state coordination and implementation files. Cross-owner callers may import only the declared entrypoint; local implementation imports remain local. A dependency permission is an upper bound, not an instruction to create an interface or import it prematurely. Keep types with the concept they describe.
 

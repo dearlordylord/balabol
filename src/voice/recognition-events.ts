@@ -1,5 +1,5 @@
 import type { RecognitionEvent, RecognitionFailureReason } from "../speech-recognition/index.ts"
-import type { RecognitionJob } from "./recognition-state.ts"
+import type { PcmSlice, RecognitionJob } from "./recognition-state.ts"
 export interface RecognitionError {
   readonly code: string
   readonly message: string
@@ -52,6 +52,13 @@ export type RecognitionInput =
       readonly error: RecognitionError
     }
 export type RecognitionCommand =
+  | {
+      readonly kind: "AppendAudio"
+      readonly operation: number
+      readonly generation: number
+      readonly slices: readonly PcmSlice[]
+    }
+  | { readonly kind: "FinishAudio"; readonly operation: number; readonly generation: number }
   | { readonly kind: "Recognize"; readonly job: RecognitionJob }
   | { readonly kind: "Cancel"; readonly operation: number }
   | { readonly kind: "ReleaseFragment"; readonly fragmentId: string }

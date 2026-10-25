@@ -66,7 +66,10 @@ export type SessionCommand =
   | { readonly kind: "TraceOutput"; readonly input: VoiceDiagnosticInput }
   | {
       readonly kind: "RecognitionWork"
-      readonly command: Extract<RecognitionCommand, { kind: "Recognize" | "Cancel" | "ReleaseFragment" }>
+      readonly command: Extract<
+        RecognitionCommand,
+        { kind: "Recognize" | "Cancel" | "ReleaseFragment" | "AppendAudio" | "FinishAudio" }
+      >
     }
   | {
       readonly kind: "TraceRecognition"

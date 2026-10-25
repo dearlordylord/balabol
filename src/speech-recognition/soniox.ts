@@ -1,5 +1,12 @@
-import { Cause, Effect, Layer, Queue, Redacted, Schema, Stream } from "effect"
-import { RecognitionEvent, RecognitionFailed, RecognitionRequest, SpeechRecognition } from "./provider.ts"
+import { Cause, Deferred, Effect, Layer, Queue, Redacted, Schema, Stream } from "effect"
+import {
+  RecognitionAudio,
+  RecognitionEvent,
+  RecognitionFailed,
+  RecognitionRequest,
+  StreamingRecognitionRequest,
+  SpeechRecognition
+} from "./provider.ts"
 import { emptySonioxTranscript, reduceSonioxPacket, sonioxFailure } from "./soniox-protocol.ts"
 export const SonioxSettings = Schema.Struct({
   provider: Schema.Literal("soniox"),
@@ -9,10 +16,12 @@ export type SonioxSettings = typeof SonioxSettings.Type
 /** The socket factory is the network port; tests supply sockets, never patch globals. */
 export type SonioxSocketFactory = (url: string, protocols: readonly string[]) => WebSocket
 const connect: SonioxSocketFactory = (url, protocols) => new WebSocket(url, [...protocols])
+const maximumBufferedBytes = 524288
+const maximumSampleFrames = 240000
 const requestDeadlineMillis = 30000
 const endpoint = "wss://stt-rt.soniox.com/transcribe-websocket"
 // Grounding: https://soniox.com/docs/api-reference/stt/websocket-api
-// Supplied-audio adapter: Voice still owns chunking/end-of-turn; this is not live input streaming.
+// Voice owns endpointing; each bounded chunk streams before its final close.
 const transcriptEvent = (utteranceId: string, selected: typeof emptySonioxTranscript, finished: boolean) => {
   const languages = [...new Set(selected.spans.map((span) => span.language))]
   return Schema.decodeUnknownSync(RecognitionEvent)(
@@ -28,7 +37,12 @@ const transcriptEvent = (utteranceId: string, selected: typeof emptySonioxTransc
   )
 }
 const emptyHypothesis = (finished: boolean, text: string) => !finished && text.length === 0
-const transcribe = (request: RecognitionRequest, settings: SonioxSettings, factory: SonioxSocketFactory) =>
+const transcribe = (
+  request: StreamingRecognitionRequest,
+  audio: Stream.Stream<RecognitionAudio, RecognitionFailed>,
+  settings: SonioxSettings,
+  factory: SonioxSocketFactory
+) =>
   Stream.callback<RecognitionEvent, RecognitionFailed>(
     (queue) =>
       Effect.gen(function* () {
@@ -48,6 +62,9 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
               connection.close()
             })
         )
+        const opened = yield* Deferred.make<void>()
+        let inputEnded = false
+        let inputSamples = 0
         let transcript = emptySonioxTranscript
         let finished = false
         const fail = (error: RecognitionFailed) => {
@@ -74,12 +91,50 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
                 enable_endpoint_detection: false
               })
             )
-            socket.send(request.audio.bytes)
-            socket.send("")
+            Deferred.doneUnsafe(opened, Effect.void)
           } catch {
             fail(sonioxFailure("Soniox audio submission failed", "Transport"))
           }
         }
+        yield* Deferred.await(opened).pipe(
+          Effect.andThen(
+            Stream.runForEach(audio, (raw) =>
+              Schema.decodeUnknownEffect(RecognitionAudio)(raw).pipe(
+                Effect.mapError(() => sonioxFailure("Invalid Soniox audio frame", "InvalidRequest")),
+                Effect.flatMap((frame) =>
+                  Effect.try({
+                    try: () => {
+                      if (terminal) throw sonioxFailure("Soniox input is no longer active", "Incomplete")
+                      inputSamples += frame.sampleFrames
+                      if (inputSamples > maximumSampleFrames)
+                        throw sonioxFailure("Soniox audio input capacity exceeded", "Limit")
+                      if (socket.bufferedAmount + frame.bytes.byteLength > maximumBufferedBytes)
+                        throw sonioxFailure("Soniox audio send capacity exceeded", "Limit")
+                      socket.send(frame.bytes)
+                    },
+                    catch: (error) =>
+                      error instanceof RecognitionFailed
+                        ? error
+                        : sonioxFailure("Soniox audio submission failed", "Transport")
+                  })
+                )
+              )
+            )
+          ),
+          Effect.andThen(
+            Effect.try({
+              try: () => {
+                if (terminal) throw sonioxFailure("Soniox input closed prematurely", "Incomplete")
+                inputEnded = true
+                socket.send("")
+              },
+              catch: (error) =>
+                error instanceof RecognitionFailed ? error : sonioxFailure("Soniox finalization failed", "Transport")
+            })
+          ),
+          Effect.catch((error) => Effect.sync(() => fail(error))),
+          Effect.forkScoped
+        )
         const publish = (event: RecognitionEvent) => {
           if (!Queue.offerUnsafe(queue, event)) fail(sonioxFailure("Soniox event capacity exceeded", "Limit"))
           if (finished) {
@@ -92,6 +147,7 @@ const transcribe = (request: RecognitionRequest, settings: SonioxSettings, facto
           try {
             const result = reduceSonioxPacket(transcript, message.data, request.allowedLanguages)
             transcript = result.committed
+            if (result.finished && !inputEnded) throw sonioxFailure("Soniox finished before audio ended", "Incomplete")
             finished = result.finished
             const selected = finished ? transcript : result.provisional
             // A provider heartbeat is not a valid client Interim text event.
@@ -129,7 +185,14 @@ export const sonioxRecognitionLayer = (settings: SonioxSettings, factory: Soniox
           Stream.unwrap(
             Schema.decodeUnknownEffect(RecognitionRequest)(raw).pipe(
               Effect.mapError(() => sonioxFailure("Invalid Soniox recognition request", "InvalidRequest")),
-              Effect.map((request) => transcribe(request, config, factory))
+              Effect.map((request) => transcribe(request, Stream.make(request.audio), config, factory))
+            )
+          ),
+        recognizeStreaming: (raw, audio) =>
+          Stream.unwrap(
+            Schema.decodeUnknownEffect(StreamingRecognitionRequest)(raw).pipe(
+              Effect.mapError(() => sonioxFailure("Invalid Soniox recognition request", "InvalidRequest")),
+              Effect.map((request) => transcribe(request, audio, config, factory))
             )
           )
       })

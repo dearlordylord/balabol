@@ -6,7 +6,10 @@ import { transitionSpeechFence } from "./session-transition-fence.ts"
 import { emit, unchanged } from "./session-transition-result.ts"
 import type { SessionTransition } from "./session-transition-result.ts"
 
-type Projection = Exclude<RecognitionCommand, { kind: "Recognize" | "Cancel" | "ReleaseFragment" }>
+type Projection = Exclude<
+  RecognitionCommand,
+  { kind: "Recognize" | "Cancel" | "ReleaseFragment" | "AppendAudio" | "FinishAudio" }
+>
 const project = (state: SessionState, command: Projection): SessionTransition => {
   switch (command.kind) {
     case "Onset":
@@ -27,6 +30,8 @@ const project = (state: SessionState, command: Projection): SessionTransition =>
 }
 const commandTransition = (state: SessionState, command: RecognitionCommand): SessionTransition => {
   switch (command.kind) {
+    case "AppendAudio":
+    case "FinishAudio":
     case "Recognize":
     case "Cancel":
     case "ReleaseFragment":

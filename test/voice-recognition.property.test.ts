@@ -5,8 +5,8 @@ import { initialRecognition, readyFinal, transitionRecognition } from "../src/vo
 import type { RecognitionInput, RecognitionCommand } from "../src/voice/recognition-events.ts"
 import type { RecognitionState, RecognitionJob } from "../src/voice/recognition-state.ts"
 
-const harness = (windowSize = 512) => {
-  let state = initialRecognition(1)
+const harness = (windowSize = 512, streaming = false) => {
+  let state = streaming ? { ...initialRecognition(1), streaming: true as const } : initialRecognition(1)
   let identity = 0
   const commands: RecognitionCommand[] = []
   const step = (event: RecognitionInput) => {
@@ -94,12 +94,13 @@ it("reserves two slots before JobStarted and holds cancellation slots until exac
 it("generated reset and completion histories preserve fragment ownership and bounded reservations", () => {
   fc.assert(
     fc.property(
-      fc.array(fc.constantFrom("speech", "quiet", "boundary", "reset", "start", "final", "settle"), {
+      fc.array(fc.constantFrom("speech", "quiet", "boundary", "gap", "reset", "start", "final", "settle"), {
         minLength: 20,
         maxLength: 60
       }),
-      (events) => {
-        const run = harness()
+      fc.boolean(),
+      (events, streaming) => {
+        const run = harness(512, streaming)
         run.feed(320000, true)
         for (const event of events) {
           const job = run.state().jobs[0]
@@ -116,6 +117,9 @@ it("generated reset and completion histories preserve fragment ownership and bou
                 generation: run.state().generation + 1,
                 requestId: `boundary-${run.state().generation}`
               })
+              break
+            case "gap":
+              run.step({ kind: "Gap", generation: run.state().generation + 1 })
               break
             case "reset":
               run.step({ kind: "Reset", generation: run.state().generation + 1 })

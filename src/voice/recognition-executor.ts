@@ -1,19 +1,30 @@
 import { auditIdentity, withAuditSpan } from "../operation-audit/index.ts"
 import { randomUUID } from "node:crypto"
-import { Cause, Deferred, Effect, Exit, Option, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
 import type { Fiber, Scope } from "effect"
-import { RecognitionEvent, RecognitionFailed } from "../speech-recognition/index.ts"
-import type { SpeechRecognition } from "../speech-recognition/index.ts"
+import {
+  type RecognitionAudio,
+  type SpeechRecognition,
+  RecognitionEvent,
+  RecognitionFailed
+} from "../speech-recognition/index.ts"
 import { ActivityWindow } from "./activity.ts"
 import { failed } from "./contracts.ts"
 import type { RecognitionInput, RecognitionCommand, RecognitionError } from "./recognition-events.ts"
 import type { RecognitionJob } from "./recognition-state.ts"
 import { makeRecognitionFragments } from "./recognition-fragments.ts"
 import type { RecognitionFragmentFailed } from "./recognition-fragments.ts"
-type ResourceCommand = Extract<RecognitionCommand, { kind: "Recognize" | "Cancel" | "ReleaseFragment" }>
+const bytesPerSample = 2
+type ResourceCommand = Extract<
+  RecognitionCommand,
+  { kind: "Recognize" | "Cancel" | "ReleaseFragment" | "AppendAudio" | "FinishAudio" }
+>
 type SettledOutcome = Extract<RecognitionInput, { kind: "Settled" }>["outcome"]
 interface Execution {
   readonly done: Deferred.Deferred<void>
+  readonly generation: number
+  readonly failure: Deferred.Deferred<never, RecognitionFailed>
+  readonly audio?: Queue.Queue<RecognitionAudio, RecognitionFailed | Cause.Done>
   fiber?: Fiber.Fiber<void>
   cancelled: boolean
 }
@@ -61,10 +72,21 @@ export const makeRecognitionExecutor = (
           }).pipe(Effect.andThen(Effect.fail(new RecognitionFailed({ message: "Invalid recognition event" }))))
       })
     )
-  const recognize = (job: RecognitionJob) =>
+  const recognize = (job: RecognitionJob, execution: Execution) =>
     Effect.gen(function* () {
       yield* post({ kind: "JobStarted", operation: job.operation, generation: job.generation })
       if (!authorized(job)) return
+      if (execution.audio !== undefined && provider.recognizeStreaming !== undefined) {
+        return yield* provider
+          .recognizeStreaming(
+            { utteranceId: job.requestId, allowedLanguages: languages },
+            Stream.fromQueue(execution.audio)
+          )
+          .pipe(
+            Stream.runForEach((raw) => packet(job, raw)),
+            Effect.raceFirst(Deferred.await(execution.failure))
+          )
+      }
       const bytes = yield* fragments.materialize(job.slices)
       yield* provider
         .recognize({
@@ -76,7 +98,7 @@ export const makeRecognitionExecutor = (
     })
   const run = (job: RecognitionJob, execution: Execution) =>
     Effect.gen(function* () {
-      const exit = yield* recognize(job).pipe(
+      const exit = yield* recognize(job, execution).pipe(
         withAuditSpan("voice.recognition", undefined, {
           utterance: auditIdentity(job.requestId),
           generation: job.generation
@@ -102,16 +124,66 @@ export const makeRecognitionExecutor = (
   const start = (job: RecognitionJob) =>
     Effect.gen(function* () {
       if (executions.has(job.operation)) return
-      const execution: Execution = { done: Deferred.makeUnsafe<void>(), cancelled: false }
+      const execution: Execution = {
+        done: Deferred.makeUnsafe<void>(),
+        failure: Deferred.makeUnsafe<never, RecognitionFailed>(),
+        cancelled: false,
+        generation: job.generation,
+        ...(job.streaming === "Open"
+          ? { audio: yield* Queue.make<RecognitionAudio, RecognitionFailed | Cause.Done>({ capacity: 64 }) }
+          : {})
+      }
       executions.set(job.operation, execution)
       execution.fiber = yield* run(job, execution).pipe(
         Effect.forkIn(captureScope, { startImmediately: true, uninterruptible: true })
       )
       if (execution.cancelled) execution.fiber.interruptUnsafe()
     }).pipe(Effect.uninterruptible)
+  const currentInput = (operation: number, generation: number) => {
+    const execution = executions.get(operation)
+    return execution?.audio === undefined || execution.cancelled || execution.generation !== generation
+      ? undefined
+      : { audio: execution.audio, failure: execution.failure }
+  }
   return {
     execute: (command: ResourceCommand): Effect.Effect<void> => {
       switch (command.kind) {
+        case "AppendAudio":
+          return Effect.gen(function* () {
+            const execution = currentInput(command.operation, command.generation)
+            if (execution === undefined) return
+            const bytes = yield* fragments.materialize(command.slices).pipe(
+              Effect.mapError((error) => new RecognitionFailed({ message: error.message })),
+              Effect.exit
+            )
+            if (Exit.isFailure(bytes)) {
+              Queue.failCauseUnsafe(execution.audio, bytes.cause)
+              Deferred.doneUnsafe(execution.failure, Effect.failCause(bytes.cause))
+              return
+            }
+            if (
+              !Queue.offerUnsafe(execution.audio, {
+                encoding: "pcm-s16le",
+                sampleRateHz: 16000,
+                channels: 1,
+                sampleFrames: bytes.value.byteLength / bytesPerSample,
+                bytes: bytes.value
+              })
+            ) {
+              const error = new RecognitionFailed({
+                message: "Live recognition input capacity exceeded",
+                reason: "Other",
+                diagnostic: { category: "Recognition", reason: "Limit" }
+              })
+              Queue.failCauseUnsafe(execution.audio, Cause.fail(error))
+              Deferred.doneUnsafe(execution.failure, Effect.fail(error))
+            }
+          })
+        case "FinishAudio":
+          return Effect.sync(() => {
+            const execution = currentInput(command.operation, command.generation)
+            if (execution !== undefined) Queue.endUnsafe(execution.audio)
+          })
         case "Recognize":
           return start(command.job)
         case "Cancel":
